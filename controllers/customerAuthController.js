@@ -2,6 +2,113 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const Customer = require("../models/Customer");
 
+const createNextEkonId = async () => {
+  const lastCustomer = await Customer.findOne().sort({ ekonId: -1 }).select("ekonId");
+
+  let nextNumber = 1;
+
+  if (lastCustomer && lastCustomer.ekonId) {
+    const lastNumber = parseInt(lastCustomer.ekonId.replace("EKON", ""), 10);
+    nextNumber = lastNumber + 1;
+  }
+
+  return `EKON${String(nextNumber).padStart(5, "0")}`;
+};
+
+const signupCustomer = async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email, phone, and password are required",
+      });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+    }
+
+    const existingCustomer = await Customer.findOne({
+      $or: [{ email }, { phone }],
+    });
+
+    if (existingCustomer) {
+      return res.status(400).json({
+        success: false,
+        message: "A customer with that email or phone already exists",
+      });
+    }
+
+    const ekonId = await createNextEkonId();
+    const today = new Date().toISOString().split("T")[0];
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const customer = await Customer.create({
+      ekonId,
+      name,
+      email,
+      phone,
+      branch: "Eltham Park",
+      address: "",
+      pointsBalance: 0,
+      signUpDate: today,
+      lastActivityDate: today,
+      status: "Active",
+      passwordHash,
+      termsAccepted: false,
+      termsAcceptedAt: null,
+      privacyAccepted: false,
+      privacyAcceptedAt: null,
+    });
+
+    const token = jwt.sign(
+      {
+        customerId: customer._id.toString(),
+        ekonId: customer.ekonId,
+        email: customer.email,
+        name: customer.name,
+        userType: "customer",
+      },
+      process.env.JWT_SECRET || "eltham-konnect-secret",
+      { expiresIn: "12h" }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Customer account created successfully",
+      token,
+      data: {
+        ekonId: customer.ekonId,
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone,
+        branch: customer.branch,
+        address: customer.address,
+        pointsBalance: customer.pointsBalance,
+        signUpDate: customer.signUpDate,
+        lastActivityDate: customer.lastActivityDate,
+        status: customer.status,
+        termsAccepted: customer.termsAccepted,
+        termsAcceptedAt: customer.termsAcceptedAt,
+        privacyAccepted: customer.privacyAccepted,
+        privacyAcceptedAt: customer.privacyAcceptedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Customer signup error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Customer signup failed",
+      error: error.message,
+    });
+  }
+};
+
 const loginCustomer = async (req, res) => {
   try {
     const { ekonId, password } = req.body;
@@ -181,6 +288,7 @@ const acceptPolicies = async (req, res) => {
 };
 
 module.exports = {
+  signupCustomer,
   loginCustomer,
   getCustomerMe,
   acceptPolicies,
