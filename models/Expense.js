@@ -34,6 +34,10 @@ const ExpenseSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
+  receiptUrl: {
+    type: String,
+    default: "",
+  },
   createdAt: {
     type: Date,
     default: Date.now,

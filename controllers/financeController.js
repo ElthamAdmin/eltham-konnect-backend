@@ -89,6 +89,10 @@ const createExpense = async (req, res) => {
       });
     }
 
+    const receiptUrl = req.file
+      ? `/uploads/expense-receipts/${req.file.filename}`
+      : "";
+
     const newExpense = await Expense.create({
       expenseNumber: `EXP-${Date.now()}`,
       date,
@@ -98,6 +102,7 @@ const createExpense = async (req, res) => {
       status: status || "Paid",
       paidFromAccountNumber: paidFromAccountNumber || "",
       paidFromAccountName,
+      receiptUrl,
     });
 
     await writeAuditLog({
@@ -112,6 +117,7 @@ const createExpense = async (req, res) => {
         status: newExpense.status,
         paidFromAccountNumber: newExpense.paidFromAccountNumber,
         paidFromAccountName: newExpense.paidFromAccountName,
+        receiptUrl: newExpense.receiptUrl,
       },
     });
 

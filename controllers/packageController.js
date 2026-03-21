@@ -3,6 +3,48 @@ const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
 
+const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
+  if (!customer) return 0;
+  if (!pkg) return 0;
+  if (pkg.status !== "At Warehouse") return 0;
+
+  const oldPoints = Number(customer.pointsBalance || 0);
+  const newPoints = Math.min(oldPoints + 100, 1500);
+  const pointsAwarded = newPoints - oldPoints;
+
+  if (pointsAwarded > 0) {
+    customer.pointsBalance = newPoints;
+    customer.lastActivityDate = new Date().toISOString().split("T")[0];
+    await customer.save();
+
+    await PointsHistory.create({
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      action: `Package ${pkg.trackingNumber} marked At Warehouse`,
+      points: pointsAwarded,
+      date: new Date().toISOString().split("T")[0],
+    });
+
+    if (req) {
+      await writeAuditLog({
+        req,
+        action: "AWARD_POINTS",
+        module: "Points History",
+        description: `${pointsAwarded} EK points awarded to ${customer.name} (${customer.ekonId}) for package ${pkg.trackingNumber}`,
+        targetType: "Customer",
+        targetId: customer.ekonId,
+        metadata: {
+          trackingNumber: pkg.trackingNumber,
+          pointsAwarded,
+          newPointsBalance: customer.pointsBalance,
+        },
+      });
+    }
+  }
+
+  return pointsAwarded;
+};
+
 const getPackages = async (req, res) => {
   try {
     const packages = await Package.find().sort({ dateReceived: -1 });
@@ -37,6 +79,22 @@ const createPackage = async (req, res) => {
       dateReceived,
     } = req.body;
 
+    if (!trackingNumber || !customerEkonId || !customerName) {
+      return res.status(400).json({
+        success: false,
+        message: "Tracking number, customer EKON ID, and customer name are required",
+      });
+    }
+
+    const existingPackage = await Package.findOne({ trackingNumber });
+
+    if (existingPackage) {
+      return res.status(400).json({
+        success: false,
+        message: "A package with that tracking number already exists",
+      });
+    }
+
     const customer = await Customer.findOne({ ekonId: customerEkonId });
 
     if (!customer) {
@@ -58,32 +116,12 @@ const createPackage = async (req, res) => {
       warehouseLocation,
       invoiceStatus: invoiceStatus || "Pending",
       readyForPickup: readyForPickup || false,
-      dateReceived,
+      dateReceived: dateReceived || new Date(),
     });
 
     await newPackage.save();
 
-    let pointsAwarded = 0;
-
-    if (packageStatus === "At Warehouse") {
-      const oldPoints = Number(customer.points || 0);
-      const newPoints = Math.min(oldPoints + 100, 1500);
-      pointsAwarded = newPoints - oldPoints;
-
-      customer.points = newPoints;
-      customer.lastActivityDate = new Date().toISOString().split("T")[0];
-      await customer.save();
-
-      if (pointsAwarded > 0) {
-        await PointsHistory.create({
-          customerEkonId: customer.ekonId,
-          customerName: customer.name,
-          action: "Package marked At Warehouse",
-          points: pointsAwarded,
-          date: new Date().toISOString().split("T")[0],
-        });
-      }
-    }
+    const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
 
     await writeAuditLog({
       req,
@@ -110,7 +148,7 @@ const createPackage = async (req, res) => {
           : "Package created successfully",
       data: newPackage,
       pointsAwarded,
-      customerPointsBalance: customer.points,
+      customerPointsBalance: customer.pointsBalance,
     });
   } catch (error) {
     console.error("Error creating package:", error);
@@ -126,8 +164,6 @@ const updatePackageStatus = async (req, res) => {
   try {
     const { trackingNumber } = req.params;
     const { status } = req.body;
-
-    console.log("UPDATE PACKAGE STATUS BODY:", req.body, "STATUS:", status);
 
     const validStatuses = [
       "At Warehouse",
@@ -169,6 +205,16 @@ const updatePackageStatus = async (req, res) => {
 
     await pkg.save();
 
+    let pointsAwarded = 0;
+
+    if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
+      const customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+
+      if (customer) {
+        pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+      }
+    }
+
     await writeAuditLog({
       req,
       action: "UPDATE_PACKAGE_STATUS",
@@ -180,13 +226,18 @@ const updatePackageStatus = async (req, res) => {
         previousStatus,
         newStatus: pkg.status,
         readyForPickup: pkg.readyForPickup,
+        pointsAwarded,
       },
     });
 
     res.json({
       success: true,
-      message: "Package status updated successfully",
+      message:
+        pointsAwarded > 0
+          ? `Package status updated successfully and ${pointsAwarded} EK points awarded`
+          : "Package status updated successfully",
       data: pkg,
+      pointsAwarded,
     });
   } catch (error) {
     console.error("Error updating package status:", error);

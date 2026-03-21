@@ -11,12 +11,14 @@ const {
   getMonthlyIncomeVsExpenses,
 } = require("../controllers/financeController");
 
+const uploadExpenseReceipt = require("../middleware/expenseReceiptUpload");
+
 router.get("/summary", getFinanceSummary);
 router.get("/reports", getFinancialReports);
 router.get("/monthly-chart", getMonthlyIncomeVsExpenses);
 
 router.get("/expenses", getExpenses);
-router.post("/expenses", createExpense);
+router.post("/expenses", uploadExpenseReceipt.single("receipt"), createExpense);
 
 router.get("/payroll", getPayroll);
 router.post("/payroll", createPayroll);
