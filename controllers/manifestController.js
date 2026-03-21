@@ -143,7 +143,12 @@ const arriveManifest = async (req, res) => {
 
     await Package.updateMany(
       { trackingNumber: { $in: manifest.packages } },
-      { $set: { status: "In Transit to Branch" } }
+      {
+        $set: {
+          status: "Cleared Customs",
+          readyForPickup: false,
+        },
+      }
     );
 
     res.json({
