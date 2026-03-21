@@ -1,5 +1,6 @@
 const CommunicationLog = require("../models/CommunicationLog");
 const Customer = require("../models/Customer");
+const { writeAuditLog } = require("../utils/auditLogger");
 
 const getCommunicationLogs = async (req, res) => {
   try {
@@ -23,6 +24,7 @@ const getCommunicationLogs = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve communication logs",
+      error: error.message,
     });
   }
 };
@@ -57,6 +59,24 @@ const createCommunicationLog = async (req, res) => {
       status: "Sent",
       date: new Date().toISOString().split("T")[0],
     });
+
+    if (req.user) {
+      await writeAuditLog({
+        req,
+        action: "CREATE_COMMUNICATION_LOG",
+        module: "Communication",
+        description: `Communication ${newLog.logNumber} created for ${newLog.customerName} via ${newLog.channel}`,
+        targetType: "Communication",
+        targetId: newLog.logNumber,
+        metadata: {
+          customerEkonId: newLog.customerEkonId,
+          customerName: newLog.customerName,
+          channel: newLog.channel,
+          subject: newLog.subject,
+          status: newLog.status,
+        },
+      });
+    }
 
     res.status(201).json({
       success: true,

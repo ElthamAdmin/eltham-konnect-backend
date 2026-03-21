@@ -9,6 +9,6 @@ const {
 const { protect } = require("../middleware/authMiddleware");
 
 router.get("/", protect, getCommunicationLogs);
-router.post("/", createCommunicationLog);
+router.post("/", protect, createCommunicationLog);
 
 module.exports = router;
