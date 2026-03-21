@@ -20,6 +20,7 @@ const getExpenses = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve expenses",
+      error: error.message,
     });
   }
 };
@@ -65,14 +66,14 @@ const createExpense = async (req, res) => {
         });
       }
 
-      if (account.currentBalance < numericAmount) {
+      if (Number(account.currentBalance || 0) < numericAmount) {
         return res.status(400).json({
           success: false,
           message: "Insufficient balance in selected account",
         });
       }
 
-      account.currentBalance -= numericAmount;
+      account.currentBalance = Number(account.currentBalance || 0) - numericAmount;
       await account.save();
 
       paidFromAccountName = account.accountName;
@@ -105,21 +106,27 @@ const createExpense = async (req, res) => {
       receiptUrl,
     });
 
-    await writeAuditLog({
-      req,
-      action: "CREATE_EXPENSE",
-      module: "Finance",
-      description: `Expense ${newExpense.expenseNumber} created for ${newExpense.category}`,
-      targetType: "Expense",
-      targetId: newExpense.expenseNumber,
-      metadata: {
-        amount: newExpense.amount,
-        status: newExpense.status,
-        paidFromAccountNumber: newExpense.paidFromAccountNumber,
-        paidFromAccountName: newExpense.paidFromAccountName,
-        receiptUrl: newExpense.receiptUrl,
-      },
-    });
+    try {
+      if (req.user) {
+        await writeAuditLog({
+          req,
+          action: "CREATE_EXPENSE",
+          module: "Finance",
+          description: `Expense ${newExpense.expenseNumber} created for ${newExpense.category}`,
+          targetType: "Expense",
+          targetId: newExpense.expenseNumber,
+          metadata: {
+            amount: newExpense.amount,
+            status: newExpense.status,
+            paidFromAccountNumber: newExpense.paidFromAccountNumber,
+            paidFromAccountName: newExpense.paidFromAccountName,
+            receiptUrl: newExpense.receiptUrl,
+          },
+        });
+      }
+    } catch (auditError) {
+      console.error("Audit log error while creating expense:", auditError);
+    }
 
     res.status(201).json({
       success: true,
@@ -151,6 +158,7 @@ const getPayroll = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve payroll records",
+      error: error.message,
     });
   }
 };
@@ -181,22 +189,28 @@ const createPayroll = async (req, res) => {
       status: status || "Pending",
     });
 
-    await writeAuditLog({
-      req,
-      action: "CREATE_PAYROLL",
-      module: "Finance",
-      description: `Payroll ${newPayroll.payrollNumber} created for ${newPayroll.employeeName}`,
-      targetType: "Payroll",
-      targetId: newPayroll.payrollNumber,
-      metadata: {
-        employeeName: newPayroll.employeeName,
-        role: newPayroll.role,
-        payPeriod: newPayroll.payPeriod,
-        grossPay: newPayroll.grossPay,
-        netPay: newPayroll.netPay,
-        status: newPayroll.status,
-      },
-    });
+    try {
+      if (req.user) {
+        await writeAuditLog({
+          req,
+          action: "CREATE_PAYROLL",
+          module: "Finance",
+          description: `Payroll ${newPayroll.payrollNumber} created for ${newPayroll.employeeName}`,
+          targetType: "Payroll",
+          targetId: newPayroll.payrollNumber,
+          metadata: {
+            employeeName: newPayroll.employeeName,
+            role: newPayroll.role,
+            payPeriod: newPayroll.payPeriod,
+            grossPay: newPayroll.grossPay,
+            netPay: newPayroll.netPay,
+            status: newPayroll.status,
+          },
+        });
+      }
+    } catch (auditError) {
+      console.error("Audit log error while creating payroll:", auditError);
+    }
 
     res.status(201).json({
       success: true,
@@ -261,6 +275,7 @@ const getFinanceSummary = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve finance summary",
+      error: error.message,
     });
   }
 };
@@ -315,7 +330,7 @@ const getFinancialReports = async (req, res) => {
       assets: {
         cash: revenue - totalExpenses,
         accountsReceivable,
-        totalAssets: (revenue - totalExpenses) + accountsReceivable,
+        totalAssets: revenue - totalExpenses + accountsReceivable,
       },
       liabilities: {
         outstandingRevenue: accountsReceivable,
@@ -339,6 +354,7 @@ const getFinancialReports = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve financial reports",
+      error: error.message,
     });
   }
 };
@@ -395,6 +411,7 @@ const getMonthlyIncomeVsExpenses = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve monthly chart data",
+      error: error.message,
     });
   }
 };
