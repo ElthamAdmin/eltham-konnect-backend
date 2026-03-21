@@ -121,7 +121,11 @@ const createPackage = async (req, res) => {
 
     await newPackage.save();
 
-    const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
+    const pointsAwarded = await awardWarehousePointsIfEligible(
+      customer,
+      newPackage,
+      req
+    );
 
     await writeAuditLog({
       req,
@@ -172,6 +176,7 @@ const updatePackageStatus = async (req, res) => {
       "Cleared Customs",
       "Ready for Pickup",
       "Delivered",
+      "In Transit to Branch",
     ];
 
     if (!validStatuses.includes(status)) {
@@ -249,8 +254,115 @@ const updatePackageStatus = async (req, res) => {
   }
 };
 
+const bulkUpdatePackageStatus = async (req, res) => {
+  try {
+    const { trackingNumbers, status } = req.body;
+
+    const validStatuses = [
+      "At Warehouse",
+      "Manifest Assigned",
+      "In Transit",
+      "Cleared Customs",
+      "Ready for Pickup",
+      "Delivered",
+      "In Transit to Branch",
+    ];
+
+    if (!Array.isArray(trackingNumbers) || trackingNumbers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide at least one tracking number",
+      });
+    }
+
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid package status",
+      });
+    }
+
+    const packages = await Package.find({
+      trackingNumber: { $in: trackingNumbers },
+    });
+
+    if (packages.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No matching packages found",
+      });
+    }
+
+    let updatedCount = 0;
+    let totalPointsAwarded = 0;
+
+    for (const pkg of packages) {
+      const previousStatus = pkg.status;
+      pkg.status = status;
+
+      if (status === "Ready for Pickup") {
+        pkg.readyForPickup = true;
+      } else {
+        pkg.readyForPickup = false;
+      }
+
+      if (status === "Delivered") {
+        pkg.readyForPickup = false;
+      }
+
+      await pkg.save();
+
+      let pointsAwarded = 0;
+
+      if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
+        const customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+
+        if (customer) {
+          pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+          totalPointsAwarded += pointsAwarded;
+        }
+      }
+
+      await writeAuditLog({
+        req,
+        action: "BULK_UPDATE_PACKAGE_STATUS",
+        module: "Packages",
+        description: `Package ${pkg.trackingNumber} status changed from ${previousStatus} to ${pkg.status} by bulk update`,
+        targetType: "Package",
+        targetId: pkg.trackingNumber,
+        metadata: {
+          previousStatus,
+          newStatus: pkg.status,
+          readyForPickup: pkg.readyForPickup,
+          pointsAwarded,
+        },
+      });
+
+      updatedCount += 1;
+    }
+
+    res.json({
+      success: true,
+      message:
+        totalPointsAwarded > 0
+          ? `${updatedCount} package(s) updated successfully and ${totalPointsAwarded} EK points awarded`
+          : `${updatedCount} package(s) updated successfully`,
+      updatedCount,
+      totalPointsAwarded,
+    });
+  } catch (error) {
+    console.error("Error bulk updating package status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to bulk update package statuses",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getPackages,
   createPackage,
   updatePackageStatus,
+  bulkUpdatePackageStatus,
 };
