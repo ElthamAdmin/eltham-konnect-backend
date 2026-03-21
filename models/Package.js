@@ -4,52 +4,63 @@ const PackageSchema = new mongoose.Schema({
   trackingNumber: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
   },
 
   customerEkonId: {
     type: String,
-    required: true
+    required: true,
   },
 
   customerName: {
     type: String,
-    required: true
+    required: true,
   },
 
   courier: {
-    type: String
+    type: String,
+    default: "",
   },
 
   weight: {
     type: Number,
-    default: 0
+    default: 0,
   },
 
   status: {
     type: String,
-    default: "At Warehouse"
+    default: "At Warehouse",
   },
 
   warehouseLocation: {
     type: String,
-    default: ""
+    default: "",
   },
 
   invoiceStatus: {
     type: String,
-    default: "Pending"
+    default: "Pending",
   },
 
   readyForPickup: {
     type: Boolean,
-    default: false
+    default: false,
+  },
+
+  readyForPickupDate: {
+    type: Date,
+    default: null,
+  },
+
+  statusUpdatedAt: {
+    type: Date,
+    default: Date.now,
   },
 
   dateReceived: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 });
 
 module.exports = mongoose.model("Package", PackageSchema);
