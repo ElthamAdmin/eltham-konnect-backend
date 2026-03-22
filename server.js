@@ -9,6 +9,7 @@ const fs = require("fs");
 const customerRoutes = require("./routes/customerRoutes");
 const customerAuthRoutes = require("./routes/customerAuthRoutes");
 const customerInvoiceRoutes = require("./routes/customerInvoiceRoutes");
+const customerNotificationRoutes = require("./routes/customerNotificationRoutes");
 const preAlertRoutes = require("./routes/preAlertRoutes");
 const packageRoutes = require("./routes/packageRoutes");
 const manifestRoutes = require("./routes/manifestRoutes");
@@ -79,6 +80,7 @@ app.get("/", (req, res) => {
 app.use("/api/customers", customerRoutes);
 app.use("/api/customer-auth", customerAuthRoutes);
 app.use("/api/customer-invoices", customerInvoiceRoutes);
+app.use("/api/customer-notifications", customerNotificationRoutes);
 app.use("/api/pre-alerts", preAlertRoutes);
 app.use("/api/packages", packageRoutes);
 app.use("/api/manifests", manifestRoutes);

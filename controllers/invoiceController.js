@@ -4,6 +4,7 @@ const Invoice = require("../models/Invoice");
 const ShippingRate = require("../models/ShippingRate");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
+const CustomerNotification = require("../models/CustomerNotification");
 const { writeAuditLog } = require("../utils/auditLogger");
 
 const getJamaicaDateString = (date = new Date()) => {
@@ -15,6 +16,29 @@ const getJamaicaDateString = (date = new Date()) => {
   });
 
   return formatter.format(date);
+};
+
+const createCustomerNotification = async ({
+  customerEkonId,
+  customerName,
+  title,
+  message,
+  type,
+  referenceType = "",
+  referenceId = "",
+}) => {
+  await CustomerNotification.create({
+    notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    customerEkonId,
+    customerName,
+    title,
+    message,
+    type,
+    referenceType,
+    referenceId,
+    isRead: false,
+    date: getJamaicaDateString(),
+  });
 };
 
 const createInvoice = async (req, res) => {
@@ -121,6 +145,16 @@ const createInvoice = async (req, res) => {
         $set: { invoiceStatus: "Issued" },
       }
     );
+
+    await createCustomerNotification({
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      title: "New Invoice Generated",
+      message: `A new invoice ${invoice.invoiceNumber} has been generated for your ready packages. Final total: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
 
     await writeAuditLog({
       req,
@@ -290,6 +324,16 @@ const markInvoicePaid = async (req, res) => {
         },
       }
     );
+
+    await createCustomerNotification({
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
+      title: "Invoice Paid Successfully",
+      message: `Your invoice ${invoice.invoiceNumber} has been marked as paid. Amount received: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
 
     await writeAuditLog({
       req,

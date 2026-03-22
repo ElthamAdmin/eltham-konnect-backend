@@ -1,7 +1,42 @@
 const Package = require("../models/Package");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
+const CustomerNotification = require("../models/CustomerNotification");
 const { writeAuditLog } = require("../utils/auditLogger");
+
+const getJamaicaDateString = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  return formatter.format(date);
+};
+
+const createCustomerNotification = async ({
+  customerEkonId,
+  customerName,
+  title,
+  message,
+  type,
+  referenceType = "",
+  referenceId = "",
+}) => {
+  await CustomerNotification.create({
+    notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    customerEkonId,
+    customerName,
+    title,
+    message,
+    type,
+    referenceType,
+    referenceId,
+    isRead: false,
+    date: getJamaicaDateString(),
+  });
+};
 
 const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
   if (!customer) return 0;
@@ -14,7 +49,7 @@ const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
 
   if (pointsAwarded > 0) {
     customer.pointsBalance = newPoints;
-    customer.lastActivityDate = new Date().toISOString().split("T")[0];
+    customer.lastActivityDate = getJamaicaDateString();
     await customer.save();
 
     await PointsHistory.create({
@@ -22,7 +57,7 @@ const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
       customerName: customer.name,
       action: `Package ${pkg.trackingNumber} marked At Warehouse`,
       points: pointsAwarded,
-      date: new Date().toISOString().split("T")[0],
+      date: getJamaicaDateString(),
     });
 
     if (req) {
@@ -124,11 +159,31 @@ const createPackage = async (req, res) => {
 
     await newPackage.save();
 
-    const pointsAwarded = await awardWarehousePointsIfEligible(
-      customer,
-      newPackage,
-      req
-    );
+    const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
+
+    if (packageStatus === "At Warehouse") {
+      await createCustomerNotification({
+        customerEkonId: customer.ekonId,
+        customerName: customer.name,
+        title: "Package Received at Warehouse",
+        message: `Your package ${newPackage.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
+        type: "Package Update",
+        referenceType: "Package",
+        referenceId: newPackage.trackingNumber,
+      });
+    }
+
+    if (packageStatus === "Ready for Pickup") {
+      await createCustomerNotification({
+        customerEkonId: customer.ekonId,
+        customerName: customer.name,
+        title: "Package Ready for Pickup",
+        message: `Your package ${newPackage.trackingNumber} is now ready for pickup.`,
+        type: "Package Update",
+        referenceType: "Package",
+        referenceId: newPackage.trackingNumber,
+      });
+    }
 
     await writeAuditLog({
       req,
@@ -220,12 +275,41 @@ const updatePackageStatus = async (req, res) => {
     await pkg.save();
 
     let pointsAwarded = 0;
+    let customer = null;
 
     if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
-      const customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+      customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
 
       if (customer) {
         pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+
+        await createCustomerNotification({
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          title: "Package Received at Warehouse",
+          message: `Your package ${pkg.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
+          type: "Package Update",
+          referenceType: "Package",
+          referenceId: pkg.trackingNumber,
+        });
+      }
+    }
+
+    if (previousStatus !== "Ready for Pickup" && status === "Ready for Pickup") {
+      if (!customer) {
+        customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+      }
+
+      if (customer) {
+        await createCustomerNotification({
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          title: "Package Ready for Pickup",
+          message: `Your package ${pkg.trackingNumber} is now ready for pickup.`,
+          type: "Package Update",
+          referenceType: "Package",
+          referenceId: pkg.trackingNumber,
+        });
       }
     }
 
@@ -330,13 +414,42 @@ const bulkUpdatePackageStatus = async (req, res) => {
       await pkg.save();
 
       let pointsAwarded = 0;
+      let customer = null;
 
       if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
-        const customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+        customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
 
         if (customer) {
           pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
           totalPointsAwarded += pointsAwarded;
+
+          await createCustomerNotification({
+            customerEkonId: customer.ekonId,
+            customerName: customer.name,
+            title: "Package Received at Warehouse",
+            message: `Your package ${pkg.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
+            type: "Package Update",
+            referenceType: "Package",
+            referenceId: pkg.trackingNumber,
+          });
+        }
+      }
+
+      if (previousStatus !== "Ready for Pickup" && status === "Ready for Pickup") {
+        if (!customer) {
+          customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+        }
+
+        if (customer) {
+          await createCustomerNotification({
+            customerEkonId: customer.ekonId,
+            customerName: customer.name,
+            title: "Package Ready for Pickup",
+            message: `Your package ${pkg.trackingNumber} is now ready for pickup.`,
+            type: "Package Update",
+            referenceType: "Package",
+            referenceId: pkg.trackingNumber,
+          });
         }
       }
 
