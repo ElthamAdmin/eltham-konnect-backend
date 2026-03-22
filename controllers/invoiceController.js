@@ -20,7 +20,7 @@ const createInvoice = async (req, res) => {
     }
 
     const readyPackages = await Package.find({
-      customerEkonId: customerEkonId,
+      customerEkonId,
       readyForPickup: true,
       invoiceStatus: "Pending",
     });
@@ -35,7 +35,7 @@ const createInvoice = async (req, res) => {
     const ratedPackages = [];
 
     for (const pkg of readyPackages) {
-      const roundedWeight = Math.ceil(Number(pkg.weight));
+      const roundedWeight = Math.ceil(Number(pkg.weight || 0));
       const rateDoc = await ShippingRate.findOne({ weight: roundedWeight });
 
       if (!rateDoc) {
@@ -48,7 +48,7 @@ const createInvoice = async (req, res) => {
       ratedPackages.push({
         trackingNumber: pkg.trackingNumber,
         chargeableWeight: roundedWeight,
-        rate: rateDoc.price,
+        rate: Number(rateDoc.price || 0),
       });
     }
 
@@ -61,14 +61,14 @@ const createInvoice = async (req, res) => {
     let redeemAmount = 0;
 
     if (requestedPoints > 0) {
-      if ((customer.pointsBalance || 0) < 500) {
+      if (Number(customer.pointsBalance || 0) < 500) {
         return res.status(400).json({
           success: false,
           message: "Minimum 500 points required before redeeming.",
         });
       }
 
-      if (requestedPoints > (customer.pointsBalance || 0)) {
+      if (requestedPoints > Number(customer.pointsBalance || 0)) {
         return res.status(400).json({
           success: false,
           message: "Customer does not have enough points.",
@@ -77,7 +77,7 @@ const createInvoice = async (req, res) => {
 
       redeemAmount = Math.min(requestedPoints, subtotal);
 
-      customer.pointsBalance = (customer.pointsBalance || 0) - redeemAmount;
+      customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
       customer.lastActivityDate = new Date().toISOString().split("T")[0];
       await customer.save();
     }
@@ -96,12 +96,13 @@ const createInvoice = async (req, res) => {
       status: "Unpaid",
       paymentLink: "",
       paidDate: null,
+      paidAt: null,
       createdAt: new Date().toISOString().split("T")[0],
     });
 
     await Package.updateMany(
       {
-        customerEkonId: customerEkonId,
+        customerEkonId,
         readyForPickup: true,
         invoiceStatus: "Pending",
       },
@@ -143,7 +144,7 @@ const createInvoice = async (req, res) => {
 
 const getInvoices = async (req, res) => {
   try {
-    const invoices = await Invoice.find().sort({ createdAt: -1 });
+    const invoices = await Invoice.find().sort({ _id: -1 });
 
     res.json({
       success: true,
@@ -244,8 +245,11 @@ const markInvoicePaid = async (req, res) => {
       });
     }
 
+    const now = new Date();
+
     invoice.status = "Paid";
-    invoice.paidDate = new Date().toISOString().split("T")[0];
+    invoice.paidDate = now.toISOString().split("T")[0];
+    invoice.paidAt = now;
     await invoice.save();
 
     account.currentBalance =
@@ -260,10 +264,10 @@ const markInvoicePaid = async (req, res) => {
       amount: Number(invoice.finalTotal || 0),
       reference: invoice.invoiceNumber,
       notes: `Invoice payment received for ${invoice.customerName}`,
-      transactionDate: new Date(),
+      transactionDate: now,
     });
 
-    const trackingNumbers = invoice.packages.map((pkg) => pkg.trackingNumber);
+    const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
 
     await Package.updateMany(
       { trackingNumber: { $in: trackingNumbers } },
@@ -271,6 +275,7 @@ const markInvoicePaid = async (req, res) => {
         $set: {
           status: "Delivered",
           readyForPickup: false,
+          invoiceStatus: "Paid",
         },
       }
     );
@@ -287,6 +292,7 @@ const markInvoicePaid = async (req, res) => {
         finalTotal: invoice.finalTotal,
         receivingAccountNumber: account.accountNumber,
         receivingAccountName: account.accountName,
+        paidDate: invoice.paidDate,
       },
     });
 

@@ -30,14 +30,20 @@ const InvoiceSchema = new mongoose.Schema({
     },
   ],
 
-  subtotal: Number,
+  subtotal: {
+    type: Number,
+    default: 0,
+  },
 
   pointsRedeemed: {
     type: Number,
     default: 0,
   },
 
-  finalTotal: Number,
+  finalTotal: {
+    type: Number,
+    default: 0,
+  },
 
   status: {
     type: String,
@@ -54,8 +60,14 @@ const InvoiceSchema = new mongoose.Schema({
     default: null,
   },
 
+  paidAt: {
+    type: Date,
+    default: null,
+  },
+
   createdAt: {
     type: String,
+    default: () => new Date().toISOString().split("T")[0],
   },
 });
 
