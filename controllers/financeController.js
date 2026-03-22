@@ -233,8 +233,12 @@ const getFinanceSummary = async (req, res) => {
     const expenses = await Expense.find();
     const payroll = await Payroll.find();
 
-    const paidInvoices = invoices.filter((inv) => inv.status === "Paid");
-    const unpaidInvoices = invoices.filter((inv) => inv.status === "Unpaid");
+    const paidInvoices = invoices.filter(
+      (inv) => String(inv.status || "").trim().toLowerCase() === "paid"
+    );
+    const unpaidInvoices = invoices.filter(
+      (inv) => String(inv.status || "").trim().toLowerCase() === "unpaid"
+    );
 
     const totalRevenue = paidInvoices.reduce(
       (sum, inv) => sum + Number(inv.finalTotal || 0),
@@ -286,8 +290,12 @@ const getFinancialReports = async (req, res) => {
     const expenses = await Expense.find();
     const payroll = await Payroll.find();
 
-    const paidInvoices = invoices.filter((inv) => inv.status === "Paid");
-    const unpaidInvoices = invoices.filter((inv) => inv.status === "Unpaid");
+    const paidInvoices = invoices.filter(
+      (inv) => String(inv.status || "").trim().toLowerCase() === "paid"
+    );
+    const unpaidInvoices = invoices.filter(
+      (inv) => String(inv.status || "").trim().toLowerCase() === "unpaid"
+    );
 
     const revenue = paidInvoices.reduce(
       (sum, inv) => sum + Number(inv.finalTotal || 0),
@@ -378,9 +386,9 @@ const getMonthlyIncomeVsExpenses = async (req, res) => {
     };
 
     invoices
-      .filter((inv) => inv.status === "Paid")
+      .filter((inv) => String(inv.status || "").trim().toLowerCase() === "paid")
       .forEach((inv) => {
-        const date = inv.paidDate || inv.createdAt;
+        const date = inv.paidDate || inv.paidAt || inv.createdAt;
         const monthKey = String(date).slice(0, 7);
         ensureMonth(monthKey);
         monthMap[monthKey].income += Number(inv.finalTotal || 0);
