@@ -61,6 +61,41 @@ const PackageSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+
+  customerInvoiceUploaded: {
+    type: Boolean,
+    default: false,
+  },
+
+  customerInvoiceUploadNumber: {
+    type: String,
+    default: "",
+  },
+
+  customerInvoiceNumber: {
+    type: String,
+    default: "",
+  },
+
+  customerInvoiceFileName: {
+    type: String,
+    default: "",
+  },
+
+  customerInvoiceFilePath: {
+    type: String,
+    default: "",
+  },
+
+  customerInvoiceNotes: {
+    type: String,
+    default: "",
+  },
+
+  customerInvoiceUploadedAt: {
+    type: Date,
+    default: null,
+  },
 });
 
 module.exports = mongoose.model("Package", PackageSchema);
