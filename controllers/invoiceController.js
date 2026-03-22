@@ -6,6 +6,17 @@ const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
 
+const getJamaicaDateString = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  return formatter.format(date);
+};
+
 const createInvoice = async (req, res) => {
   try {
     const { customerEkonId, pointsToRedeem } = req.body;
@@ -78,7 +89,7 @@ const createInvoice = async (req, res) => {
       redeemAmount = Math.min(requestedPoints, subtotal);
 
       customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
-      customer.lastActivityDate = new Date().toISOString().split("T")[0];
+      customer.lastActivityDate = getJamaicaDateString();
       await customer.save();
     }
 
@@ -97,7 +108,7 @@ const createInvoice = async (req, res) => {
       paymentLink: "",
       paidDate: null,
       paidAt: null,
-      createdAt: new Date().toISOString().split("T")[0],
+      createdAt: getJamaicaDateString(),
     });
 
     await Package.updateMany(
@@ -248,7 +259,7 @@ const markInvoicePaid = async (req, res) => {
     const now = new Date();
 
     invoice.status = "Paid";
-    invoice.paidDate = now.toISOString().split("T")[0];
+    invoice.paidDate = getJamaicaDateString(now);
     invoice.paidAt = now;
     await invoice.save();
 
