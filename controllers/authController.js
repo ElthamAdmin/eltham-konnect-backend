@@ -3,8 +3,102 @@ const jwt = require("jsonwebtoken");
 const SystemUser = require("../models/SystemUser");
 const AttendanceLog = require("../models/AttendanceLog");
 
+const getJamaicaNow = () => {
+  const now = new Date();
+  const jamaicaString = now.toLocaleString("en-US", {
+    timeZone: "America/Jamaica",
+  });
+  return new Date(jamaicaString);
+};
+
+const formatDateToYMD = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const formatMinutes = (minutes) => {
+  const numericMinutes = Number(minutes || 0);
+  const hours = Math.floor(numericMinutes / 60);
+  const mins = numericMinutes % 60;
+  return `${hours}h ${mins}m`;
+};
+
 const getTodayDateString = () => {
-  return new Date().toISOString().split("T")[0];
+  return formatDateToYMD(getJamaicaNow());
+};
+
+const getDateRangeByFilter = (filter, customStartDate, customEndDate) => {
+  const today = getJamaicaNow();
+  today.setHours(0, 0, 0, 0);
+
+  const endOfToday = new Date(today);
+  endOfToday.setHours(23, 59, 59, 999);
+
+  let startDate = new Date(today);
+  let endDate = new Date(endOfToday);
+
+  switch (filter) {
+    case "today":
+      break;
+
+    case "yesterday":
+      startDate.setDate(startDate.getDate() - 1);
+      endDate = new Date(startDate);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+
+    case "thisWeek": {
+      const day = startDate.getDay();
+      const diff = day === 0 ? 6 : day - 1;
+      startDate.setDate(startDate.getDate() - diff);
+      break;
+    }
+
+    case "lastWeek": {
+      const day = startDate.getDay();
+      const diff = day === 0 ? 6 : day - 1;
+      startDate.setDate(startDate.getDate() - diff - 7);
+
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 6);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+    }
+
+    case "thisMonth":
+      startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+      break;
+
+    case "lastMonth":
+      startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      endDate = new Date(today.getFullYear(), today.getMonth(), 0);
+      endDate.setHours(23, 59, 59, 999);
+      break;
+
+    case "thisYear":
+      startDate = new Date(today.getFullYear(), 0, 1);
+      break;
+
+    case "custom":
+      if (!customStartDate || !customEndDate) {
+        throw new Error("Custom start date and end date are required");
+      }
+      startDate = new Date(`${customStartDate}T00:00:00`);
+      endDate = new Date(`${customEndDate}T23:59:59.999`);
+      break;
+
+    default:
+      break;
+  }
+
+  return {
+    startDate,
+    endDate,
+    startDateString: formatDateToYMD(startDate),
+    endDateString: formatDateToYMD(endDate),
+  };
 };
 
 const calculateWorkedMinutes = (clockInTime, clockOutTime, lunchMinutes = 0) => {
@@ -442,6 +536,120 @@ const getTodayAttendanceAdmin = async (req, res) => {
   }
 };
 
+const getAttendanceHistoryAdmin = async (req, res) => {
+  try {
+    if (
+      req.user?.role !== "Admin" &&
+      !req.user?.permissions?.includes("users")
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to view attendance history",
+      });
+    }
+
+    const {
+      filter = "today",
+      startDate: customStartDate,
+      endDate: customEndDate,
+      userId = "",
+      branch = "",
+    } = req.query;
+
+    const { startDateString, endDateString } = getDateRangeByFilter(
+      filter,
+      customStartDate,
+      customEndDate
+    );
+
+    const usersQuery = {};
+    if (branch) usersQuery.branch = branch;
+    if (userId) usersQuery.userId = userId;
+
+    const users = await SystemUser.find(usersQuery)
+      .select("-passwordHash")
+      .sort({ fullName: 1 });
+
+    const userIds = users.map((u) => u.userId);
+
+    const attendanceQuery = {
+      workDate: {
+        $gte: startDateString,
+        $lte: endDateString,
+      },
+    };
+
+    if (userId) {
+      attendanceQuery.userId = userId;
+    } else if (branch) {
+      attendanceQuery.userId = { $in: userIds };
+    }
+
+    const attendance = await AttendanceLog.find(attendanceQuery).sort({
+      workDate: -1,
+      createdAt: -1,
+    });
+
+    const summaryMap = {};
+
+    users.forEach((user) => {
+      summaryMap[user.userId] = {
+        userId: user.userId,
+        fullName: user.fullName,
+        role: user.role,
+        branch: user.branch,
+        totalDays: 0,
+        totalWorkedMinutes: 0,
+        totalLunchMinutes: 0,
+      };
+    });
+
+    attendance.forEach((row) => {
+      if (!summaryMap[row.userId]) {
+        summaryMap[row.userId] = {
+          userId: row.userId,
+          fullName: row.fullName,
+          role: row.role,
+          branch: "",
+          totalDays: 0,
+          totalWorkedMinutes: 0,
+          totalLunchMinutes: 0,
+        };
+      }
+
+      summaryMap[row.userId].totalDays += 1;
+      summaryMap[row.userId].totalWorkedMinutes += Number(row.workedMinutes || 0);
+      summaryMap[row.userId].totalLunchMinutes += Number(row.lunchMinutes || 0);
+    });
+
+    const summary = Object.values(summaryMap).map((item) => ({
+      ...item,
+      totalWorkedLabel: formatMinutes(item.totalWorkedMinutes),
+      totalLunchLabel: formatMinutes(item.totalLunchMinutes),
+    }));
+
+    res.json({
+      success: true,
+      message: "Attendance history retrieved successfully",
+      data: {
+        filter,
+        startDate: startDateString,
+        endDate: endDateString,
+        attendance,
+        users,
+        summary,
+      },
+    });
+  } catch (error) {
+    console.error("Attendance history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve attendance history",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   loginUser,
   clockIn,
@@ -451,4 +659,5 @@ module.exports = {
   forceClockOutStaff,
   getMyAttendanceToday,
   getTodayAttendanceAdmin,
+  getAttendanceHistoryAdmin,
 };

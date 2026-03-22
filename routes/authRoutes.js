@@ -10,6 +10,7 @@ const {
   forceClockOutStaff,
   getMyAttendanceToday,
   getTodayAttendanceAdmin,
+  getAttendanceHistoryAdmin,
 } = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -22,5 +23,6 @@ router.post("/clock-out", protect, clockOut);
 router.post("/force-clock-out/:userId", protect, forceClockOutStaff);
 router.get("/me/attendance-today", protect, getMyAttendanceToday);
 router.get("/attendance-today", protect, getTodayAttendanceAdmin);
+router.get("/attendance-history", protect, getAttendanceHistoryAdmin);
 
 module.exports = router;
