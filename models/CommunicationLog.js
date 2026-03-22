@@ -14,6 +14,10 @@ const CommunicationLogSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  recipientMode: {
+    type: String,
+    default: "single",
+  },
   channel: {
     type: String,
     required: true,
@@ -33,7 +37,15 @@ const CommunicationLogSchema = new mongoose.Schema({
   },
   date: {
     type: String,
-    default: () => new Date().toISOString().split("T")[0],
+    default: () => {
+      const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Jamaica",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      return formatter.format(new Date());
+    },
   },
   createdAt: {
     type: Date,
