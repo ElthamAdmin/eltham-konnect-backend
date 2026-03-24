@@ -1,9 +1,10 @@
 const SupportTicket = require("../models/SupportTicket");
+const CustomerNotification = require("../models/CustomerNotification");
 
 const getTickets = async (req, res) => {
   try {
     const user = req.user || {};
-    let query = {};
+    const query = {};
 
     if (user.userType === "customer") {
       query.customerEkonId = user.ekonId;
@@ -125,13 +126,24 @@ const addReplyToTicket = async (req, res) => {
       createdAt: new Date(),
     });
 
-    if (ticket.status === "Closed") {
-      ticket.status = "In Progress";
-    } else if (ticket.status === "Resolved") {
+    if (ticket.status === "Closed" || ticket.status === "Resolved") {
       ticket.status = "In Progress";
     }
 
     await ticket.save();
+
+    if (!isCustomer) {
+      await CustomerNotification.create({
+        notificationNumber: `CNT-${Date.now()}`,
+        customerEkonId: ticket.customerEkonId,
+        customerName: ticket.customerName,
+        type: "Support Ticket",
+        title: "Support Ticket Reply",
+        message: `Eltham Konnect replied to your ticket "${ticket.subject}" (${ticket.ticketNumber}).`,
+        isRead: false,
+        date: new Date().toISOString().split("T")[0],
+      });
+    }
 
     res.json({
       success: true,
