@@ -4,6 +4,9 @@ const getMyNotifications = async (req, res) => {
   try {
     const customerEkonId = req.user?.ekonId;
 
+    console.log("GET MY NOTIFICATIONS req.user:", req.user);
+    console.log("GET MY NOTIFICATIONS customerEkonId:", customerEkonId);
+
     if (!customerEkonId) {
       return res.status(403).json({
         success: false,
@@ -14,6 +17,15 @@ const getMyNotifications = async (req, res) => {
     const notifications = await CustomerNotification.find({
       customerEkonId,
     }).sort({ createdAt: -1 });
+
+    console.log(
+      "GET MY NOTIFICATIONS found count:",
+      notifications.length
+    );
+    console.log(
+      "GET MY NOTIFICATIONS found notification numbers:",
+      notifications.map((item) => item.notificationNumber)
+    );
 
     res.json({
       success: true,
