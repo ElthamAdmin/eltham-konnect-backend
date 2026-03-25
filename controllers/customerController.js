@@ -3,6 +3,17 @@ const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
 
+const getJamaicaDateString = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  return formatter.format(date);
+};
+
 const getCustomers = async (req, res) => {
   try {
     const customers = await Customer.find().sort({ createdAt: -1 });
@@ -83,6 +94,8 @@ const createCustomer = async (req, res) => {
       termsAcceptedAt: null,
       privacyAccepted: false,
       privacyAcceptedAt: null,
+      marketingOptIn: true,
+      marketingOptOutDate: "",
     });
 
     await newCustomer.save();
@@ -142,6 +155,22 @@ const updateCustomer = async (req, res) => {
       req.body.lastActivityDate ?? customer.lastActivityDate;
     customer.status = req.body.status ?? customer.status;
 
+    if (req.body.marketingOptIn !== undefined) {
+      const nextMarketingOptIn = Boolean(req.body.marketingOptIn);
+      const currentMarketingOptIn =
+        customer.marketingOptIn !== undefined ? customer.marketingOptIn : true;
+
+      customer.marketingOptIn = nextMarketingOptIn;
+
+      if (currentMarketingOptIn && !nextMarketingOptIn) {
+        customer.marketingOptOutDate = getJamaicaDateString();
+      }
+
+      if (nextMarketingOptIn) {
+        customer.marketingOptOutDate = "";
+      }
+    }
+
     await customer.save();
 
     if (req.user) {
@@ -158,6 +187,8 @@ const updateCustomer = async (req, res) => {
           phone: customer.phone,
           branch: customer.branch,
           status: customer.status,
+          marketingOptIn: customer.marketingOptIn,
+          marketingOptOutDate: customer.marketingOptOutDate,
         },
       });
     }
