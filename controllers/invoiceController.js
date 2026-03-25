@@ -1,141 +1,202 @@
-const Customer = require("../models/Customer");  
-const Package = require("../models/Package");  
-const Invoice = require("../models/Invoice");  
-const ShippingRate = require("../models/ShippingRate");  
-const FinancialAccount = require("../models/FinancialAccount");  
-const AccountTransaction = require("../models/AccountTransaction");  
-const CustomerNotification = require("../models/CustomerNotification");  
-const { writeAuditLog } = require("../utils/auditLogger");  
+const Customer = require("../models/Customer");
+const Package = require("../models/Package");
+const Invoice = require("../models/Invoice");
+const ShippingRate = require("../models/ShippingRate");
+const FinancialAccount = require("../models/FinancialAccount");
+const AccountTransaction = require("../models/AccountTransaction");
+const CustomerNotification = require("../models/CustomerNotification");
+const { writeAuditLog } = require("../utils/auditLogger");
 
-const getJamaicaDateString = (date = new Date()) => {  
-  const formatter = new Intl.DateTimeFormat("en-CA", {  
-    timeZone: "America/Jamaica",  
-    year: "numeric",  
-    month: "2-digit",  
-    day: "2-digit",  
-  });  
+const getJamaicaDateString = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
 
-  return formatter.format(date);  
-};  
+  return formatter.format(date);
+};
 
-const createCustomerNotification = async ({  
-  customerEkonId,  
-  customerName,  
-  title,  
-  message,  
-  type,  
-  referenceType = "",  
-  referenceId = "",  
-}) => {  
-  await CustomerNotification.create({  
-    notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,  
-    customerEkonId,  
-    customerName,  
-    title,  
-    message,  
-    type,  
-    referenceType,  
-    referenceId,  
-    isRead: false,  
-    date: getJamaicaDateString(),  
-  });  
-};  
+const createCustomerNotification = async ({
+  customerEkonId,
+  customerName,
+  title,
+  message,
+  type,
+  referenceType = "",
+  referenceId = "",
+}) => {
+  await CustomerNotification.create({
+    notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    customerEkonId,
+    customerName,
+    title,
+    message,
+    type,
+    referenceType,
+    referenceId,
+    isRead: false,
+    date: getJamaicaDateString(),
+  });
+};
 
-// ✅ EXISTING FUNCTION (UNCHANGED)
-const createInvoice = async (req, res) => {  
-  try {  
-    const { customerEkonId, pointsToRedeem } = req.body;  
+const createInvoice = async (req, res) => {
+  try {
+    const { customerEkonId, pointsToRedeem } = req.body;
 
-    const customer = await Customer.findOne({ ekonId: customerEkonId });  
+    const customer = await Customer.findOne({ ekonId: customerEkonId });
 
-    if (!customer) {  
-      return res.status(404).json({ success: false, message: "Customer not found" });  
-    }  
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
 
-    const readyPackages = await Package.find({  
-      customerEkonId,  
-      readyForPickup: true,  
-      invoiceStatus: "Pending",  
-    });  
+    const readyPackages = await Package.find({
+      customerEkonId,
+      readyForPickup: true,
+      invoiceStatus: "Pending",
+    });
 
-    if (readyPackages.length === 0) {  
-      return res.status(400).json({  
-        success: false,  
-        message: "No ready packages with pending invoice.",  
-      });  
-    }  
+    if (readyPackages.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No ready packages with pending invoice.",
+      });
+    }
 
-    const ratedPackages = [];  
+    const ratedPackages = [];
 
-    for (const pkg of readyPackages) {  
-      const roundedWeight = Math.ceil(Number(pkg.weight || 0));  
-      const rateDoc = await ShippingRate.findOne({ weight: roundedWeight });  
+    for (const pkg of readyPackages) {
+      const roundedWeight = Math.ceil(Number(pkg.weight || 0));
+      const rateDoc = await ShippingRate.findOne({ weight: roundedWeight });
 
-      if (!rateDoc) {  
-        return res.status(400).json({  
-          success: false,  
-          message: `No shipping rate found for ${roundedWeight} lb`,  
-        });  
-      }  
+      if (!rateDoc) {
+        return res.status(400).json({
+          success: false,
+          message: `No shipping rate found for ${roundedWeight} lb`,
+        });
+      }
 
-      ratedPackages.push({  
-        trackingNumber: pkg.trackingNumber,  
-        chargeableWeight: roundedWeight,  
-        rate: Number(rateDoc.price || 0),  
-      });  
-    }  
+      ratedPackages.push({
+        trackingNumber: pkg.trackingNumber,
+        chargeableWeight: roundedWeight,
+        rate: Number(rateDoc.price || 0),
+      });
+    }
 
-    const subtotal = ratedPackages.reduce((sum, pkg) => sum + pkg.rate, 0);  
+    const subtotal = ratedPackages.reduce(
+      (sum, pkg) => sum + Number(pkg.rate || 0),
+      0
+    );
 
-    const requestedPoints = Number(pointsToRedeem) || 0;  
-    let redeemAmount = 0;  
+    const requestedPoints = Number(pointsToRedeem) || 0;
+    let redeemAmount = 0;
 
-    if (requestedPoints > 0) {  
-      if (customer.pointsBalance < 500) {  
-        return res.status(400).json({ success: false, message: "Minimum 500 points required" });  
-      }  
+    if (requestedPoints > 0) {
+      if (Number(customer.pointsBalance || 0) < 500) {
+        return res.status(400).json({
+          success: false,
+          message: "Minimum 500 points required before redeeming.",
+        });
+      }
 
-      if (requestedPoints > customer.pointsBalance) {  
-        return res.status(400).json({ success: false, message: "Not enough points" });  
-      }  
+      if (requestedPoints > Number(customer.pointsBalance || 0)) {
+        return res.status(400).json({
+          success: false,
+          message: "Customer does not have enough points.",
+        });
+      }
 
-      redeemAmount = Math.min(requestedPoints, subtotal);  
-      customer.pointsBalance -= redeemAmount;  
-      customer.lastActivityDate = getJamaicaDateString();  
-      await customer.save();  
-    }  
+      redeemAmount = Math.min(requestedPoints, subtotal);
+      customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
+      customer.lastActivityDate = getJamaicaDateString();
+      await customer.save();
+    }
 
-    const finalTotal = subtotal - redeemAmount;  
+    const finalTotal = subtotal - redeemAmount;
 
-    const invoice = await Invoice.create({  
-      invoiceNumber: `INV-${Date.now()}`,  
-      customerEkonId: customer.ekonId,  
-      customerName: customer.name,  
-      packageCount: ratedPackages.length,  
-      packages: ratedPackages,  
-      subtotal,  
-      pointsRedeemed: redeemAmount,  
-      finalTotal,  
-      status: "Unpaid",  
-      createdAt: getJamaicaDateString(),  
-    });  
+    const invoice = await Invoice.create({
+      invoiceNumber: `INV-${Date.now()}`,
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      packageCount: ratedPackages.length,
+      packages: ratedPackages,
+      subtotal,
+      pointsRedeemed: redeemAmount,
+      finalTotal,
+      status: "Unpaid",
+      paymentLink: "",
+      paidDate: null,
+      paidAt: null,
+      createdAt: getJamaicaDateString(),
+    });
 
-    await Package.updateMany(  
-      { customerEkonId, readyForPickup: true, invoiceStatus: "Pending" },  
-      { $set: { invoiceStatus: "Issued" } }  
-    );  
+    await Package.updateMany(
+      { customerEkonId, readyForPickup: true, invoiceStatus: "Pending" },
+      { $set: { invoiceStatus: "Issued" } }
+    );
 
-    res.json({ success: true, data: invoice });  
-  } catch (error) {  
-    res.status(500).json({ success: false, message: error.message });  
-  }  
-};  
+    await createCustomerNotification({
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      title: "New Invoice Generated",
+      message: `A new invoice ${invoice.invoiceNumber} has been generated for your ready packages. Final total: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
 
+    await writeAuditLog({
+      req,
+      action: "CREATE_INVOICE",
+      module: "Invoices",
+      description: `Invoice ${invoice.invoiceNumber} created for ${invoice.customerName}`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customerEkonId: invoice.customerEkonId,
+        packageCount: invoice.packageCount,
+        subtotal: invoice.subtotal,
+        pointsRedeemed: invoice.pointsRedeemed,
+        finalTotal: invoice.finalTotal,
+      },
+    });
 
-// ✅ NEW FUNCTION (THIS FIXES YOUR BUTTON)
+    res.json({
+      success: true,
+      message: "Invoice created successfully from ready packages",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Invoice creation error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Invoice could not be created",
+      error: error.message,
+    });
+  }
+};
+
 const generateMultipleInvoice = async (req, res) => {
   try {
-    const { customerEkonId, packageIds } = req.body;
+    const { customerEkonId, packageIds, pointsToRedeem } = req.body;
+
+    if (!customerEkonId) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    if (!Array.isArray(packageIds) || packageIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid ready packages selected",
+      });
+    }
 
     const customer = await Customer.findOne({ ekonId: customerEkonId });
 
@@ -148,6 +209,7 @@ const generateMultipleInvoice = async (req, res) => {
 
     const readyPackages = await Package.find({
       _id: { $in: packageIds },
+      customerEkonId,
       readyForPickup: true,
       invoiceStatus: "Pending",
     });
@@ -168,35 +230,95 @@ const generateMultipleInvoice = async (req, res) => {
       if (!rateDoc) {
         return res.status(400).json({
           success: false,
-          message: `Missing rate for ${roundedWeight} lb`,
+          message: `No shipping rate found for ${roundedWeight} lb`,
         });
       }
 
       ratedPackages.push({
         trackingNumber: pkg.trackingNumber,
         chargeableWeight: roundedWeight,
-        rate: Number(rateDoc.price),
+        rate: Number(rateDoc.price || 0),
       });
     }
 
-    const subtotal = ratedPackages.reduce((sum, p) => sum + p.rate, 0);
+    const subtotal = ratedPackages.reduce(
+      (sum, pkg) => sum + Number(pkg.rate || 0),
+      0
+    );
+
+    const requestedPoints = Number(pointsToRedeem) || 0;
+    let redeemAmount = 0;
+
+    if (requestedPoints > 0) {
+      if (Number(customer.pointsBalance || 0) < 500) {
+        return res.status(400).json({
+          success: false,
+          message: "Minimum 500 points required before redeeming.",
+        });
+      }
+
+      if (requestedPoints > Number(customer.pointsBalance || 0)) {
+        return res.status(400).json({
+          success: false,
+          message: "Customer does not have enough points.",
+        });
+      }
+
+      redeemAmount = Math.min(requestedPoints, subtotal);
+      customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
+      customer.lastActivityDate = getJamaicaDateString();
+      await customer.save();
+    }
+
+    const finalTotal = subtotal - redeemAmount;
 
     const invoice = await Invoice.create({
       invoiceNumber: `INV-${Date.now()}`,
-      customerEkonId,
+      customerEkonId: customer.ekonId,
       customerName: customer.name,
       packageCount: ratedPackages.length,
       packages: ratedPackages,
       subtotal,
-      finalTotal: subtotal,
+      pointsRedeemed: redeemAmount,
+      finalTotal,
       status: "Unpaid",
+      paymentLink: "",
+      paidDate: null,
+      paidAt: null,
       createdAt: getJamaicaDateString(),
     });
 
     await Package.updateMany(
-      { _id: { $in: packageIds } },
+      { _id: { $in: readyPackages.map((pkg) => pkg._id) } },
       { $set: { invoiceStatus: "Issued" } }
     );
+
+    await createCustomerNotification({
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      title: "New Invoice Generated",
+      message: `A new invoice ${invoice.invoiceNumber} has been generated for your ready packages. Final total: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
+
+    await writeAuditLog({
+      req,
+      action: "CREATE_INVOICE",
+      module: "Invoices",
+      description: `Invoice ${invoice.invoiceNumber} created for ${invoice.customerName} from selected ready packages`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customerEkonId: invoice.customerEkonId,
+        packageCount: invoice.packageCount,
+        subtotal: invoice.subtotal,
+        pointsRedeemed: invoice.pointsRedeemed,
+        finalTotal: invoice.finalTotal,
+        selectedPackageIds: readyPackages.map((pkg) => String(pkg._id)),
+      },
+    });
 
     res.json({
       success: true,
@@ -204,27 +326,200 @@ const generateMultipleInvoice = async (req, res) => {
       data: invoice,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Invoice generation error:", error);
     res.status(500).json({
       success: false,
       message: "Invoice generation failed",
+      error: error.message,
     });
   }
 };
 
+const getInvoices = async (req, res) => {
+  try {
+    const invoices = await Invoice.find().sort({ _id: -1 });
+    res.json({
+      success: true,
+      message: "Invoices retrieved successfully",
+      totalInvoices: invoices.length,
+      data: invoices,
+    });
+  } catch (error) {
+    console.error("Error retrieving invoices:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve invoices",
+      error: error.message,
+    });
+  }
+};
 
-const getInvoices = async (req, res) => {  
-  const invoices = await Invoice.find().sort({ _id: -1 });  
-  res.json({ success: true, data: invoices });  
-};  
+const updateInvoicePaymentLink = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const paymentLink = String(req.body?.paymentLink || "").trim();
 
-const updateInvoicePaymentLink = async (req, res) => { /* unchanged */ };  
-const markInvoicePaid = async (req, res) => { /* unchanged */ };  
+    const invoice = await Invoice.findOneAndUpdate(
+      { invoiceNumber },
+      { $set: { paymentLink } },
+      { new: true }
+    );
 
-module.exports = {  
-  createInvoice,  
-  generateMultipleInvoice, // ✅ IMPORTANT
-  getInvoices,  
-  updateInvoicePaymentLink,  
-  markInvoicePaid,  
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found",
+      });
+    }
+
+    await writeAuditLog({
+      req,
+      action: "UPDATE_INVOICE_PAYMENT_LINK",
+      module: "Invoices",
+      description: `Payment link updated for invoice ${invoice.invoiceNumber}`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customerName: invoice.customerName,
+        paymentLink: invoice.paymentLink,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Invoice payment link updated successfully",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Error updating invoice payment link:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not update invoice payment link",
+      error: error.message,
+    });
+  }
+};
+
+const markInvoicePaid = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { receivingAccountNumber } = req.body;
+
+    if (!receivingAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Receiving account is required",
+      });
+    }
+
+    const invoice = await Invoice.findOne({ invoiceNumber });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found",
+      });
+    }
+
+    if (invoice.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Invoice is already marked as paid",
+      });
+    }
+
+    const account = await FinancialAccount.findOne({
+      accountNumber: receivingAccountNumber,
+    });
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: "Receiving account not found",
+      });
+    }
+
+    const now = new Date();
+
+    invoice.status = "Paid";
+    invoice.paidDate = getJamaicaDateString(now);
+    invoice.paidAt = now;
+    await invoice.save();
+
+    account.currentBalance =
+      Number(account.currentBalance || 0) + Number(invoice.finalTotal || 0);
+    await account.save();
+
+    await AccountTransaction.create({
+      transactionNumber: `TRN-${Date.now()}`,
+      accountNumber: account.accountNumber,
+      accountName: account.accountName,
+      transactionType: "Invoice Payment",
+      amount: Number(invoice.finalTotal || 0),
+      reference: invoice.invoiceNumber,
+      notes: `Invoice payment received for ${invoice.customerName}`,
+      transactionDate: now,
+    });
+
+    const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
+
+    await Package.updateMany(
+      { trackingNumber: { $in: trackingNumbers } },
+      {
+        $set: {
+          status: "Delivered",
+          readyForPickup: false,
+          invoiceStatus: "Paid",
+        },
+      }
+    );
+
+    await createCustomerNotification({
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
+      title: "Invoice Paid Successfully",
+      message: `Your invoice ${invoice.invoiceNumber} has been marked as paid. Amount received: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
+
+    await writeAuditLog({
+      req,
+      action: "MARK_INVOICE_PAID",
+      module: "Invoices",
+      description: `Invoice ${invoice.invoiceNumber} marked paid and deposited into ${account.accountName}`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customerName: invoice.customerName,
+        finalTotal: invoice.finalTotal,
+        receivingAccountNumber: account.accountNumber,
+        receivingAccountName: account.accountName,
+        paidDate: invoice.paidDate,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Invoice marked as paid, account updated, and packages delivered",
+      data: invoice,
+      receivingAccount: account,
+    });
+  } catch (error) {
+    console.error("Error updating invoice:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not update invoice",
+      error: error.message,
+    });
+  }
+};
+
+module.exports = {
+  createInvoice,
+  generateMultipleInvoice,
+  getInvoices,
+  updateInvoicePaymentLink,
+  markInvoicePaid,
 };

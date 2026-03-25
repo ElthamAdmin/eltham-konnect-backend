@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   createInvoice,
-  generateMultipleInvoice, // ✅ ADDED
+  generateMultipleInvoice,
   getInvoices,
   updateInvoicePaymentLink,
   markInvoicePaid,
@@ -11,10 +11,7 @@ const {
 
 router.get("/", getInvoices);
 router.post("/", createInvoice);
-
-// ✅ THIS IS THE MISSING ROUTE (FIXES YOUR ERROR)
 router.post("/generate-multiple", generateMultipleInvoice);
-
 router.put("/:invoiceNumber/payment-link", updateInvoicePaymentLink);
 router.put("/pay/:invoiceNumber", markInvoicePaid);
 
