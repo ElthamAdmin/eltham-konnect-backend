@@ -13,6 +13,11 @@ const getJamaicaDateString = (date = new Date()) => {
   return formatter.format(date);
 };
 
+const isMarketingOptedIn = (customer) => {
+  if (customer?.marketingOptIn === undefined) return true;
+  return customer.marketingOptIn === true;
+};
+
 const getCampaigns = async (req, res) => {
   try {
     const campaigns = await MarketingCampaign.find().sort({ createdAt: -1 });
@@ -76,6 +81,13 @@ const createCampaign = async (req, res) => {
         });
       }
 
+      if (!isMarketingOptedIn(customer)) {
+        return res.status(400).json({
+          success: false,
+          message: `${customer.name} has unsubscribed from marketing messages`,
+        });
+      }
+
       recipients = [customer];
     } else if (mode === "selected") {
       if (!Array.isArray(customerEkonIds) || customerEkonIds.length === 0) {
@@ -85,23 +97,41 @@ const createCampaign = async (req, res) => {
         });
       }
 
-      recipients = await Customer.find({
+      const selectedCustomers = await Customer.find({
         ekonId: { $in: customerEkonIds },
       });
 
-      if (recipients.length === 0) {
+      if (selectedCustomers.length === 0) {
         return res.status(404).json({
           success: false,
           message: "No selected customers were found",
         });
       }
-    } else if (mode === "all") {
-      recipients = await Customer.find();
+
+      recipients = selectedCustomers.filter(isMarketingOptedIn);
 
       if (recipients.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "All selected customers have unsubscribed from marketing",
+        });
+      }
+    } else if (mode === "all") {
+      const allCustomers = await Customer.find();
+
+      if (allCustomers.length === 0) {
         return res.status(404).json({
           success: false,
           message: "No customers found to receive this campaign",
+        });
+      }
+
+      recipients = allCustomers.filter(isMarketingOptedIn);
+
+      if (recipients.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No customers are currently subscribed to marketing",
         });
       }
     } else {
@@ -152,9 +182,9 @@ const createCampaign = async (req, res) => {
       success: true,
       message:
         mode === "all"
-          ? `Marketing campaign created and sent to all customers (${createdLogs.length} recipients)`
+          ? `Marketing campaign created and sent to subscribed customers (${createdLogs.length} recipients)`
           : mode === "selected"
-          ? `Marketing campaign created and sent to selected customers (${createdLogs.length} recipients)`
+          ? `Marketing campaign created and sent to subscribed selected customers (${createdLogs.length} recipients)`
           : "Marketing campaign created and sent successfully",
       totalRecipients: createdLogs.length,
       data: campaign,
