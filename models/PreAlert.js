@@ -48,6 +48,16 @@ const PreAlertSchema = new mongoose.Schema(
       default: "",
     },
 
+    invoiceFileName: {
+      type: String,
+      default: "",
+    },
+
+    invoiceFilePath: {
+      type: String,
+      default: "",
+    },
+
     status: {
       type: String,
       default: "Submitted",

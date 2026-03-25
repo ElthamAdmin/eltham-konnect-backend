@@ -76,6 +76,8 @@ const createPreAlert = async (req, res) => {
       itemDescription: itemDescription || "",
       estimatedWeight: Number(estimatedWeight || 0),
       notes: notes || "",
+      invoiceFileName: req.file ? req.file.filename : "",
+      invoiceFilePath: req.file ? `/uploads/prealerts/${req.file.filename}` : "",
       status: "Submitted",
       date: new Date().toISOString().split("T")[0],
     });
