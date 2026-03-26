@@ -3,7 +3,9 @@ const jwt = require("jsonwebtoken");
 const Customer = require("../models/Customer");
 
 const createNextEkonId = async () => {
-  const lastCustomer = await Customer.findOne().sort({ ekonId: -1 }).select("ekonId");
+  const lastCustomer = await Customer.findOne()
+    .sort({ ekonId: -1 })
+    .select("ekonId");
 
   let nextNumber = 1;
 
@@ -15,14 +17,23 @@ const createNextEkonId = async () => {
   return `EKON${String(nextNumber).padStart(5, "0")}`;
 };
 
+const validBranches = ["Eltham Park Mainstore", "Brown's Town Square"];
+
 const signupCustomer = async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, branch, password } = req.body;
 
-    if (!name || !email || !phone || !password) {
+    if (!name || !email || !phone || !branch || !password) {
       return res.status(400).json({
         success: false,
-        message: "Name, email, phone, and password are required",
+        message: "Name, email, phone, branch, and password are required",
+      });
+    }
+
+    if (!validBranches.includes(branch)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select a valid branch",
       });
     }
 
@@ -53,7 +64,7 @@ const signupCustomer = async (req, res) => {
       name,
       email,
       phone,
-      branch: "Eltham Park",
+      branch,
       address: "",
       pointsBalance: 0,
       signUpDate: today,
@@ -64,6 +75,8 @@ const signupCustomer = async (req, res) => {
       termsAcceptedAt: null,
       privacyAccepted: false,
       privacyAcceptedAt: null,
+      marketingOptIn: true,
+      marketingOptOutDate: "",
     });
 
     const token = jwt.sign(
@@ -97,6 +110,8 @@ const signupCustomer = async (req, res) => {
         termsAcceptedAt: customer.termsAcceptedAt,
         privacyAccepted: customer.privacyAccepted,
         privacyAcceptedAt: customer.privacyAcceptedAt,
+        marketingOptIn: customer.marketingOptIn,
+        marketingOptOutDate: customer.marketingOptOutDate,
       },
     });
   } catch (error) {
@@ -183,6 +198,8 @@ const loginCustomer = async (req, res) => {
         termsAcceptedAt: customer.termsAcceptedAt,
         privacyAccepted: customer.privacyAccepted,
         privacyAcceptedAt: customer.privacyAcceptedAt,
+        marketingOptIn: customer.marketingOptIn,
+        marketingOptOutDate: customer.marketingOptOutDate,
       },
     });
   } catch (error) {
