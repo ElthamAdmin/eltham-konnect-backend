@@ -67,6 +67,17 @@ const PayrollSchema = new mongoose.Schema({
     required: true,
   },
 
+  // ✅ NEW: Account Payment Tracking
+  paidFromAccountNumber: {
+    type: String,
+    default: "",
+  },
+
+  paidFromAccountName: {
+    type: String,
+    default: "",
+  },
+
   status: {
     type: String,
     default: "Pending",
