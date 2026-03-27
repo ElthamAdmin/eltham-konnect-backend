@@ -19,7 +19,6 @@ const JAMAICA_ANNUAL_PIT_THRESHOLD = 2003496;
 const JAMAICA_MONTHLY_PIT_THRESHOLD = JAMAICA_ANNUAL_PIT_THRESHOLD / 12;
 
 // NIS wage ceiling has historically been capped; keeping this as a conservative business rule.
-// If you want this made editable in settings later, we can do that safely.
 const JAMAICA_NIS_ANNUAL_WAGE_CEILING = 5000000;
 const JAMAICA_NIS_MONTHLY_WAGE_CEILING = JAMAICA_NIS_ANNUAL_WAGE_CEILING / 12;
 
@@ -35,7 +34,6 @@ const calculateJamaicanPayrollDeductions = ({
   const nhtEmployee = roundMoney(gross * JAMAICA_NHT_EMPLOYEE_RATE);
   const educationTax = roundMoney(gross * JAMAICA_EDUCATION_TAX_RATE);
 
-  // Taxable income is gross less approved employee pension deduction, if any.
   const taxableIncome = Math.max(0, roundMoney(gross - pension));
   const taxableOverThreshold = Math.max(
     0,
@@ -264,6 +262,7 @@ const createPayroll = async (req, res) => {
       incomeTax,
       pensionEmployee,
       autoCalculateStatutoryDeductions,
+      paidFromAccountNumber,
     } = req.body;
 
     if (!employeeName || !role || !payPeriod || !grossPay) {
@@ -341,6 +340,45 @@ const createPayroll = async (req, res) => {
       };
     }
 
+    let paidFromAccountName = "";
+
+    if (paidFromAccountNumber) {
+      const account = await FinancialAccount.findOne({
+        accountNumber: paidFromAccountNumber,
+      });
+
+      if (!account) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected payroll payment account not found",
+        });
+      }
+
+      if (Number(account.currentBalance || 0) < Number(payrollBreakdown.netPay || 0)) {
+        return res.status(400).json({
+          success: false,
+          message: "Insufficient balance in selected payroll payment account",
+        });
+      }
+
+      account.currentBalance =
+        Number(account.currentBalance || 0) - Number(payrollBreakdown.netPay || 0);
+      await account.save();
+
+      paidFromAccountName = account.accountName;
+
+      await AccountTransaction.create({
+        transactionNumber: `TRN-${Date.now()}`,
+        accountNumber: account.accountNumber,
+        accountName: account.accountName,
+        transactionType: "Withdrawal",
+        amount: Number(payrollBreakdown.netPay || 0),
+        reference: `Payroll ${payPeriod}`,
+        notes: `Payroll payment for ${employeeName}`,
+        transactionDate: new Date(),
+      });
+    }
+
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
       employeeName,
@@ -355,6 +393,8 @@ const createPayroll = async (req, res) => {
       pensionEmployee: payrollBreakdown.pensionEmployee,
       totalDeductions: payrollBreakdown.totalDeductions,
       netPay: payrollBreakdown.netPay,
+      paidFromAccountNumber: paidFromAccountNumber || "",
+      paidFromAccountName,
       status: status || "Pending",
     });
 
@@ -380,6 +420,8 @@ const createPayroll = async (req, res) => {
             pensionEmployee: newPayroll.pensionEmployee,
             totalDeductions: newPayroll.totalDeductions,
             netPay: newPayroll.netPay,
+            paidFromAccountNumber: newPayroll.paidFromAccountNumber,
+            paidFromAccountName: newPayroll.paidFromAccountName,
             status: newPayroll.status,
           },
         });
