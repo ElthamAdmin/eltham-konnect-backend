@@ -5,6 +5,8 @@ const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
 
+const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
 const getExpenses = async (req, res) => {
   try {
     const page = Number(req.query.page || 1);
@@ -195,7 +197,19 @@ const getPayroll = async (req, res) => {
 
 const createPayroll = async (req, res) => {
   try {
-    const { employeeName, role, payPeriod, grossPay, deductions, status } = req.body;
+    const {
+      employeeName,
+      role,
+      payPeriod,
+      grossPay,
+      deductions,
+      status,
+      nisEmployee,
+      nhtEmployee,
+      educationTax,
+      incomeTax,
+      pensionEmployee,
+    } = req.body;
 
     if (!employeeName || !role || !payPeriod || !grossPay) {
       return res.status(400).json({
@@ -204,9 +218,49 @@ const createPayroll = async (req, res) => {
       });
     }
 
-    const gross = Number(grossPay || 0);
-    const deduct = Number(deductions || 0);
-    const net = gross - deduct;
+    const gross = roundMoney(grossPay);
+
+    if (gross <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Gross pay must be greater than zero",
+      });
+    }
+
+    const hasDetailedDeductions =
+      nisEmployee !== undefined ||
+      nhtEmployee !== undefined ||
+      educationTax !== undefined ||
+      incomeTax !== undefined ||
+      pensionEmployee !== undefined;
+
+    let calculatedNisEmployee = 0;
+    let calculatedNhtEmployee = 0;
+    let calculatedEducationTax = 0;
+    let calculatedIncomeTax = 0;
+    let calculatedPensionEmployee = 0;
+    let calculatedTotalDeductions = 0;
+
+    if (hasDetailedDeductions) {
+      calculatedNisEmployee = roundMoney(nisEmployee);
+      calculatedNhtEmployee = roundMoney(nhtEmployee);
+      calculatedEducationTax = roundMoney(educationTax);
+      calculatedIncomeTax = roundMoney(incomeTax);
+      calculatedPensionEmployee = roundMoney(pensionEmployee);
+
+      calculatedTotalDeductions = roundMoney(
+        calculatedNisEmployee +
+          calculatedNhtEmployee +
+          calculatedEducationTax +
+          calculatedIncomeTax +
+          calculatedPensionEmployee
+      );
+    } else {
+      const legacyDeductions = roundMoney(deductions);
+      calculatedTotalDeductions = legacyDeductions > 0 ? legacyDeductions : 0;
+    }
+
+    const net = roundMoney(gross - calculatedTotalDeductions);
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
@@ -214,7 +268,13 @@ const createPayroll = async (req, res) => {
       role,
       payPeriod,
       grossPay: gross,
-      deductions: deduct,
+      deductions: calculatedTotalDeductions,
+      nisEmployee: calculatedNisEmployee,
+      nhtEmployee: calculatedNhtEmployee,
+      educationTax: calculatedEducationTax,
+      incomeTax: calculatedIncomeTax,
+      pensionEmployee: calculatedPensionEmployee,
+      totalDeductions: calculatedTotalDeductions,
       netPay: net,
       status: status || "Pending",
     });
@@ -233,6 +293,13 @@ const createPayroll = async (req, res) => {
             role: newPayroll.role,
             payPeriod: newPayroll.payPeriod,
             grossPay: newPayroll.grossPay,
+            deductions: newPayroll.deductions,
+            nisEmployee: newPayroll.nisEmployee,
+            nhtEmployee: newPayroll.nhtEmployee,
+            educationTax: newPayroll.educationTax,
+            incomeTax: newPayroll.incomeTax,
+            pensionEmployee: newPayroll.pensionEmployee,
+            totalDeductions: newPayroll.totalDeductions,
             netPay: newPayroll.netPay,
             status: newPayroll.status,
           },
