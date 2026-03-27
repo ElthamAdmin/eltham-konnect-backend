@@ -7,13 +7,28 @@ const { writeAuditLog } = require("../utils/auditLogger");
 
 const getExpenses = async (req, res) => {
   try {
-    const expenses = await Expense.find().sort({ createdAt: -1 });
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 10);
+    const skip = (page - 1) * limit;
+
+    const total = await Expense.countDocuments();
+
+    const expenses = await Expense.find()
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit);
 
     res.json({
       success: true,
       message: "Expenses retrieved successfully",
-      totalExpenses: expenses.length,
+      totalExpenses: total,
       data: expenses,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit,
+      },
     });
   } catch (error) {
     console.error("Error getting expenses:", error);
@@ -145,13 +160,28 @@ const createExpense = async (req, res) => {
 
 const getPayroll = async (req, res) => {
   try {
-    const payroll = await Payroll.find().sort({ createdAt: -1 });
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 10);
+    const skip = (page - 1) * limit;
+
+    const total = await Payroll.countDocuments();
+
+    const payroll = await Payroll.find()
+      .sort({ createdAt: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit);
 
     res.json({
       success: true,
       message: "Payroll records retrieved successfully",
-      totalPayroll: payroll.length,
+      totalPayroll: total,
       data: payroll,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit,
+      },
     });
   } catch (error) {
     console.error("Error getting payroll:", error);
