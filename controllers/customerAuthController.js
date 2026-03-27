@@ -304,9 +304,68 @@ const acceptPolicies = async (req, res) => {
   }
 };
 
+const setupCustomerPassword = async (req, res) => {
+  try {
+    const { ekonId, email, phone, password } = req.body;
+
+    if (!ekonId || !password || (!email && !phone)) {
+      return res.status(400).json({
+        success: false,
+        message: "EKON ID, password, and email or phone are required",
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+    }
+
+    const customer = await Customer.findOne({
+      ekonId,
+      $or: [{ email }, { phone }],
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found. Please check your details.",
+      });
+    }
+
+    if (customer.passwordHash) {
+      return res.status(400).json({
+        success: false,
+        message: "Password already set. Please log in.",
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    customer.passwordHash = passwordHash;
+    customer.lastActivityDate = new Date().toISOString().split("T")[0];
+
+    await customer.save();
+
+    return res.json({
+      success: true,
+      message: "Password set successfully. You can now log in.",
+    });
+  } catch (error) {
+    console.error("Setup password error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not set password",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   signupCustomer,
   loginCustomer,
   getCustomerMe,
   acceptPolicies,
+  setupCustomerPassword, // ADD THIS
 };

@@ -14,7 +14,7 @@ router.get("/", getCustomers);
 router.post("/", createCustomer);
 router.put("/:ekonId", updateCustomer);
 router.put("/:ekonId/reset-password", resetCustomerPassword);
-
+router.post("/setup-password", setupCustomerPassword);
 router.get("/points-history", getPointsHistory);
 router.post("/expire-inactive-points", expireInactivePoints);
 
