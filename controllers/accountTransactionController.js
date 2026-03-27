@@ -3,19 +3,35 @@ const AccountTransaction = require("../models/AccountTransaction");
 
 const getTransactions = async (req, res) => {
   try {
-    const transactions = await AccountTransaction.find().sort({ transactionDate: -1 });
+    const page = Number(req.query.page || 1);
+    const limit = Number(req.query.limit || 10);
+    const skip = (page - 1) * limit;
+
+    const total = await AccountTransaction.countDocuments();
+
+    const transactions = await AccountTransaction.find()
+      .sort({ transactionDate: -1, _id: -1 })
+      .skip(skip)
+      .limit(limit);
 
     res.json({
       success: true,
       message: "Account transactions retrieved successfully",
-      totalTransactions: transactions.length,
+      totalTransactions: total,
       data: transactions,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+        limit,
+      },
     });
   } catch (error) {
     console.error("Error getting account transactions:", error);
     res.status(500).json({
       success: false,
       message: "Failed to retrieve account transactions",
+      error: error.message,
     });
   }
 };
@@ -67,7 +83,6 @@ const createTransaction = async (req, res) => {
           message: "Insufficient balance in selected account",
         });
       }
-
       account.currentBalance -= numericAmount;
     }
 
@@ -141,38 +156,27 @@ const createTransfer = async (req, res) => {
       accountNumber: toAccountNumber,
     });
 
-    if (!fromAccount) {
+    if (!fromAccount || !toAccount) {
       return res.status(404).json({
         success: false,
-        message: "Source account not found",
+        message: "Account not found",
       });
     }
 
-    if (!toAccount) {
-      return res.status(404).json({
-        success: false,
-        message: "Destination account not found",
-      });
-    }
-
-    if (Number(fromAccount.currentBalance || 0) < numericAmount) {
+    if (fromAccount.currentBalance < numericAmount) {
       return res.status(400).json({
         success: false,
         message: "Insufficient balance in source account",
       });
     }
 
-    fromAccount.currentBalance =
-      Number(fromAccount.currentBalance || 0) - numericAmount;
-
-    toAccount.currentBalance =
-      Number(toAccount.currentBalance || 0) + numericAmount;
+    fromAccount.currentBalance -= numericAmount;
+    toAccount.currentBalance += numericAmount;
 
     await fromAccount.save();
     await toAccount.save();
 
-    const transferReference =
-      reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
+    const transferRef = reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
 
     const transferOut = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}-OUT`,
@@ -180,8 +184,8 @@ const createTransfer = async (req, res) => {
       accountName: fromAccount.accountName,
       transactionType: "Transfer Out",
       amount: numericAmount,
-      reference: transferReference,
-      notes: notes || `Transfer to ${toAccount.accountName}`,
+      reference: transferRef,
+      notes: notes || "",
       transactionDate: new Date(),
     });
 
@@ -191,20 +195,15 @@ const createTransfer = async (req, res) => {
       accountName: toAccount.accountName,
       transactionType: "Transfer In",
       amount: numericAmount,
-      reference: transferReference,
-      notes: notes || `Transfer from ${fromAccount.accountName}`,
+      reference: transferRef,
+      notes: notes || "",
       transactionDate: new Date(),
     });
 
     res.status(201).json({
       success: true,
       message: "Transfer completed successfully",
-      data: {
-        fromAccount,
-        toAccount,
-        transferOut,
-        transferIn,
-      },
+      data: { transferOut, transferIn },
     });
   } catch (error) {
     console.error("Error creating transfer:", error);
