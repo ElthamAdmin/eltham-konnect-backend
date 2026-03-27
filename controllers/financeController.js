@@ -5,7 +5,61 @@ const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
 
-const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+// Jamaica payroll constants
+const JAMAICA_NIS_EMPLOYEE_RATE = 0.025;
+const JAMAICA_NHT_EMPLOYEE_RATE = 0.02;
+const JAMAICA_EDUCATION_TAX_RATE = 0.0225;
+const JAMAICA_INCOME_TAX_RATE = 0.25;
+
+// Based on the currently phased annual PIT threshold referenced in MoFPS FY 2025/26 interim report.
+const JAMAICA_ANNUAL_PIT_THRESHOLD = 2003496;
+const JAMAICA_MONTHLY_PIT_THRESHOLD = JAMAICA_ANNUAL_PIT_THRESHOLD / 12;
+
+// NIS wage ceiling has historically been capped; keeping this as a conservative business rule.
+// If you want this made editable in settings later, we can do that safely.
+const JAMAICA_NIS_ANNUAL_WAGE_CEILING = 5000000;
+const JAMAICA_NIS_MONTHLY_WAGE_CEILING = JAMAICA_NIS_ANNUAL_WAGE_CEILING / 12;
+
+const calculateJamaicanPayrollDeductions = ({
+  grossPay,
+  pensionEmployee = 0,
+}) => {
+  const gross = roundMoney(grossPay);
+  const pension = roundMoney(pensionEmployee);
+
+  const nisBase = Math.min(gross, JAMAICA_NIS_MONTHLY_WAGE_CEILING);
+  const nisEmployee = roundMoney(nisBase * JAMAICA_NIS_EMPLOYEE_RATE);
+  const nhtEmployee = roundMoney(gross * JAMAICA_NHT_EMPLOYEE_RATE);
+  const educationTax = roundMoney(gross * JAMAICA_EDUCATION_TAX_RATE);
+
+  // Taxable income is gross less approved employee pension deduction, if any.
+  const taxableIncome = Math.max(0, roundMoney(gross - pension));
+  const taxableOverThreshold = Math.max(
+    0,
+    roundMoney(taxableIncome - JAMAICA_MONTHLY_PIT_THRESHOLD)
+  );
+  const incomeTax = roundMoney(taxableOverThreshold * JAMAICA_INCOME_TAX_RATE);
+
+  const totalDeductions = roundMoney(
+    nisEmployee + nhtEmployee + educationTax + incomeTax + pension
+  );
+
+  const netPay = roundMoney(gross - totalDeductions);
+
+  return {
+    grossPay: gross,
+    nisEmployee,
+    nhtEmployee,
+    educationTax,
+    incomeTax,
+    pensionEmployee: pension,
+    totalDeductions,
+    netPay,
+  };
+};
 
 const getExpenses = async (req, res) => {
   try {
@@ -209,6 +263,7 @@ const createPayroll = async (req, res) => {
       educationTax,
       incomeTax,
       pensionEmployee,
+      autoCalculateStatutoryDeductions,
     } = req.body;
 
     if (!employeeName || !role || !payPeriod || !grossPay) {
@@ -227,55 +282,79 @@ const createPayroll = async (req, res) => {
       });
     }
 
-    const hasDetailedDeductions =
+    const hasDetailedManualDeductions =
       nisEmployee !== undefined ||
       nhtEmployee !== undefined ||
       educationTax !== undefined ||
       incomeTax !== undefined ||
       pensionEmployee !== undefined;
 
-    let calculatedNisEmployee = 0;
-    let calculatedNhtEmployee = 0;
-    let calculatedEducationTax = 0;
-    let calculatedIncomeTax = 0;
-    let calculatedPensionEmployee = 0;
-    let calculatedTotalDeductions = 0;
+    let payrollBreakdown;
 
-    if (hasDetailedDeductions) {
-      calculatedNisEmployee = roundMoney(nisEmployee);
-      calculatedNhtEmployee = roundMoney(nhtEmployee);
-      calculatedEducationTax = roundMoney(educationTax);
-      calculatedIncomeTax = roundMoney(incomeTax);
-      calculatedPensionEmployee = roundMoney(pensionEmployee);
+    if (
+      autoCalculateStatutoryDeductions === true ||
+      autoCalculateStatutoryDeductions === "true" ||
+      (!hasDetailedManualDeductions && !deductions)
+    ) {
+      payrollBreakdown = calculateJamaicanPayrollDeductions({
+        grossPay: gross,
+        pensionEmployee: Number(pensionEmployee || 0),
+      });
+    } else if (hasDetailedManualDeductions) {
+      const calculatedNisEmployee = roundMoney(nisEmployee);
+      const calculatedNhtEmployee = roundMoney(nhtEmployee);
+      const calculatedEducationTax = roundMoney(educationTax);
+      const calculatedIncomeTax = roundMoney(incomeTax);
+      const calculatedPensionEmployee = roundMoney(pensionEmployee);
 
-      calculatedTotalDeductions = roundMoney(
+      const calculatedTotalDeductions = roundMoney(
         calculatedNisEmployee +
           calculatedNhtEmployee +
           calculatedEducationTax +
           calculatedIncomeTax +
           calculatedPensionEmployee
       );
+
+      payrollBreakdown = {
+        grossPay: gross,
+        nisEmployee: calculatedNisEmployee,
+        nhtEmployee: calculatedNhtEmployee,
+        educationTax: calculatedEducationTax,
+        incomeTax: calculatedIncomeTax,
+        pensionEmployee: calculatedPensionEmployee,
+        totalDeductions: calculatedTotalDeductions,
+        netPay: roundMoney(gross - calculatedTotalDeductions),
+      };
     } else {
       const legacyDeductions = roundMoney(deductions);
-      calculatedTotalDeductions = legacyDeductions > 0 ? legacyDeductions : 0;
-    }
+      const safeLegacyDeductions = legacyDeductions > 0 ? legacyDeductions : 0;
 
-    const net = roundMoney(gross - calculatedTotalDeductions);
+      payrollBreakdown = {
+        grossPay: gross,
+        nisEmployee: 0,
+        nhtEmployee: 0,
+        educationTax: 0,
+        incomeTax: 0,
+        pensionEmployee: 0,
+        totalDeductions: safeLegacyDeductions,
+        netPay: roundMoney(gross - safeLegacyDeductions),
+      };
+    }
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
       employeeName,
       role,
       payPeriod,
-      grossPay: gross,
-      deductions: calculatedTotalDeductions,
-      nisEmployee: calculatedNisEmployee,
-      nhtEmployee: calculatedNhtEmployee,
-      educationTax: calculatedEducationTax,
-      incomeTax: calculatedIncomeTax,
-      pensionEmployee: calculatedPensionEmployee,
-      totalDeductions: calculatedTotalDeductions,
-      netPay: net,
+      grossPay: payrollBreakdown.grossPay,
+      deductions: payrollBreakdown.totalDeductions,
+      nisEmployee: payrollBreakdown.nisEmployee,
+      nhtEmployee: payrollBreakdown.nhtEmployee,
+      educationTax: payrollBreakdown.educationTax,
+      incomeTax: payrollBreakdown.incomeTax,
+      pensionEmployee: payrollBreakdown.pensionEmployee,
+      totalDeductions: payrollBreakdown.totalDeductions,
+      netPay: payrollBreakdown.netPay,
       status: status || "Pending",
     });
 
