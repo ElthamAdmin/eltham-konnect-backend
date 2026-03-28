@@ -59,6 +59,69 @@ const calculateJamaicanPayrollDeductions = ({
   };
 };
 
+const normalizeDateValue = (value) => {
+  if (!value) return null;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed;
+  }
+
+  return null;
+};
+
+const toMonthKey = (value) => {
+  const date = normalizeDateValue(value);
+  if (!date) return "";
+  return date.toISOString().slice(0, 7);
+};
+
+const formatMonthLabel = (monthKey) => {
+  if (!monthKey) return "";
+  const [year, month] = monthKey.split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleString("en-US", {
+    month: "short",
+    year: "numeric",
+  });
+};
+
+const isDateWithinRange = (value, startDate, endDate) => {
+  const date = normalizeDateValue(value);
+  if (!date) return false;
+
+  if (startDate && date < startDate) return false;
+  if (endDate && date > endDate) return false;
+
+  return true;
+};
+
+const buildDateRange = (from, to) => {
+  let startDate = null;
+  let endDate = null;
+
+  if (from) {
+    const parsedFrom = new Date(from);
+    if (!Number.isNaN(parsedFrom.getTime())) {
+      startDate = parsedFrom;
+    }
+  }
+
+  if (to) {
+    const parsedTo = new Date(to);
+    if (!Number.isNaN(parsedTo.getTime())) {
+      parsedTo.setHours(23, 59, 59, 999);
+      endDate = parsedTo;
+    }
+  }
+
+  return { startDate, endDate };
+};
+
 const getExpenses = async (req, res) => {
   try {
     const page = Number(req.query.page || 1);
@@ -504,39 +567,145 @@ const getFinanceSummary = async (req, res) => {
 
 const getFinancialReports = async (req, res) => {
   try {
+    const { from = "", to = "" } = req.query;
+
+    const { startDate, endDate } = buildDateRange(from, to);
+
     const invoices = await Invoice.find();
     const expenses = await Expense.find();
     const payroll = await Payroll.find();
+    const accounts = await FinancialAccount.find();
 
-    const paidInvoices = invoices.filter(
-      (inv) => String(inv.status || "").trim().toLowerCase() === "paid"
-    );
-    const unpaidInvoices = invoices.filter(
-      (inv) => String(inv.status || "").trim().toLowerCase() === "unpaid"
-    );
+    const filteredPaidInvoices = invoices.filter((inv) => {
+      const statusIsPaid = String(inv.status || "").trim().toLowerCase() === "paid";
+      const dateValue = inv.paidAt || inv.paidDate || inv.createdAt;
+      return statusIsPaid && isDateWithinRange(dateValue, startDate, endDate);
+    });
 
-    const revenue = paidInvoices.reduce(
-      (sum, inv) => sum + Number(inv.finalTotal || 0),
-      0
-    );
+    const filteredUnpaidInvoices = invoices.filter((inv) => {
+      const statusIsUnpaid =
+        String(inv.status || "").trim().toLowerCase() === "unpaid";
+      const dateValue = inv.createdAt;
+      return statusIsUnpaid && isDateWithinRange(dateValue, startDate, endDate);
+    });
 
-    const accountsReceivable = unpaidInvoices.reduce(
-      (sum, inv) => sum + Number(inv.finalTotal || 0),
-      0
-    );
-
-    const operatingExpenses = expenses.reduce(
-      (sum, exp) => sum + Number(exp.amount || 0),
-      0
+    const filteredExpenses = expenses.filter((exp) =>
+      isDateWithinRange(exp.date || exp.createdAt, startDate, endDate)
     );
 
-    const payrollExpense = payroll.reduce(
-      (sum, item) => sum + Number(item.netPay || 0),
-      0
+    const filteredPayroll = payroll.filter((item) =>
+      isDateWithinRange(item.payPeriod || item.createdAt, startDate, endDate)
     );
 
-    const totalExpenses = operatingExpenses + payrollExpense;
-    const netProfit = revenue - totalExpenses;
+    const revenue = roundMoney(
+      filteredPaidInvoices.reduce(
+        (sum, inv) => sum + Number(inv.finalTotal || 0),
+        0
+      )
+    );
+
+    const accountsReceivable = roundMoney(
+      filteredUnpaidInvoices.reduce(
+        (sum, inv) => sum + Number(inv.finalTotal || 0),
+        0
+      )
+    );
+
+    const operatingExpenses = roundMoney(
+      filteredExpenses.reduce(
+        (sum, exp) => sum + Number(exp.amount || 0),
+        0
+      )
+    );
+
+    const payrollExpense = roundMoney(
+      filteredPayroll.reduce(
+        (sum, item) => sum + Number(item.netPay || 0),
+        0
+      )
+    );
+
+    const totalExpenses = roundMoney(operatingExpenses + payrollExpense);
+    const netProfit = roundMoney(revenue - totalExpenses);
+
+    const cashOnHand = roundMoney(
+      accounts.reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
+    );
+
+    const invoiceStats = {
+      paidCount: filteredPaidInvoices.length,
+      unpaidCount: filteredUnpaidInvoices.length,
+      totalCount: filteredPaidInvoices.length + filteredUnpaidInvoices.length,
+    };
+
+    const expenseByCategoryMap = {};
+    filteredExpenses.forEach((exp) => {
+      const category = exp.category || "Uncategorized";
+      expenseByCategoryMap[category] =
+        roundMoney(
+          Number(expenseByCategoryMap[category] || 0) + Number(exp.amount || 0)
+        );
+    });
+
+    const expenseByCategory = Object.entries(expenseByCategoryMap)
+      .map(([category, amount]) => ({
+        category,
+        amount: roundMoney(amount),
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const monthMap = {};
+
+    const ensureMonth = (monthKey) => {
+      if (!monthMap[monthKey]) {
+        monthMap[monthKey] = {
+          month: monthKey,
+          label: formatMonthLabel(monthKey),
+          revenue: 0,
+          expenses: 0,
+          payroll: 0,
+          net: 0,
+        };
+      }
+    };
+
+    filteredPaidInvoices.forEach((inv) => {
+      const monthKey = toMonthKey(inv.paidAt || inv.paidDate || inv.createdAt);
+      if (!monthKey) return;
+      ensureMonth(monthKey);
+      monthMap[monthKey].revenue = roundMoney(
+        Number(monthMap[monthKey].revenue || 0) + Number(inv.finalTotal || 0)
+      );
+    });
+
+    filteredExpenses.forEach((exp) => {
+      const monthKey = toMonthKey(exp.date || exp.createdAt);
+      if (!monthKey) return;
+      ensureMonth(monthKey);
+      monthMap[monthKey].expenses = roundMoney(
+        Number(monthMap[monthKey].expenses || 0) + Number(exp.amount || 0)
+      );
+    });
+
+    filteredPayroll.forEach((item) => {
+      const monthKey = toMonthKey(item.payPeriod || item.createdAt);
+      if (!monthKey) return;
+      ensureMonth(monthKey);
+      monthMap[monthKey].payroll = roundMoney(
+        Number(monthMap[monthKey].payroll || 0) + Number(item.netPay || 0)
+      );
+    });
+
+    const monthlyTrend = Object.values(monthMap)
+      .sort((a, b) => a.month.localeCompare(b.month))
+      .map((item) => ({
+        ...item,
+        net: roundMoney(
+          Number(item.revenue || 0) -
+            Number(item.expenses || 0) -
+            Number(item.payroll || 0)
+        ),
+      }));
 
     const profitAndLoss = {
       revenue,
@@ -547,32 +716,44 @@ const getFinancialReports = async (req, res) => {
     };
 
     const cashFlow = {
-      cashInflows: revenue,
-      cashOutflows: totalExpenses,
-      netCashFlow: revenue - totalExpenses,
+      collectedRevenue: revenue,
+      operatingExpensePayments: operatingExpenses,
+      payrollPayments: payrollExpense,
+      totalCashOutflows: totalExpenses,
+      netCashFlow: roundMoney(revenue - totalExpenses),
     };
 
     const balanceSheet = {
       assets: {
-        cash: revenue - totalExpenses,
+        cashOnHand,
         accountsReceivable,
-        totalAssets: revenue - totalExpenses + accountsReceivable,
+        totalAssets: roundMoney(cashOnHand + accountsReceivable),
       },
       liabilities: {
-        outstandingRevenue: accountsReceivable,
-        totalLiabilities: accountsReceivable,
+        totalLiabilities: 0,
       },
       equity: {
-        ownerEquity: netProfit,
+        ownerEquity: roundMoney(cashOnHand + accountsReceivable),
       },
     };
 
     res.json({
       success: true,
       data: {
+        filters: {
+          from,
+          to,
+        },
+        reportMeta: {
+          generatedAt: new Date().toISOString(),
+          reportTitle: "Financial Reports",
+        },
+        invoiceStats,
         profitAndLoss,
         cashFlow,
         balanceSheet,
+        expenseByCategory,
+        monthlyTrend,
       },
     });
   } catch (error) {
