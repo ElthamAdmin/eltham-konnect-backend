@@ -16,6 +16,7 @@ const ALL_MODULE_PERMISSIONS = [
   "settings",
   "warehouse",
   "pointsHistory",
+  "hr",
 ];
 
 const normalizePermissions = (permissions) => {
@@ -55,6 +56,7 @@ const getSystemUsers = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve system users",
+      error: error.message,
     });
   }
 };
@@ -70,6 +72,7 @@ const createSystemUser = async (req, res) => {
       status,
       password,
       permissions,
+      linkedEmployeeId,
     } = req.body;
 
     if (!fullName || !email || !role || !password) {
@@ -79,7 +82,16 @@ const createSystemUser = async (req, res) => {
       });
     }
 
-    const existingUser = await SystemUser.findOne({ email });
+    if (String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
+      });
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    const existingUser = await SystemUser.findOne({ email: normalizedEmail });
 
     if (existingUser) {
       return res.status(400).json({
@@ -92,15 +104,16 @@ const createSystemUser = async (req, res) => {
 
     const user = await SystemUser.create({
       userId: `USR-${Date.now()}`,
-      fullName,
-      email,
-      phone: phone || "",
-      role,
-      branch: branch || "Eltham Park",
+      fullName: String(fullName).trim(),
+      email: normalizedEmail,
+      phone: phone ? String(phone).trim() : "",
+      role: String(role).trim(),
+      branch: branch ? String(branch).trim() : "Eltham Park",
       status: status || "Active",
       permissions: getPermissionsForUser(role, permissions),
       passwordHash,
       dutyStatus: "Off Duty",
+      linkedEmployeeId: linkedEmployeeId ? String(linkedEmployeeId).trim() : "",
     });
 
     const safeUser = await SystemUser.findById(user._id).select("-passwordHash");
@@ -158,6 +171,7 @@ const updateSystemUserStatus = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update system user status",
+      error: error.message,
     });
   }
 };
@@ -183,7 +197,7 @@ const updateSystemUserRole = async (req, res) => {
       });
     }
 
-    user.role = role;
+    user.role = String(role).trim();
     user.permissions = getPermissionsForUser(role, permissions ?? user.permissions);
     await user.save();
 
@@ -199,6 +213,7 @@ const updateSystemUserRole = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update system user role",
+      error: error.message,
     });
   }
 };
@@ -237,6 +252,7 @@ const updateSystemUserPermissions = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update system user permissions",
+      error: error.message,
     });
   }
 };
@@ -250,6 +266,13 @@ const resetSystemUserPassword = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "New password is required",
+      });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters",
       });
     }
 
@@ -274,6 +297,7 @@ const resetSystemUserPassword = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to reset password",
+      error: error.message,
     });
   }
 };

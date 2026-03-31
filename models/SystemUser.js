@@ -17,6 +17,8 @@ const SystemUserSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      lowercase: true,
+      trim: true,
     },
 
     phone: {
@@ -37,6 +39,7 @@ const SystemUserSchema = new mongoose.Schema(
 
     status: {
       type: String,
+      enum: ["Active", "Inactive"],
       default: "Active",
     },
 
@@ -48,7 +51,12 @@ const SystemUserSchema = new mongoose.Schema(
     passwordHash: {
       type: String,
       required: true,
-      default: "ChangeMe123!",
+    },
+
+    // 🔗 LINK TO HR MODULE (VERY IMPORTANT)
+    linkedEmployeeId: {
+      type: String,
+      default: "",
     },
 
     dutyStatus: {
