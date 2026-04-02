@@ -22,6 +22,67 @@ const createNextEmployeeId = async () => {
   return `EMP${String(nextNumber).padStart(5, "0")}`;
 };
 
+const normalizeString = (value) => String(value || "").trim();
+
+const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+
+const toBoolean = (value, defaultValue = true) => {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  return defaultValue;
+};
+
+const syncLinkedSystemUser = async (employee) => {
+  if (!employee.linkedUserId) return;
+
+  await SystemUser.findOneAndUpdate(
+    { userId: employee.linkedUserId },
+    {
+      fullName: employee.fullName,
+      email: employee.email || undefined,
+      phone: employee.phone || undefined,
+      branch: employee.branch,
+      linkedEmployeeId: employee.employeeId,
+    }
+  );
+};
+
+const clearOldLinkedSystemUser = async (linkedUserId, employeeId) => {
+  if (!linkedUserId) return;
+
+  await SystemUser.findOneAndUpdate(
+    {
+      userId: linkedUserId,
+      linkedEmployeeId: employeeId,
+    },
+    {
+      linkedEmployeeId: "",
+    }
+  );
+};
+
+const getLinkedUserDetails = async (linkedUserId) => {
+  if (!linkedUserId) {
+    return {
+      linkedUserId: "",
+      linkedUserName: "",
+      linkedUserRole: "",
+    };
+  }
+
+  const existingUser = await SystemUser.findOne({ userId: linkedUserId });
+
+  if (!existingUser) {
+    return null;
+  }
+
+  return {
+    linkedUserId: existingUser.userId || "",
+    linkedUserName: existingUser.fullName || "",
+    linkedUserRole: existingUser.role || "",
+  };
+};
+
 const getEmployees = async (req, res) => {
   try {
     const employees = await HREmployee.find().sort({ createdAt: -1, _id: -1 });
@@ -112,9 +173,11 @@ const createEmployee = async (req, res) => {
       });
     }
 
-    if (email) {
+    const normalizedEmail = email ? normalizeEmail(email) : "";
+
+    if (normalizedEmail) {
       const existingEmployeeByEmail = await HREmployee.findOne({
-        email: String(email).trim().toLowerCase(),
+        email: normalizedEmail,
       });
 
       if (existingEmployeeByEmail) {
@@ -125,17 +188,25 @@ const createEmployee = async (req, res) => {
       }
     }
 
-    if (linkedUserId) {
-      const existingUser = await SystemUser.findOne({ userId: linkedUserId });
+    let linkedUserDetails = {
+      linkedUserId: "",
+      linkedUserName: "",
+      linkedUserRole: "",
+    };
 
-      if (!existingUser) {
+    if (linkedUserId) {
+      linkedUserDetails = await getLinkedUserDetails(normalizeString(linkedUserId));
+
+      if (!linkedUserDetails) {
         return res.status(404).json({
           success: false,
           message: "Linked system user not found",
         });
       }
 
-      const alreadyLinkedEmployee = await HREmployee.findOne({ linkedUserId });
+      const alreadyLinkedEmployee = await HREmployee.findOne({
+        linkedUserId: linkedUserDetails.linkedUserId,
+      });
 
       if (alreadyLinkedEmployee) {
         return res.status(400).json({
@@ -149,62 +220,43 @@ const createEmployee = async (req, res) => {
 
     const employee = await HREmployee.create({
       employeeId,
-      fullName: String(fullName).trim(),
-      firstName: firstName ? String(firstName).trim() : "",
-      lastName: lastName ? String(lastName).trim() : "",
+      fullName: normalizeString(fullName),
+      firstName: normalizeString(firstName),
+      lastName: normalizeString(lastName),
       gender: gender || "",
       dateOfBirth: dateOfBirth || "",
-      trn: trn ? String(trn).trim() : "",
-      nisNumber: nisNumber ? String(nisNumber).trim() : "",
-      email: email ? String(email).trim().toLowerCase() : "",
-      phone: phone ? String(phone).trim() : "",
-      alternatePhone: alternatePhone ? String(alternatePhone).trim() : "",
-      address: address ? String(address).trim() : "",
-      emergencyContactName: emergencyContactName
-        ? String(emergencyContactName).trim()
-        : "",
-      emergencyContactPhone: emergencyContactPhone
-        ? String(emergencyContactPhone).trim()
-        : "",
-      emergencyContactRelationship: emergencyContactRelationship
-        ? String(emergencyContactRelationship).trim()
-        : "",
-      department: department ? String(department).trim() : "Operations",
-      jobTitle: String(jobTitle).trim(),
-      branch: branch ? String(branch).trim() : "Eltham Park Mainstore",
+      trn: normalizeString(trn),
+      nisNumber: normalizeString(nisNumber),
+      email: normalizedEmail,
+      phone: normalizeString(phone),
+      alternatePhone: normalizeString(alternatePhone),
+      address: normalizeString(address),
+      emergencyContactName: normalizeString(emergencyContactName),
+      emergencyContactPhone: normalizeString(emergencyContactPhone),
+      emergencyContactRelationship: normalizeString(emergencyContactRelationship),
+      department: normalizeString(department) || "Operations",
+      jobTitle: normalizeString(jobTitle),
+      branch: normalizeString(branch) || "Eltham Park Mainstore",
       employmentType: employmentType || "Temporary",
       startDate: startDate || "",
       endDate: endDate || "",
       employmentStatus: employmentStatus || "Active",
       payType: payType || "Monthly Salary",
       payRate: Number(payRate || 0),
-      payrollEnabled:
-        payrollEnabled === false || payrollEnabled === "false" ? false : true,
-      linkedUserId: linkedUserId ? String(linkedUserId).trim() : "",
-      attendanceRequired:
-        attendanceRequired === false || attendanceRequired === "false"
-          ? false
-          : true,
+      payrollEnabled: toBoolean(payrollEnabled, true),
+      linkedUserId: linkedUserDetails.linkedUserId,
+      linkedUserName: linkedUserDetails.linkedUserName,
+      linkedUserRole: linkedUserDetails.linkedUserRole,
+      attendanceRequired: toBoolean(attendanceRequired, true),
       leaveBalanceVacation: Number(leaveBalanceVacation || 0),
       leaveBalanceSick: Number(leaveBalanceSick || 0),
       leaveBalanceUnpaid: Number(leaveBalanceUnpaid || 0),
-      notes: notes ? String(notes).trim() : "",
+      notes: normalizeString(notes),
       createdBy: req.user?.email || req.user?.fullName || "",
       updatedBy: req.user?.email || req.user?.fullName || "",
     });
 
-    if (linkedUserId) {
-      await SystemUser.findOneAndUpdate(
-        { userId: linkedUserId },
-        {
-          fullName: employee.fullName,
-          email: employee.email || undefined,
-          phone: employee.phone || undefined,
-          branch: employee.branch,
-          linkedEmployeeId: employee.employeeId,
-        }
-      );
-    }
+    await syncLinkedSystemUser(employee);
 
     res.status(201).json({
       success: true,
@@ -236,7 +288,7 @@ const updateEmployee = async (req, res) => {
     }
 
     if (updates.email) {
-      const normalizedEmail = String(updates.email).trim().toLowerCase();
+      const normalizedEmail = normalizeEmail(updates.email);
 
       const existingEmployeeByEmail = await HREmployee.findOne({
         email: normalizedEmail,
@@ -253,12 +305,63 @@ const updateEmployee = async (req, res) => {
       updates.email = normalizedEmail;
     }
 
-    if (updates.linkedUserId) {
-      const existingUser = await SystemUser.findOne({
-        userId: updates.linkedUserId,
-      });
+    if (updates.fullName !== undefined) updates.fullName = normalizeString(updates.fullName);
+    if (updates.firstName !== undefined) updates.firstName = normalizeString(updates.firstName);
+    if (updates.lastName !== undefined) updates.lastName = normalizeString(updates.lastName);
+    if (updates.trn !== undefined) updates.trn = normalizeString(updates.trn);
+    if (updates.nisNumber !== undefined) updates.nisNumber = normalizeString(updates.nisNumber);
+    if (updates.phone !== undefined) updates.phone = normalizeString(updates.phone);
+    if (updates.alternatePhone !== undefined)
+      updates.alternatePhone = normalizeString(updates.alternatePhone);
+    if (updates.address !== undefined) updates.address = normalizeString(updates.address);
+    if (updates.emergencyContactName !== undefined)
+      updates.emergencyContactName = normalizeString(updates.emergencyContactName);
+    if (updates.emergencyContactPhone !== undefined)
+      updates.emergencyContactPhone = normalizeString(updates.emergencyContactPhone);
+    if (updates.emergencyContactRelationship !== undefined)
+      updates.emergencyContactRelationship = normalizeString(
+        updates.emergencyContactRelationship
+      );
+    if (updates.department !== undefined)
+      updates.department = normalizeString(updates.department);
+    if (updates.jobTitle !== undefined) updates.jobTitle = normalizeString(updates.jobTitle);
+    if (updates.branch !== undefined) updates.branch = normalizeString(updates.branch);
+    if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
 
-      if (!existingUser) {
+    if (updates.payRate !== undefined) {
+      updates.payRate = Number(updates.payRate || 0);
+    }
+
+    if (updates.leaveBalanceVacation !== undefined) {
+      updates.leaveBalanceVacation = Number(updates.leaveBalanceVacation || 0);
+    }
+
+    if (updates.leaveBalanceSick !== undefined) {
+      updates.leaveBalanceSick = Number(updates.leaveBalanceSick || 0);
+    }
+
+    if (updates.leaveBalanceUnpaid !== undefined) {
+      updates.leaveBalanceUnpaid = Number(updates.leaveBalanceUnpaid || 0);
+    }
+
+    if (updates.payrollEnabled !== undefined) {
+      updates.payrollEnabled = toBoolean(updates.payrollEnabled, true);
+    }
+
+    if (updates.attendanceRequired !== undefined) {
+      updates.attendanceRequired = toBoolean(updates.attendanceRequired, true);
+    }
+
+    const oldLinkedUserId = employee.linkedUserId || "";
+    const nextLinkedUserId =
+      updates.linkedUserId !== undefined
+        ? normalizeString(updates.linkedUserId)
+        : oldLinkedUserId;
+
+    if (nextLinkedUserId) {
+      const linkedUserDetails = await getLinkedUserDetails(nextLinkedUserId);
+
+      if (!linkedUserDetails) {
         return res.status(404).json({
           success: false,
           message: "Linked system user not found",
@@ -266,7 +369,7 @@ const updateEmployee = async (req, res) => {
       }
 
       const alreadyLinkedEmployee = await HREmployee.findOne({
-        linkedUserId: updates.linkedUserId,
+        linkedUserId: linkedUserDetails.linkedUserId,
         employeeId: { $ne: employeeId },
       });
 
@@ -276,6 +379,14 @@ const updateEmployee = async (req, res) => {
           message: "That system user is already linked to another employee",
         });
       }
+
+      updates.linkedUserId = linkedUserDetails.linkedUserId;
+      updates.linkedUserName = linkedUserDetails.linkedUserName;
+      updates.linkedUserRole = linkedUserDetails.linkedUserRole;
+    } else if (updates.linkedUserId !== undefined) {
+      updates.linkedUserId = "";
+      updates.linkedUserName = "";
+      updates.linkedUserRole = "";
     }
 
     updates.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
@@ -286,18 +397,11 @@ const updateEmployee = async (req, res) => {
       { new: true, runValidators: true }
     );
 
-    if (updatedEmployee.linkedUserId) {
-      await SystemUser.findOneAndUpdate(
-        { userId: updatedEmployee.linkedUserId },
-        {
-          fullName: updatedEmployee.fullName,
-          email: updatedEmployee.email || undefined,
-          phone: updatedEmployee.phone || undefined,
-          branch: updatedEmployee.branch,
-          linkedEmployeeId: updatedEmployee.employeeId,
-        }
-      );
+    if (oldLinkedUserId && oldLinkedUserId !== updatedEmployee.linkedUserId) {
+      await clearOldLinkedSystemUser(oldLinkedUserId, employeeId);
     }
+
+    await syncLinkedSystemUser(updatedEmployee);
 
     res.json({
       success: true,
