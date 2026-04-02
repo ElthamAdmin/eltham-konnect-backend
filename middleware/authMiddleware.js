@@ -25,7 +25,7 @@ const protect = (req, res, next) => {
     next();
   } catch (error) {
     console.error("Auth middleware error:", error);
-    res.status(401).json({
+    return res.status(401).json({
       success: false,
       message: "Invalid or expired token",
     });
@@ -48,7 +48,62 @@ const attachUserIfPresent = (req, res, next) => {
   }
 };
 
+const hasPermission = (user, permission) => {
+  if (!user) return false;
+  if (user.role === "Admin") return true;
+
+  const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+  return permissions.includes(permission);
+};
+
+const requirePermission = (permission) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    if (!hasPermission(req.user, permission)) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to access this resource",
+      });
+    }
+
+    next();
+  };
+};
+
+const requireAnyPermission = (permissions = []) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required",
+      });
+    }
+
+    const allowed = permissions.some((permission) =>
+      hasPermission(req.user, permission)
+    );
+
+    if (!allowed) {
+      return res.status(403).json({
+        success: false,
+        message: "You do not have permission to access this resource",
+      });
+    }
+
+    next();
+  };
+};
+
 module.exports = {
   protect,
   attachUserIfPresent,
+  hasPermission,
+  requirePermission,
+  requireAnyPermission,
 };
