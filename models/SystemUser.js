@@ -11,6 +11,7 @@ const SystemUserSchema = new mongoose.Schema(
     fullName: {
       type: String,
       required: true,
+      trim: true,
     },
 
     email: {
@@ -24,17 +25,20 @@ const SystemUserSchema = new mongoose.Schema(
     phone: {
       type: String,
       default: "",
+      trim: true,
     },
 
     role: {
       type: String,
       required: true,
       default: "Support",
+      trim: true,
     },
 
     branch: {
       type: String,
       default: "Eltham Park",
+      trim: true,
     },
 
     status: {
@@ -53,10 +57,17 @@ const SystemUserSchema = new mongoose.Schema(
       required: true,
     },
 
-    // 🔗 LINK TO HR MODULE (VERY IMPORTANT)
+    // 🔗 LINK TO HR EMPLOYEE
     linkedEmployeeId: {
       type: String,
       default: "",
+      trim: true,
+    },
+
+    // 🔒 OPTIONAL: store employee snapshot (for fast access)
+    employeeSnapshot: {
+      jobTitle: { type: String, default: "" },
+      department: { type: String, default: "" },
     },
 
     dutyStatus: {
