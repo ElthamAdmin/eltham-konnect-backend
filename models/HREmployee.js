@@ -1,11 +1,59 @@
 const mongoose = require("mongoose");
 
+const BRANCHES = ["Eltham Park Mainstore", "Brown's Town Square"];
+
+const DEPARTMENTS = [
+  "Operations",
+  "Customer Service",
+  "Accounts",
+  "Marketing",
+  "Warehouse",
+  "Administration",
+];
+
+const EMPLOYMENT_TYPES = [
+  "Permanent",
+  "Temporary",
+  "Part-Time",
+  "Contract",
+  "Probation",
+];
+
+const EMPLOYMENT_STATUSES = ["Active", "Inactive", "On Leave", "Terminated"];
+
+const PAY_TYPES = [
+  "Monthly Salary",
+  "Weekly Wage",
+  "Daily Rate",
+  "Hourly Rate",
+];
+
+const DOCUMENT_TYPES = [
+  "Contract",
+  "Job Letter",
+  "Warning Letter",
+  "ID",
+  "TRN",
+  "NIS",
+  "Payslip",
+  "Policy",
+  "Handbook",
+  "Other",
+];
+
 const HREmployeeSchema = new mongoose.Schema(
   {
     employeeId: {
       type: String,
       required: true,
       unique: true,
+      trim: true,
+    },
+
+    employeeCode: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     fullName: {
@@ -94,6 +142,7 @@ const HREmployeeSchema = new mongoose.Schema(
 
     department: {
       type: String,
+      enum: DEPARTMENTS,
       default: "Operations",
       trim: true,
     },
@@ -106,13 +155,14 @@ const HREmployeeSchema = new mongoose.Schema(
 
     branch: {
       type: String,
+      enum: BRANCHES,
       default: "Eltham Park Mainstore",
       trim: true,
     },
 
     employmentType: {
       type: String,
-      enum: ["Permanent", "Temporary", "Part-Time", "Contract", "Probation"],
+      enum: EMPLOYMENT_TYPES,
       default: "Temporary",
     },
 
@@ -128,19 +178,20 @@ const HREmployeeSchema = new mongoose.Schema(
 
     employmentStatus: {
       type: String,
-      enum: ["Active", "Inactive", "On Leave", "Terminated"],
+      enum: EMPLOYMENT_STATUSES,
       default: "Active",
     },
 
     payType: {
       type: String,
-      enum: ["Monthly Salary", "Weekly Wage", "Daily Rate", "Hourly Rate"],
+      enum: PAY_TYPES,
       default: "Monthly Salary",
     },
 
     payRate: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     payrollEnabled: {
@@ -154,6 +205,18 @@ const HREmployeeSchema = new mongoose.Schema(
       trim: true,
     },
 
+    linkedUserName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    linkedUserRole: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     attendanceRequired: {
       type: Boolean,
       default: true,
@@ -162,16 +225,19 @@ const HREmployeeSchema = new mongoose.Schema(
     leaveBalanceVacation: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     leaveBalanceSick: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     leaveBalanceUnpaid: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
     documents: [
@@ -179,14 +245,17 @@ const HREmployeeSchema = new mongoose.Schema(
         documentName: {
           type: String,
           default: "",
+          trim: true,
         },
         documentType: {
           type: String,
-          default: "",
+          enum: DOCUMENT_TYPES,
+          default: "Other",
         },
         fileUrl: {
           type: String,
           default: "",
+          trim: true,
         },
         uploadedAt: {
           type: Date,
