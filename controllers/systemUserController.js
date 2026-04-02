@@ -17,6 +17,10 @@ const ALL_MODULE_PERMISSIONS = [
   "warehouse",
   "pointsHistory",
   "hr",
+  "hrSelfService",
+  "leaveSelfService",
+  "documentSelfService",
+  "payslipSelfService",
 ];
 
 const normalizePermissions = (permissions) => {
@@ -303,6 +307,7 @@ const resetSystemUserPassword = async (req, res) => {
 };
 
 module.exports = {
+  ALL_MODULE_PERMISSIONS,
   getSystemUsers,
   createSystemUser,
   updateSystemUserStatus,
