@@ -23,7 +23,6 @@ const createNextEmployeeId = async () => {
 };
 
 const normalizeString = (value) => String(value || "").trim();
-
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
 const toBoolean = (value, defaultValue = true) => {
@@ -126,6 +125,43 @@ const getEmployeeByEmployeeId = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to retrieve HR employee",
+      error: error.message,
+    });
+  }
+};
+
+const getMyEmployeeProfile = async (req, res) => {
+  try {
+    const linkedEmployeeId = req.user?.linkedEmployeeId || "";
+    const userId = req.user?.userId || "";
+
+    let employee = null;
+
+    if (linkedEmployeeId) {
+      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
+    }
+
+    if (!employee && userId) {
+      employee = await HREmployee.findOne({ linkedUserId: userId });
+    }
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "No HR employee profile is linked to this user",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "My HR profile retrieved successfully",
+      data: employee,
+    });
+  } catch (error) {
+    console.error("Error getting my HR profile:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve my HR profile",
       error: error.message,
     });
   }
@@ -311,19 +347,22 @@ const updateEmployee = async (req, res) => {
     if (updates.trn !== undefined) updates.trn = normalizeString(updates.trn);
     if (updates.nisNumber !== undefined) updates.nisNumber = normalizeString(updates.nisNumber);
     if (updates.phone !== undefined) updates.phone = normalizeString(updates.phone);
-    if (updates.alternatePhone !== undefined)
+    if (updates.alternatePhone !== undefined) {
       updates.alternatePhone = normalizeString(updates.alternatePhone);
+    }
     if (updates.address !== undefined) updates.address = normalizeString(updates.address);
-    if (updates.emergencyContactName !== undefined)
+    if (updates.emergencyContactName !== undefined) {
       updates.emergencyContactName = normalizeString(updates.emergencyContactName);
-    if (updates.emergencyContactPhone !== undefined)
+    }
+    if (updates.emergencyContactPhone !== undefined) {
       updates.emergencyContactPhone = normalizeString(updates.emergencyContactPhone);
-    if (updates.emergencyContactRelationship !== undefined)
+    }
+    if (updates.emergencyContactRelationship !== undefined) {
       updates.emergencyContactRelationship = normalizeString(
         updates.emergencyContactRelationship
       );
-    if (updates.department !== undefined)
-      updates.department = normalizeString(updates.department);
+    }
+    if (updates.department !== undefined) updates.department = normalizeString(updates.department);
     if (updates.jobTitle !== undefined) updates.jobTitle = normalizeString(updates.jobTitle);
     if (updates.branch !== undefined) updates.branch = normalizeString(updates.branch);
     if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
@@ -519,6 +558,7 @@ const getEmployeeSummary = async (req, res) => {
 module.exports = {
   getEmployees,
   getEmployeeByEmployeeId,
+  getMyEmployeeProfile,
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,

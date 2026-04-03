@@ -15,8 +15,14 @@ const {
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
-// Admin HR can view all leave requests
-router.get("/", protect, requirePermission("hr"), getLeaveRequests);
+// Admin HR or approved self-service users can view leave requests.
+// Controller will securely limit staff to only their own requests.
+router.get(
+  "/",
+  protect,
+  requireAnyPermission(["hr", "leaveSelfService", "hrSelfService"]),
+  getLeaveRequests
+);
 
 // Staff self-service or HR admin can create leave requests
 router.post(
