@@ -115,7 +115,9 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    const user = await SystemUser.findOne({ email });
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+
+    const user = await SystemUser.findOne({ email: normalizedEmail });
 
     if (!user) {
       return res.status(401).json({
@@ -143,13 +145,20 @@ const loginUser = async (req, res) => {
     user.lastLoginAt = new Date();
     await user.save();
 
+    const tokenPayload = {
+      userId: user.userId,
+      email: user.email,
+      role: user.role,
+      fullName: user.fullName,
+      branch: user.branch,
+      status: user.status,
+      dutyStatus: user.dutyStatus,
+      permissions: Array.isArray(user.permissions) ? user.permissions : [],
+      linkedEmployeeId: user.linkedEmployeeId || "",
+    };
+
     const token = jwt.sign(
-      {
-        userId: user.userId,
-        email: user.email,
-        role: user.role,
-        fullName: user.fullName,
-      },
+      tokenPayload,
       process.env.JWT_SECRET || "eltham-konnect-secret",
       { expiresIn: "12h" }
     );
@@ -158,16 +167,7 @@ const loginUser = async (req, res) => {
       success: true,
       message: "Login successful",
       token,
-      data: {
-        userId: user.userId,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        branch: user.branch,
-        status: user.status,
-        dutyStatus: user.dutyStatus,
-        permissions: user.permissions,
-      },
+      data: tokenPayload,
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -178,7 +178,6 @@ const loginUser = async (req, res) => {
     });
   }
 };
-
 const clockIn = async (req, res) => {
   try {
     const { userId } = req.user;
