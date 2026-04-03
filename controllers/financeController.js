@@ -1,6 +1,7 @@
 const Invoice = require("../models/Invoice");
 const Expense = require("../models/Expense");
 const Payroll = require("../models/Payroll");
+const HREmployee = require("../models/HREmployee");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
@@ -309,7 +310,44 @@ const getPayroll = async (req, res) => {
     });
   }
 };
+const getMyPayroll = async (req, res) => {
+  try {
+    const linkedEmployeeId = req.user?.linkedEmployeeId || "";
+    const userId = req.user?.userId || "";
 
+    let employeeIdToUse = linkedEmployeeId;
+
+    if (!employeeIdToUse && userId) {
+      const employee = await HREmployee.findOne({ linkedUserId: userId }).select("employeeId");
+      employeeIdToUse = employee?.employeeId || "";
+    }
+
+    if (!employeeIdToUse) {
+      return res.status(404).json({
+        success: false,
+        message: "No HR employee profile is linked to this user",
+      });
+    }
+
+    const payroll = await Payroll.find({ employeeId: employeeIdToUse }).sort({
+      createdAt: -1,
+      _id: -1,
+    });
+
+    res.json({
+      success: true,
+      message: "My payroll records retrieved successfully",
+      data: payroll,
+    });
+  } catch (error) {
+    console.error("Error getting my payroll:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve my payroll records",
+      error: error.message,
+    });
+  }
+};
 const createPayroll = async (req, res) => {
   try {
     const {
@@ -856,6 +894,7 @@ module.exports = {
   getExpenses,
   createExpense,
   getPayroll,
+  getMyPayroll,
   createPayroll,
   getFinanceSummary,
   getFinancialReports,

@@ -9,6 +9,7 @@ const {
   getExpenses,
   createExpense,
   getPayroll,
+  getMyPayroll,
   createPayroll,
   getFinanceSummary,
   getFinancialReports,
@@ -60,6 +61,7 @@ router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);
 
 router.get("/payroll", protect, getPayroll);
+router.get("/payroll/my-records", protect, getMyPayroll);
 router.post("/payroll", protect, createPayroll);
 
 module.exports = router;
