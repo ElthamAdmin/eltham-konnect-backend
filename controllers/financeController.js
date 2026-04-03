@@ -313,6 +313,7 @@ const getPayroll = async (req, res) => {
 const createPayroll = async (req, res) => {
   try {
     const {
+      employeeId,
       employeeName,
       role,
       payPeriod,
@@ -328,16 +329,42 @@ const createPayroll = async (req, res) => {
       paidFromAccountNumber,
     } = req.body;
 
-    if (!employeeName || !role || !payPeriod || !grossPay) {
+    if (!payPeriod || !grossPay) {
       return res.status(400).json({
         success: false,
-        message: "All payroll fields are required",
+        message: "Pay period and gross pay are required",
       });
     }
 
-    const gross = roundMoney(grossPay);
+    let finalEmployeeId = "";
+    let finalEmployeeName = employeeName || "";
+    let finalRole = role || "";
+    let finalGrossPay = roundMoney(grossPay);
 
-    if (gross <= 0) {
+    if (employeeId) {
+      const employee = await HREmployee.findOne({ employeeId });
+
+      if (!employee) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected employee not found",
+        });
+      }
+
+      finalEmployeeId = employee.employeeId;
+      finalEmployeeName = employee.fullName;
+      finalRole = employee.jobTitle;
+      finalGrossPay = roundMoney(grossPay || employee.payRate || 0);
+    }
+
+    if (!finalEmployeeName || !finalRole || !payPeriod || !finalGrossPay) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee name, role, pay period, and gross pay are required",
+      });
+    }
+
+    if (finalGrossPay <= 0) {
       return res.status(400).json({
         success: false,
         message: "Gross pay must be greater than zero",
@@ -359,7 +386,7 @@ const createPayroll = async (req, res) => {
       (!hasDetailedManualDeductions && !deductions)
     ) {
       payrollBreakdown = calculateJamaicanPayrollDeductions({
-        grossPay: gross,
+        grossPay: finalGrossPay,
         pensionEmployee: Number(pensionEmployee || 0),
       });
     } else if (hasDetailedManualDeductions) {
@@ -378,28 +405,28 @@ const createPayroll = async (req, res) => {
       );
 
       payrollBreakdown = {
-        grossPay: gross,
+        grossPay: finalGrossPay,
         nisEmployee: calculatedNisEmployee,
         nhtEmployee: calculatedNhtEmployee,
         educationTax: calculatedEducationTax,
         incomeTax: calculatedIncomeTax,
         pensionEmployee: calculatedPensionEmployee,
         totalDeductions: calculatedTotalDeductions,
-        netPay: roundMoney(gross - calculatedTotalDeductions),
+        netPay: roundMoney(finalGrossPay - calculatedTotalDeductions),
       };
     } else {
       const legacyDeductions = roundMoney(deductions);
       const safeLegacyDeductions = legacyDeductions > 0 ? legacyDeductions : 0;
 
       payrollBreakdown = {
-        grossPay: gross,
+        grossPay: finalGrossPay,
         nisEmployee: 0,
         nhtEmployee: 0,
         educationTax: 0,
         incomeTax: 0,
         pensionEmployee: 0,
         totalDeductions: safeLegacyDeductions,
-        netPay: roundMoney(gross - safeLegacyDeductions),
+        netPay: roundMoney(finalGrossPay - safeLegacyDeductions),
       };
     }
 
@@ -437,15 +464,16 @@ const createPayroll = async (req, res) => {
         transactionType: "Withdrawal",
         amount: Number(payrollBreakdown.netPay || 0),
         reference: `Payroll ${payPeriod}`,
-        notes: `Payroll payment for ${employeeName}`,
+        notes: `Payroll payment for ${finalEmployeeName}`,
         transactionDate: new Date(),
       });
     }
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
-      employeeName,
-      role,
+      employeeId: finalEmployeeId,
+      employeeName: finalEmployeeName,
+      role: finalRole,
       payPeriod,
       grossPay: payrollBreakdown.grossPay,
       deductions: payrollBreakdown.totalDeductions,
@@ -471,6 +499,7 @@ const createPayroll = async (req, res) => {
           targetType: "Payroll",
           targetId: newPayroll.payrollNumber,
           metadata: {
+            employeeId: newPayroll.employeeId,
             employeeName: newPayroll.employeeName,
             role: newPayroll.role,
             payPeriod: newPayroll.payPeriod,

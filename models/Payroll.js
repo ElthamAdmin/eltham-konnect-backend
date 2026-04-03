@@ -7,6 +7,11 @@ const PayrollSchema = new mongoose.Schema({
     unique: true,
   },
 
+  employeeId: {
+  type: String,
+  default: "",
+},
+
   employeeName: {
     type: String,
     required: true,
