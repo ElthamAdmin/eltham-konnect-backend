@@ -40,18 +40,30 @@ const calculateTotalDays = (startDate, endDate) => {
   return Math.floor((end - start) / millisecondsPerDay) + 1;
 };
 
+const isAdmin = (req) =>
+  req.user?.role === "Admin" ||
+  (req.user?.permissions || []).includes("hr");
+
+/**
+ * 🔒 SECURE: GET LEAVE REQUESTS
+ * - Admin → sees all
+ * - Staff → sees ONLY their own
+ */
 const getLeaveRequests = async (req, res) => {
   try {
-    const { employeeId, status } = req.query;
+    let filter = {};
 
-    const filter = {};
+    if (!isAdmin(req)) {
+      // STAFF → only their own leave requests
+      filter.linkedUserId = req.user?.userId;
+    } else {
+      // ADMIN → optional filters
+      const { employeeId, status } = req.query;
 
-    if (employeeId) {
-      filter.employeeId = employeeId;
-    }
-
-    if (status && LEAVE_STATUSES.includes(status)) {
-      filter.status = status;
+      if (employeeId) filter.employeeId = employeeId;
+      if (status && LEAVE_STATUSES.includes(status)) {
+        filter.status = status;
+      }
     }
 
     const leaveRequests = await LeaveRequest.find(filter).sort({
@@ -75,6 +87,9 @@ const getLeaveRequests = async (req, res) => {
   }
 };
 
+/**
+ * 🔒 SECURE: GET SINGLE REQUEST
+ */
 const getLeaveRequestById = async (req, res) => {
   try {
     const { leaveRequestId } = req.params;
@@ -86,6 +101,16 @@ const getLeaveRequestById = async (req, res) => {
         success: false,
         message: "Leave request not found",
       });
+    }
+
+    // STAFF cannot access other people's requests
+    if (!isAdmin(req)) {
+      if (leaveRequest.linkedUserId !== req.user?.userId) {
+        return res.status(403).json({
+          success: false,
+          message: "Access denied",
+        });
+      }
     }
 
     res.json({
@@ -103,9 +128,13 @@ const getLeaveRequestById = async (req, res) => {
   }
 };
 
+/**
+ * 🔒 SECURE: CREATE LEAVE REQUEST
+ * Staff cannot submit for other employees
+ */
 const createLeaveRequest = async (req, res) => {
   try {
-    const {
+    let {
       employeeId,
       leaveType,
       startDate,
@@ -113,10 +142,10 @@ const createLeaveRequest = async (req, res) => {
       reason,
     } = req.body;
 
-    if (!employeeId || !leaveType || !startDate || !endDate) {
+    if (!leaveType || !startDate || !endDate) {
       return res.status(400).json({
         success: false,
-        message: "Employee, leave type, start date, and end date are required",
+        message: "Leave type, start date, and end date are required",
       });
     }
 
@@ -127,12 +156,29 @@ const createLeaveRequest = async (req, res) => {
       });
     }
 
-    const employee = await HREmployee.findOne({ employeeId });
+    let employee;
+
+    if (isAdmin(req)) {
+      // Admin can submit for anyone
+      if (!employeeId) {
+        return res.status(400).json({
+          success: false,
+          message: "Employee is required",
+        });
+      }
+
+      employee = await HREmployee.findOne({ employeeId });
+    } else {
+      // STAFF → auto attach their employee
+      employee = await HREmployee.findOne({
+        linkedUserId: req.user?.userId,
+      });
+    }
 
     if (!employee) {
       return res.status(404).json({
         success: false,
-        message: "Employee not found",
+        message: "Employee not found or not linked",
       });
     }
 
@@ -141,7 +187,7 @@ const createLeaveRequest = async (req, res) => {
     if (totalDays <= 0) {
       return res.status(400).json({
         success: false,
-        message: "End date must be on or after start date",
+        message: "Invalid date range",
       });
     }
 
@@ -161,7 +207,7 @@ const createLeaveRequest = async (req, res) => {
       reason: normalizeString(reason),
       status: "Pending",
       adminComment: "",
-      submittedBy: req.user?.email || req.user?.fullName || employee.fullName,
+      submittedBy: req.user?.email || req.user?.fullName || "",
     });
 
     res.status(201).json({
@@ -179,6 +225,9 @@ const createLeaveRequest = async (req, res) => {
   }
 };
 
+/**
+ * ADMIN ONLY
+ */
 const approveLeaveRequest = async (req, res) => {
   try {
     const { leaveRequestId } = req.params;
@@ -200,37 +249,37 @@ const approveLeaveRequest = async (req, res) => {
       });
     }
 
-    const employee = await HREmployee.findOne({ employeeId: leaveRequest.employeeId });
+    const employee = await HREmployee.findOne({
+      employeeId: leaveRequest.employeeId,
+    });
 
     if (!employee) {
       return res.status(404).json({
         success: false,
-        message: "Employee linked to this leave request was not found",
+        message: "Employee not found",
       });
     }
 
     if (leaveRequest.leaveType === "Vacation") {
-      if (Number(employee.leaveBalanceVacation || 0) < leaveRequest.totalDays) {
+      if (employee.leaveBalanceVacation < leaveRequest.totalDays) {
         return res.status(400).json({
           success: false,
-          message: "Employee does not have enough vacation leave balance",
+          message: "Not enough vacation leave balance",
         });
       }
 
-      employee.leaveBalanceVacation =
-        Number(employee.leaveBalanceVacation || 0) - leaveRequest.totalDays;
+      employee.leaveBalanceVacation -= leaveRequest.totalDays;
     }
 
     if (leaveRequest.leaveType === "Sick") {
-      if (Number(employee.leaveBalanceSick || 0) < leaveRequest.totalDays) {
+      if (employee.leaveBalanceSick < leaveRequest.totalDays) {
         return res.status(400).json({
           success: false,
-          message: "Employee does not have enough sick leave balance",
+          message: "Not enough sick leave balance",
         });
       }
 
-      employee.leaveBalanceSick =
-        Number(employee.leaveBalanceSick || 0) - leaveRequest.totalDays;
+      employee.leaveBalanceSick -= leaveRequest.totalDays;
     }
 
     await employee.save();
@@ -238,7 +287,7 @@ const approveLeaveRequest = async (req, res) => {
     leaveRequest.status = "Approved";
     leaveRequest.adminComment = normalizeString(adminComment);
     leaveRequest.reviewedAt = new Date();
-    leaveRequest.reviewedBy = req.user?.email || req.user?.fullName || "";
+    leaveRequest.reviewedBy = req.user?.email || "";
 
     await leaveRequest.save();
 
@@ -248,10 +297,10 @@ const approveLeaveRequest = async (req, res) => {
       data: leaveRequest,
     });
   } catch (error) {
-    console.error("Error approving leave request:", error);
+    console.error(error);
     res.status(500).json({
       success: false,
-      message: "Failed to approve leave request",
+      message: "Approval failed",
       error: error.message,
     });
   }
@@ -274,14 +323,14 @@ const rejectLeaveRequest = async (req, res) => {
     if (leaveRequest.status !== "Pending") {
       return res.status(400).json({
         success: false,
-        message: "Only pending leave requests can be rejected",
+        message: "Only pending requests can be rejected",
       });
     }
 
     leaveRequest.status = "Rejected";
     leaveRequest.adminComment = normalizeString(adminComment);
     leaveRequest.reviewedAt = new Date();
-    leaveRequest.reviewedBy = req.user?.email || req.user?.fullName || "";
+    leaveRequest.reviewedBy = req.user?.email || "";
 
     await leaveRequest.save();
 
@@ -291,10 +340,10 @@ const rejectLeaveRequest = async (req, res) => {
       data: leaveRequest,
     });
   } catch (error) {
-    console.error("Error rejecting leave request:", error);
+    console.error(error);
     res.status(500).json({
       success: false,
-      message: "Failed to reject leave request",
+      message: "Rejection failed",
       error: error.message,
     });
   }
