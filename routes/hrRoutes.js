@@ -4,7 +4,6 @@ const router = express.Router();
 const {
   getEmployees,
   getEmployeeByEmployeeId,
-  getMyEmployeeProfile,
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
@@ -17,21 +16,25 @@ const {
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
-// Full HR admin access
+// 🔹 ADMIN ONLY
 router.get("/summary", protect, requirePermission("hr"), getEmployeeSummary);
-router.get("/", protect, requirePermission("hr"), getEmployees);
-
-// Self-service profile endpoint
-router.get(
-  "/me",
-  protect,
-  requireAnyPermission(["hr", "hrSelfService", "leaveSelfService", "documentSelfService", "payslipSelfService"]),
-  getMyEmployeeProfile
-);
-
-router.get("/:employeeId", protect, requirePermission("hr"), getEmployeeByEmployeeId);
 router.post("/", protect, requirePermission("hr"), createEmployee);
 router.put("/:employeeId", protect, requirePermission("hr"), updateEmployee);
 router.put("/:employeeId/status", protect, requirePermission("hr"), updateEmployeeStatus);
+
+// 🔹 ADMIN + SELF SERVICE ACCESS
+router.get(
+  "/",
+  protect,
+  requireAnyPermission(["hr", "hrSelfService"]),
+  getEmployees
+);
+
+router.get(
+  "/:employeeId",
+  protect,
+  requireAnyPermission(["hr", "hrSelfService"]),
+  getEmployeeByEmployeeId
+);
 
 module.exports = router;

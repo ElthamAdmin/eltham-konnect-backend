@@ -84,7 +84,21 @@ const getLinkedUserDetails = async (linkedUserId) => {
 
 const getEmployees = async (req, res) => {
   try {
-    const employees = await HREmployee.find().sort({ createdAt: -1, _id: -1 });
+    let employees;
+
+    const isAdmin =
+      req.user?.role === "Admin" ||
+      (req.user?.permissions || []).includes("hr");
+
+    if (isAdmin) {
+      // Admin → see all employees
+      employees = await HREmployee.find().sort({ createdAt: -1, _id: -1 });
+    } else {
+      // Staff → ONLY their own record
+      employees = await HREmployee.find({
+        linkedUserId: req.user?.userId,
+      });
+    }
 
     res.json({
       success: true,
