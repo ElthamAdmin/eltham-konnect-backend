@@ -471,7 +471,7 @@ const createPayroll = async (req, res) => {
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
-      employeeId: finalEmployeeId,
+      employeeId: employeeId || "",
       employeeName: finalEmployeeName,
       role: finalRole,
       payPeriod,
