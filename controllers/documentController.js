@@ -5,6 +5,7 @@ const fs = require("fs");
 const uploadDocument = async (req, res) => {
   try {
     const { employeeId } = req.params;
+    const { documentType, documentName } = req.body;
 
     const employee = await HREmployee.findOne({ employeeId });
 
@@ -22,26 +23,24 @@ const uploadDocument = async (req, res) => {
       });
     }
 
-    const newDoc = {
-      docId: `DOC-${Date.now()}`,
-      fileName: req.file.originalname,
-      filePath: req.file.filename,
+    const newDocument = {
+      documentName: documentName || req.file.originalname,
+      documentType: documentType || "Other",
+      fileUrl: `/uploads/hr-documents/${req.file.filename}`,
       uploadedAt: new Date(),
-      uploadedBy: req.user?.fullName || req.user?.email,
     };
 
     employee.documents = employee.documents || [];
-    employee.documents.push(newDoc);
-
+    employee.documents.push(newDocument);
     await employee.save();
 
     res.json({
       success: true,
       message: "Document uploaded successfully",
-      data: newDoc,
+      data: newDocument,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Upload document error:", error);
     res.status(500).json({
       success: false,
       message: "Upload failed",
@@ -65,9 +64,11 @@ const getEmployeeDocuments = async (req, res) => {
 
     res.json({
       success: true,
+      message: "Documents retrieved successfully",
       data: employee.documents || [],
     });
   } catch (error) {
+    console.error("Get employee documents error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to fetch documents",
@@ -78,7 +79,7 @@ const getEmployeeDocuments = async (req, res) => {
 
 const deleteDocument = async (req, res) => {
   try {
-    const { employeeId, docId } = req.params;
+    const { employeeId, index } = req.params;
 
     const employee = await HREmployee.findOne({ employeeId });
 
@@ -89,24 +90,31 @@ const deleteDocument = async (req, res) => {
       });
     }
 
-    const doc = employee.documents.find((d) => d.docId === docId);
+    const docIndex = Number(index);
 
-    if (!doc) {
+    if (
+      Number.isNaN(docIndex) ||
+      docIndex < 0 ||
+      docIndex >= (employee.documents || []).length
+    ) {
       return res.status(404).json({
         success: false,
         message: "Document not found",
       });
     }
 
-    // delete file from disk
-    const filePath = path.join(__dirname, "../uploads/hr-documents", doc.filePath);
+    const doc = employee.documents[docIndex];
 
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    if (doc?.fileUrl) {
+      const filename = doc.fileUrl.split("/").pop();
+      const filePath = path.join(__dirname, "../uploads/hr-documents", filename);
+
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
     }
 
-    employee.documents = employee.documents.filter((d) => d.docId !== docId);
-
+    employee.documents.splice(docIndex, 1);
     await employee.save();
 
     res.json({
@@ -114,6 +122,7 @@ const deleteDocument = async (req, res) => {
       message: "Document deleted successfully",
     });
   } catch (error) {
+    console.error("Delete document error:", error);
     res.status(500).json({
       success: false,
       message: "Delete failed",

@@ -10,16 +10,14 @@ const {
   deleteDocument,
 } = require("../controllers/documentController");
 
-const { protect, requireAnyPermission } = require("../middleware/authMiddleware");
+const { protect, requireAnyPermission, requirePermission } = require("../middleware/authMiddleware");
 
-// 📁 Storage folder
 const uploadDir = path.join(__dirname, "../uploads/hr-documents");
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// 📦 Multer setup
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, uploadDir);
@@ -30,27 +28,25 @@ const storage = multer.diskStorage({
   },
 });
 
-// ✅ Allowed file types
 const allowedTypes = [
   "application/pdf",
   "image/jpeg",
   "image/jpg",
   "image/png",
+  "image/webp",
 ];
 
-// 📦 Upload config
 const upload = multer({
   storage,
   fileFilter: function (req, file, cb) {
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Only PDF, JPG, JPEG, PNG allowed"));
+      cb(new Error("Only PDF, JPG, JPEG, PNG, and WEBP files are allowed"));
     }
   },
 });
 
-// 🔐 Routes
 router.post(
   "/upload/:employeeId",
   protect,
@@ -67,9 +63,9 @@ router.get(
 );
 
 router.delete(
-  "/:employeeId/:docId",
+  "/:employeeId/:index",
   protect,
-  requireAnyPermission(["hr"]),
+  requirePermission("hr"),
   deleteDocument
 );
 
