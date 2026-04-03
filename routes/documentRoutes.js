@@ -34,6 +34,8 @@ const allowedTypes = [
   "image/jpg",
   "image/png",
   "image/webp",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // DOCX
+  "application/msword", // DOC
 ];
 
 const upload = multer({
