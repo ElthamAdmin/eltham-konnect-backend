@@ -101,7 +101,7 @@ app.use("/api/financial-accounts", financialAccountRoutes);
 app.use("/api/account-transactions", accountTransactionRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/audit-logs", auditLogRoutes);
-
+app.use("/api/documents", require("./routes/documentRoutes"));
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
