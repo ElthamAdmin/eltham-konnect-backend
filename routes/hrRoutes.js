@@ -4,6 +4,7 @@ const router = express.Router();
 const {
   getEmployees,
   getEmployeeByEmployeeId,
+  getMyEmployeeProfile,
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
@@ -16,13 +17,27 @@ const {
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
-// 🔹 ADMIN ONLY
+// Admin only
 router.get("/summary", protect, requirePermission("hr"), getEmployeeSummary);
 router.post("/", protect, requirePermission("hr"), createEmployee);
 router.put("/:employeeId", protect, requirePermission("hr"), updateEmployee);
 router.put("/:employeeId/status", protect, requirePermission("hr"), updateEmployeeStatus);
 
-// 🔹 ADMIN + SELF SERVICE ACCESS
+// Self-service profile route
+router.get(
+  "/me",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+    "leaveSelfService",
+    "documentSelfService",
+    "payslipSelfService",
+  ]),
+  getMyEmployeeProfile
+);
+
+// Admin + self-service access
 router.get(
   "/",
   protect,

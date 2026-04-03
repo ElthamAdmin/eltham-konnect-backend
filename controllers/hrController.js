@@ -180,7 +180,6 @@ const getMyEmployeeProfile = async (req, res) => {
     });
   }
 };
-
 const createEmployee = async (req, res) => {
   try {
     const {
