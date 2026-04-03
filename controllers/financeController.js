@@ -315,21 +315,24 @@ const getMyPayroll = async (req, res) => {
     const linkedEmployeeId = req.user?.linkedEmployeeId || "";
     const userId = req.user?.userId || "";
 
-    let employeeIdToUse = linkedEmployeeId;
+    let employee = null;
 
-    if (!employeeIdToUse && userId) {
-      const employee = await HREmployee.findOne({ linkedUserId: userId }).select("employeeId");
-      employeeIdToUse = employee?.employeeId || "";
+    if (linkedEmployeeId) {
+      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
     }
 
-    if (!employeeIdToUse) {
+    if (!employee && userId) {
+      employee = await HREmployee.findOne({ linkedUserId: userId });
+    }
+
+    if (!employee) {
       return res.status(404).json({
         success: false,
         message: "No HR employee profile is linked to this user",
       });
     }
 
-    const payroll = await Payroll.find({ employeeId: employeeIdToUse }).sort({
+    const payroll = await Payroll.find({ employeeId: employee.employeeId }).sort({
       createdAt: -1,
       _id: -1,
     });
