@@ -51,6 +51,14 @@ const DISCIPLINE_TYPES = [
   "Other",
 ];
 
+const PERFORMANCE_RATINGS = [
+  "Excellent",
+  "Very Good",
+  "Good",
+  "Needs Improvement",
+  "Unsatisfactory",
+];
+
 const HREmployeeSchema = new mongoose.Schema(
   {
     employeeId: {
@@ -312,6 +320,69 @@ const HREmployeeSchema = new mongoose.Schema(
       trim: true,
     },
     issuedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    employeeAcknowledged: {
+      type: Boolean,
+      default: false,
+    },
+    employeeAcknowledgedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+],
+
+performanceReviews: [
+  {
+    reviewId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    reviewPeriod: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    reviewDate: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    rating: {
+      type: String,
+      enum: PERFORMANCE_RATINGS,
+      default: "Good",
+    },
+    strengths: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    areasForImprovement: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    goals: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    managerComments: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    employeeComments: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    reviewedBy: {
       type: String,
       default: "",
       trim: true,

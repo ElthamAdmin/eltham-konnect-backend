@@ -630,6 +630,115 @@ const getMyDisciplineRecords = async (req, res) => {
   }
 };
 
+const addPerformanceReview = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const {
+      reviewPeriod,
+      reviewDate,
+      rating,
+      strengths,
+      areasForImprovement,
+      goals,
+      managerComments,
+      employeeComments,
+      employeeAcknowledged,
+    } = req.body;
+
+    const employee = await HREmployee.findOne({ employeeId });
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "HR employee not found",
+      });
+    }
+
+    if (!reviewPeriod || !reviewDate || !rating) {
+      return res.status(400).json({
+        success: false,
+        message: "Review period, review date, and rating are required",
+      });
+    }
+
+    const newReview = {
+      reviewId: `REV-${Date.now()}`,
+      reviewPeriod: normalizeString(reviewPeriod),
+      reviewDate: reviewDate || "",
+      rating: normalizeString(rating) || "Good",
+      strengths: normalizeString(strengths),
+      areasForImprovement: normalizeString(areasForImprovement),
+      goals: normalizeString(goals),
+      managerComments: normalizeString(managerComments),
+      employeeComments: normalizeString(employeeComments),
+      reviewedBy: req.user?.fullName || req.user?.email || "",
+      employeeAcknowledged:
+        employeeAcknowledged === true || employeeAcknowledged === "true",
+      employeeAcknowledgedAt:
+        employeeAcknowledged === true || employeeAcknowledged === "true"
+          ? new Date()
+          : null,
+    };
+
+    employee.performanceReviews = employee.performanceReviews || [];
+    employee.performanceReviews.unshift(newReview);
+    employee.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
+
+    await employee.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Performance review added successfully",
+      data: newReview,
+    });
+  } catch (error) {
+    console.error("Error adding performance review:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add performance review",
+      error: error.message,
+    });
+  }
+};
+
+const getMyPerformanceReviews = async (req, res) => {
+  try {
+    const linkedEmployeeId = req.user?.linkedEmployeeId || "";
+    const userId = req.user?.userId || "";
+
+    let employee = null;
+
+    if (linkedEmployeeId) {
+      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
+    }
+
+    if (!employee && userId) {
+      employee = await HREmployee.findOne({ linkedUserId: userId });
+    }
+
+    if (!employee) {
+      return res.json({
+        success: true,
+        message: "No linked performance reviews found",
+        data: [],
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "My performance reviews retrieved successfully",
+      data: employee.performanceReviews || [],
+    });
+  } catch (error) {
+    console.error("Error getting my performance reviews:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve performance reviews",
+      error: error.message,
+    });
+  }
+};
+
 const getEmployeeSummary = async (req, res) => {
   try {
     const employees = await HREmployee.find();
@@ -682,5 +791,7 @@ module.exports = {
   updateEmployeeStatus,
   addDisciplineRecord,
   getMyDisciplineRecords,
+  addPerformanceReview,
+  getMyPerformanceReviews,
   getEmployeeSummary,
 };
