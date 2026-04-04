@@ -776,7 +776,92 @@ const getFinancialReports = async (req, res) => {
             Number(item.payroll || 0)
         ),
       }));
+const statutoryTotals = {
+  nisEmployee: roundMoney(
+    filteredPayroll.reduce((sum, item) => sum + Number(item.nisEmployee || 0), 0)
+  ),
+  nhtEmployee: roundMoney(
+    filteredPayroll.reduce((sum, item) => sum + Number(item.nhtEmployee || 0), 0)
+  ),
+  educationTax: roundMoney(
+    filteredPayroll.reduce((sum, item) => sum + Number(item.educationTax || 0), 0)
+  ),
+  incomeTax: roundMoney(
+    filteredPayroll.reduce((sum, item) => sum + Number(item.incomeTax || 0), 0)
+  ),
+  pensionEmployee: roundMoney(
+    filteredPayroll.reduce((sum, item) => sum + Number(item.pensionEmployee || 0), 0)
+  ),
+  totalDeductions: roundMoney(
+    filteredPayroll.reduce(
+      (sum, item) =>
+        sum +
+        Number(
+          item.totalDeductions !== undefined
+            ? item.totalDeductions
+            : item.deductions || 0
+        ),
+      0
+    )
+  ),
+};
 
+const statutoryByEmployeeMap = {};
+
+filteredPayroll.forEach((item) => {
+  const employeeKey =
+    `${item.employeeId || "NO-ID"}__${item.employeeName || "Unknown Employee"}`;
+
+  if (!statutoryByEmployeeMap[employeeKey]) {
+    statutoryByEmployeeMap[employeeKey] = {
+      employeeId: item.employeeId || "-",
+      employeeName: item.employeeName || "-",
+      role: item.role || "-",
+      nisEmployee: 0,
+      nhtEmployee: 0,
+      educationTax: 0,
+      incomeTax: 0,
+      pensionEmployee: 0,
+      totalDeductions: 0,
+      netPay: 0,
+      grossPay: 0,
+    };
+  }
+
+  statutoryByEmployeeMap[employeeKey].nisEmployee = roundMoney(
+    statutoryByEmployeeMap[employeeKey].nisEmployee + Number(item.nisEmployee || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].nhtEmployee = roundMoney(
+    statutoryByEmployeeMap[employeeKey].nhtEmployee + Number(item.nhtEmployee || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].educationTax = roundMoney(
+    statutoryByEmployeeMap[employeeKey].educationTax + Number(item.educationTax || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].incomeTax = roundMoney(
+    statutoryByEmployeeMap[employeeKey].incomeTax + Number(item.incomeTax || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].pensionEmployee = roundMoney(
+    statutoryByEmployeeMap[employeeKey].pensionEmployee + Number(item.pensionEmployee || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].grossPay = roundMoney(
+    statutoryByEmployeeMap[employeeKey].grossPay + Number(item.grossPay || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].netPay = roundMoney(
+    statutoryByEmployeeMap[employeeKey].netPay + Number(item.netPay || 0)
+  );
+  statutoryByEmployeeMap[employeeKey].totalDeductions = roundMoney(
+    statutoryByEmployeeMap[employeeKey].totalDeductions +
+      Number(
+        item.totalDeductions !== undefined
+          ? item.totalDeductions
+          : item.deductions || 0
+      )
+  );
+});
+
+const statutoryByEmployee = Object.values(statutoryByEmployeeMap).sort((a, b) =>
+  String(a.employeeName || "").localeCompare(String(b.employeeName || ""))
+);
     const profitAndLoss = {
       revenue,
       operatingExpenses,
@@ -808,24 +893,26 @@ const getFinancialReports = async (req, res) => {
     };
 
     res.json({
-      success: true,
-      data: {
-        filters: {
-          from,
-          to,
-        },
-        reportMeta: {
-          generatedAt: new Date().toISOString(),
-          reportTitle: "Financial Reports",
-        },
-        invoiceStats,
-        profitAndLoss,
-        cashFlow,
-        balanceSheet,
-        expenseByCategory,
-        monthlyTrend,
-      },
-    });
+  success: true,
+  data: {
+    filters: {
+      from,
+      to,
+    },
+    reportMeta: {
+      generatedAt: new Date().toISOString(),
+      reportTitle: "Financial Reports",
+    },
+    invoiceStats,
+    profitAndLoss,
+    cashFlow,
+    balanceSheet,
+    statutoryTotals,
+    statutoryByEmployee,
+    expenseByCategory,
+    monthlyTrend,
+  },
+});
   } catch (error) {
     console.error("Error getting financial reports:", error);
     res.status(500).json({
