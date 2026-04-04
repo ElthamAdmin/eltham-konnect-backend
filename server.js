@@ -28,6 +28,7 @@ const financialAccountRoutes = require("./routes/financialAccountRoutes");
 const accountTransactionRoutes = require("./routes/accountTransactionRoutes");
 const authRoutes = require("./routes/authRoutes");
 const auditLogRoutes = require("./routes/auditLogRoutes");
+const hrAnalyticsRoutes = require("./routes/hrAnalyticsRoutes");
 const { attachUserIfPresent } = require("./middleware/authMiddleware");
 
 const app = express();
@@ -101,6 +102,7 @@ app.use("/api/financial-accounts", financialAccountRoutes);
 app.use("/api/account-transactions", accountTransactionRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/audit-logs", auditLogRoutes);
+app.use("/api/hr-analytics", hrAnalyticsRoutes);
 app.use("/api/documents", require("./routes/documentRoutes"));
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
