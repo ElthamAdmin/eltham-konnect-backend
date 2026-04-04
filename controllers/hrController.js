@@ -69,6 +69,74 @@ const getLinkedUserDetails = async (linkedUserId) => {
     };
   }
 
+  const getReportsToDetails = async (reportsToEmployeeId) => {
+  if (!reportsToEmployeeId) {
+    return {
+      reportsToEmployeeId: "",
+      reportsToName: "",
+    };
+  }
+
+  const manager = await HREmployee.findOne({
+    employeeId: normalizeString(reportsToEmployeeId),
+  }).select("employeeId fullName");
+
+  if (!manager) {
+    return null;
+  }
+
+  return {
+    reportsToEmployeeId: manager.employeeId || "",
+    reportsToName: manager.fullName || "",
+  };
+};
+
+const buildOrgChart = (employees) => {
+  const map = {};
+  const roots = [];
+
+  employees.forEach((employee) => {
+    map[employee.employeeId] = {
+      employeeId: employee.employeeId,
+      fullName: employee.fullName,
+      jobTitle: employee.jobTitle,
+      department: employee.department,
+      branch: employee.branch,
+      jobLevel: Number(employee.jobLevel || 1),
+      isDepartmentHead: Boolean(employee.isDepartmentHead),
+      reportsToEmployeeId: employee.reportsToEmployeeId || "",
+      reportsToName: employee.reportsToName || "",
+      employmentStatus: employee.employmentStatus || "",
+      children: [],
+    };
+  });
+
+  employees.forEach((employee) => {
+    const currentNode = map[employee.employeeId];
+    const parentId = employee.reportsToEmployeeId || "";
+
+    if (parentId && map[parentId]) {
+      map[parentId].children.push(currentNode);
+    } else {
+      roots.push(currentNode);
+    }
+  });
+
+  const sortTree = (nodes) => {
+    nodes.sort((a, b) => {
+      if (a.jobLevel !== b.jobLevel) {
+        return b.jobLevel - a.jobLevel;
+      }
+      return String(a.fullName || "").localeCompare(String(b.fullName || ""));
+    });
+
+    nodes.forEach((node) => sortTree(node.children));
+  };
+
+  sortTree(roots);
+  return roots;
+};
+
   const existingUser = await SystemUser.findOne({ userId: linkedUserId });
 
   if (!existingUser) {
@@ -199,6 +267,9 @@ const createEmployee = async (req, res) => {
       emergencyContactRelationship,
       department,
       jobTitle,
+      jobLevel,
+      isDepartmentHead,
+      reportsToEmployeeId,
       branch,
       employmentType,
       startDate,
@@ -243,6 +314,11 @@ const createEmployee = async (req, res) => {
       linkedUserRole: "",
     };
 
+    let reportsToDetails = {
+  reportsToEmployeeId: "",
+  reportsToName: "",
+};
+
     if (linkedUserId) {
       linkedUserDetails = await getLinkedUserDetails(normalizeString(linkedUserId));
 
@@ -265,6 +341,17 @@ const createEmployee = async (req, res) => {
       }
     }
 
+    if (reportsToEmployeeId) {
+  reportsToDetails = await getReportsToDetails(reportsToEmployeeId);
+
+  if (!reportsToDetails) {
+    return res.status(404).json({
+      success: false,
+      message: "Selected reporting manager not found",
+    });
+  }
+}
+
     const employeeId = await createNextEmployeeId();
 
     const employee = await HREmployee.create({
@@ -285,6 +372,10 @@ const createEmployee = async (req, res) => {
       emergencyContactRelationship: normalizeString(emergencyContactRelationship),
       department: normalizeString(department) || "Operations",
       jobTitle: normalizeString(jobTitle),
+      jobLevel: Number(jobLevel || 1),
+      isDepartmentHead: toBoolean(isDepartmentHead, false),
+      reportsToEmployeeId: reportsToDetails.reportsToEmployeeId,
+      reportsToName: reportsToDetails.reportsToName,
       branch: normalizeString(branch) || "Eltham Park Mainstore",
       employmentType: employmentType || "Temporary",
       startDate: startDate || "",
@@ -376,9 +467,17 @@ const updateEmployee = async (req, res) => {
       );
     }
     if (updates.department !== undefined) updates.department = normalizeString(updates.department);
-    if (updates.jobTitle !== undefined) updates.jobTitle = normalizeString(updates.jobTitle);
-    if (updates.branch !== undefined) updates.branch = normalizeString(updates.branch);
-    if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
+if (updates.jobTitle !== undefined) updates.jobTitle = normalizeString(updates.jobTitle);
+if (updates.branch !== undefined) updates.branch = normalizeString(updates.branch);
+if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
+
+if (updates.jobLevel !== undefined) {
+  updates.jobLevel = Number(updates.jobLevel || 1);
+}
+
+if (updates.isDepartmentHead !== undefined) {
+  updates.isDepartmentHead = toBoolean(updates.isDepartmentHead, false);
+}
 
     if (updates.payRate !== undefined) {
       updates.payRate = Number(updates.payRate || 0);
@@ -410,6 +509,12 @@ const updateEmployee = async (req, res) => {
         ? normalizeString(updates.linkedUserId)
         : oldLinkedUserId;
 
+        const oldReportsToEmployeeId = employee.reportsToEmployeeId || "";
+const nextReportsToEmployeeId =
+  updates.reportsToEmployeeId !== undefined
+    ? normalizeString(updates.reportsToEmployeeId)
+    : oldReportsToEmployeeId;
+
     if (nextLinkedUserId) {
       const linkedUserDetails = await getLinkedUserDetails(nextLinkedUserId);
 
@@ -440,6 +545,30 @@ const updateEmployee = async (req, res) => {
       updates.linkedUserName = "";
       updates.linkedUserRole = "";
     }
+
+    if (nextReportsToEmployeeId) {
+  if (nextReportsToEmployeeId === employeeId) {
+    return res.status(400).json({
+      success: false,
+      message: "An employee cannot report to themselves",
+    });
+  }
+
+  const reportsToDetails = await getReportsToDetails(nextReportsToEmployeeId);
+
+  if (!reportsToDetails) {
+    return res.status(404).json({
+      success: false,
+      message: "Selected reporting manager not found",
+    });
+  }
+
+  updates.reportsToEmployeeId = reportsToDetails.reportsToEmployeeId;
+  updates.reportsToName = reportsToDetails.reportsToName;
+} else if (updates.reportsToEmployeeId !== undefined) {
+  updates.reportsToEmployeeId = "";
+  updates.reportsToName = "";
+}
 
     updates.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
 
@@ -739,6 +868,32 @@ const getMyPerformanceReviews = async (req, res) => {
   }
 };
 
+const getOrganizationChart = async (req, res) => {
+  try {
+    const employees = await HREmployee.find().sort({
+      jobLevel: -1,
+      fullName: 1,
+      createdAt: -1,
+    });
+
+    const orgChart = buildOrgChart(employees);
+
+    res.json({
+      success: true,
+      message: "Organization chart retrieved successfully",
+      totalEmployees: employees.length,
+      data: orgChart,
+    });
+  } catch (error) {
+    console.error("Error getting organization chart:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve organization chart",
+      error: error.message,
+    });
+  }
+};
+
 const getEmployeeSummary = async (req, res) => {
   try {
     const employees = await HREmployee.find();
@@ -793,5 +948,6 @@ module.exports = {
   getMyDisciplineRecords,
   addPerformanceReview,
   getMyPerformanceReviews,
+  getOrganizationChart,
   getEmployeeSummary,
 };

@@ -12,6 +12,7 @@ const {
   getMyDisciplineRecords,
   addPerformanceReview,
   getMyPerformanceReviews,
+  getOrganizationChart,
   getEmployeeSummary,
 } = require("../controllers/hrController");
 
@@ -28,6 +29,7 @@ router.put("/:employeeId", protect, requirePermission("hr"), updateEmployee);
 router.put("/:employeeId/status", protect, requirePermission("hr"), updateEmployeeStatus);
 router.post("/:employeeId/discipline", protect, requirePermission("hr"), addDisciplineRecord);
 router.post("/:employeeId/performance", protect, requirePermission("hr"), addPerformanceReview);
+router.get("/organization-chart", protect, requirePermission("hr"), getOrganizationChart);
 
 // Self-service profile route
 router.get(

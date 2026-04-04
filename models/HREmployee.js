@@ -166,10 +166,34 @@ const HREmployeeSchema = new mongoose.Schema(
     },
 
     jobTitle: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+  type: String,
+  required: true,
+  trim: true,
+},
+
+jobLevel: {
+  type: Number,
+  default: 1,
+  min: 1,
+  max: 10,
+},
+
+isDepartmentHead: {
+  type: Boolean,
+  default: false,
+},
+
+reportsToEmployeeId: {
+  type: String,
+  default: "",
+  trim: true,
+},
+
+reportsToName: {
+  type: String,
+  default: "",
+  trim: true,
+},
 
     branch: {
       type: String,
