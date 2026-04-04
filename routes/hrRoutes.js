@@ -8,6 +8,8 @@ const {
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
+  addDisciplineRecord,
+  getMyDisciplineRecords,
   getEmployeeSummary,
 } = require("../controllers/hrController");
 
@@ -22,6 +24,7 @@ router.get("/summary", protect, requirePermission("hr"), getEmployeeSummary);
 router.post("/", protect, requirePermission("hr"), createEmployee);
 router.put("/:employeeId", protect, requirePermission("hr"), updateEmployee);
 router.put("/:employeeId/status", protect, requirePermission("hr"), updateEmployeeStatus);
+router.post("/:employeeId/discipline", protect, requirePermission("hr"), addDisciplineRecord);
 
 // Self-service profile route
 router.get(
@@ -35,6 +38,19 @@ router.get(
     "payslipSelfService",
   ]),
   getMyEmployeeProfile
+);
+
+router.get(
+  "/me/discipline",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+    "payslipSelfService",
+    "documentSelfService",
+    "leaveSelfService",
+  ]),
+  getMyDisciplineRecords
 );
 
 // Admin + self-service access

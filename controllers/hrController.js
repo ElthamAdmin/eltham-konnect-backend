@@ -525,6 +525,111 @@ const updateEmployeeStatus = async (req, res) => {
   }
 };
 
+const addDisciplineRecord = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+    const {
+      disciplineType,
+      subject,
+      details,
+      actionTaken,
+      incidentDate,
+      issuedDate,
+      employeeAcknowledged,
+    } = req.body;
+
+    const employee = await HREmployee.findOne({ employeeId });
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "HR employee not found",
+      });
+    }
+
+    if (!disciplineType || !subject || !details) {
+      return res.status(400).json({
+        success: false,
+        message: "Discipline type, subject, and details are required",
+      });
+    }
+
+    const newRecord = {
+      recordId: `DIS-${Date.now()}`,
+      disciplineType: normalizeString(disciplineType) || "Other",
+      subject: normalizeString(subject),
+      details: normalizeString(details),
+      actionTaken: normalizeString(actionTaken),
+      incidentDate: incidentDate || "",
+      issuedDate: issuedDate || new Date().toISOString().split("T")[0],
+      issuedBy: req.user?.fullName || req.user?.email || "",
+      employeeAcknowledged:
+        employeeAcknowledged === true || employeeAcknowledged === "true",
+      employeeAcknowledgedAt:
+        employeeAcknowledged === true || employeeAcknowledged === "true"
+          ? new Date()
+          : null,
+    };
+
+    employee.disciplineRecords = employee.disciplineRecords || [];
+    employee.disciplineRecords.unshift(newRecord);
+    employee.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
+
+    await employee.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Discipline record added successfully",
+      data: newRecord,
+    });
+  } catch (error) {
+    console.error("Error adding discipline record:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add discipline record",
+      error: error.message,
+    });
+  }
+};
+
+const getMyDisciplineRecords = async (req, res) => {
+  try {
+    const linkedEmployeeId = req.user?.linkedEmployeeId || "";
+    const userId = req.user?.userId || "";
+
+    let employee = null;
+
+    if (linkedEmployeeId) {
+      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
+    }
+
+    if (!employee && userId) {
+      employee = await HREmployee.findOne({ linkedUserId: userId });
+    }
+
+    if (!employee) {
+      return res.json({
+        success: true,
+        message: "No linked discipline records found",
+        data: [],
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "My discipline records retrieved successfully",
+      data: employee.disciplineRecords || [],
+    });
+  } catch (error) {
+    console.error("Error getting my discipline records:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve discipline records",
+      error: error.message,
+    });
+  }
+};
+
 const getEmployeeSummary = async (req, res) => {
   try {
     const employees = await HREmployee.find();
@@ -575,5 +680,7 @@ module.exports = {
   createEmployee,
   updateEmployee,
   updateEmployeeStatus,
+  addDisciplineRecord,
+  getMyDisciplineRecords,
   getEmployeeSummary,
 };

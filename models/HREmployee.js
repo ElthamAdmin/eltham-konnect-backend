@@ -41,6 +41,16 @@ const DOCUMENT_TYPES = [
   "Other",
 ];
 
+const DISCIPLINE_TYPES = [
+  "Verbal Warning",
+  "Written Warning",
+  "Incident Report",
+  "Suspension",
+  "Final Warning",
+  "Termination Notice",
+  "Other",
+];
+
 const HREmployeeSchema = new mongoose.Schema(
   {
     employeeId: {
@@ -263,6 +273,59 @@ const HREmployeeSchema = new mongoose.Schema(
         },
       },
     ],
+
+    disciplineRecords: [
+  {
+    recordId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    disciplineType: {
+      type: String,
+      enum: DISCIPLINE_TYPES,
+      default: "Other",
+    },
+    subject: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    details: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    actionTaken: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    incidentDate: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    issuedDate: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    issuedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    employeeAcknowledged: {
+      type: Boolean,
+      default: false,
+    },
+    employeeAcknowledgedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+],
 
     notes: {
       type: String,
