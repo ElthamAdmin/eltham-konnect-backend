@@ -538,14 +538,16 @@ const getTodayAttendanceAdmin = async (req, res) => {
 const getAttendanceHistoryAdmin = async (req, res) => {
   try {
     if (
-      req.user?.role !== "Admin" &&
-      !req.user?.permissions?.includes("users")
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have permission to view attendance history",
-      });
-    }
+  req.user?.role !== "Admin" &&
+  !req.user?.permissions?.includes("users") &&
+  !req.user?.permissions?.includes("finance") &&
+  !req.user?.permissions?.includes("hr")
+) {
+  return res.status(403).json({
+    success: false,
+    message: "You do not have permission to view attendance history",
+  });
+}
 
     const {
       filter = "today",
