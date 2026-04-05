@@ -69,7 +69,20 @@ const getLinkedUserDetails = async (linkedUserId) => {
     };
   }
 
-  const getReportsToDetails = async (reportsToEmployeeId) => {
+  const existingUser = await SystemUser.findOne({ userId: linkedUserId });
+
+  if (!existingUser) {
+    return null;
+  }
+
+  return {
+    linkedUserId: existingUser.userId || "",
+    linkedUserName: existingUser.fullName || "",
+    linkedUserRole: existingUser.role || "",
+  };
+};
+
+const getReportsToDetails = async (reportsToEmployeeId) => {
   const normalizedManagerId = normalizeString(reportsToEmployeeId);
 
   if (!normalizedManagerId) {
@@ -150,7 +163,6 @@ const buildOrgChart = (employees) => {
     linkedUserName: existingUser.fullName || "",
     linkedUserRole: existingUser.role || "",
   };
-};
 
 const getEmployees = async (req, res) => {
   try {
