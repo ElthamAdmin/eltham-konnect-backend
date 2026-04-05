@@ -36,9 +36,11 @@ const app = express();
 const uploadsDir = path.join(__dirname, "uploads");
 const customerInvoiceUploadsDir = path.join(uploadsDir, "customer-invoices");
 const supportAttachmentsDir = path.join(uploadsDir, "support-attachments");
+const hrDocumentsDir = path.join(uploadsDir, "hr-documents");
+const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
 
 if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 if (!fs.existsSync(customerInvoiceUploadsDir)) {
@@ -47,6 +49,14 @@ if (!fs.existsSync(customerInvoiceUploadsDir)) {
 
 if (!fs.existsSync(supportAttachmentsDir)) {
   fs.mkdirSync(supportAttachmentsDir, { recursive: true });
+}
+
+if (!fs.existsSync(hrDocumentsDir)) {
+  fs.mkdirSync(hrDocumentsDir, { recursive: true });
+}
+
+if (!fs.existsSync(expenseReceiptsDir)) {
+  fs.mkdirSync(expenseReceiptsDir, { recursive: true });
 }
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
