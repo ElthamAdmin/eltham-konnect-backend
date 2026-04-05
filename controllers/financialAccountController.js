@@ -2,7 +2,7 @@ const FinancialAccount = require("../models/FinancialAccount");
 
 const createAccount = async (req, res) => {
   try {
-    const { accountName, accountType, bankName, openingBalance } = req.body;
+    const { accountName, accountType, bankName, openingBalance, currentBalance,} = req.body;
 
     if (!accountName || !accountType) {
       return res.status(400).json({
@@ -12,6 +12,10 @@ const createAccount = async (req, res) => {
     }
 
     const numericOpeningBalance = Number(openingBalance || 0);
+const numericCurrentBalance =
+  currentBalance !== undefined && currentBalance !== ""
+    ? Number(currentBalance || 0)
+    : numericOpeningBalance;
 
     const accountNumber = `ACC-${Date.now()}`;
 
@@ -21,7 +25,7 @@ const createAccount = async (req, res) => {
       accountType,
       bankName,
       openingBalance: numericOpeningBalance,
-      currentBalance: numericOpeningBalance,
+      currentBalance: numericCurrentBalance,
     });
 
     res.json({
@@ -60,7 +64,14 @@ const getAccounts = async (req, res) => {
 const updateAccount = async (req, res) => {
   try {
     const { accountNumber } = req.params;
-    const { accountName, accountType, bankName, openingBalance, status } = req.body;
+    const {
+      accountName,
+      accountType,
+      bankName,
+      openingBalance,
+      currentBalance,
+      status,
+    } = req.body;
 
     const account = await FinancialAccount.findOne({ accountNumber });
 
@@ -71,22 +82,19 @@ const updateAccount = async (req, res) => {
       });
     }
 
-    const oldOpeningBalance = Number(account.openingBalance || 0);
-    const newOpeningBalance =
-      openingBalance !== undefined
-        ? Number(openingBalance || 0)
-        : oldOpeningBalance;
-
-    const balanceDifference = newOpeningBalance - oldOpeningBalance;
-
     if (accountName !== undefined) account.accountName = accountName;
     if (accountType !== undefined) account.accountType = accountType;
     if (bankName !== undefined) account.bankName = bankName;
     if (status !== undefined) account.status = status;
 
-    if (openingBalance !== undefined) {
-      account.openingBalance = newOpeningBalance;
-      account.currentBalance = Number(account.currentBalance || 0) + balanceDifference;
+    // Only update opening balance if user intentionally changes it
+    if (openingBalance !== undefined && openingBalance !== "") {
+      account.openingBalance = Number(openingBalance || 0);
+    }
+
+    // Update current balance directly
+    if (currentBalance !== undefined && currentBalance !== "") {
+      account.currentBalance = Number(currentBalance || 0);
     }
 
     await account.save();
