@@ -123,6 +123,23 @@ const buildDateRange = (from, to) => {
   return { startDate, endDate };
 };
 
+const getReceiptFileExists = (receiptUrl = "") => {
+  if (!receiptUrl) return false;
+
+  const filename = String(receiptUrl).split("/").pop();
+  if (!filename) return false;
+
+  const filePath = require("path").join(
+    __dirname,
+    "..",
+    "uploads",
+    "expense-receipts",
+    filename
+  );
+
+  return require("fs").existsSync(filePath);
+};
+
 const getExpenses = async (req, res) => {
   try {
     const page = Number(req.query.page || 1);
@@ -131,10 +148,15 @@ const getExpenses = async (req, res) => {
 
     const total = await Expense.countDocuments();
 
-    const expenses = await Expense.find()
-      .sort({ createdAt: -1, _id: -1 })
-      .skip(skip)
-      .limit(limit);
+    const expenseRecords = await Expense.find()
+  .sort({ createdAt: -1, _id: -1 })
+  .skip(skip)
+  .limit(limit);
+
+const expenses = expenseRecords.map((expense) => ({
+  ...expense.toObject(),
+  receiptFileExists: getReceiptFileExists(expense.receiptUrl),
+}));
 
     res.json({
       success: true,

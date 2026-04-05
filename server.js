@@ -84,7 +84,32 @@ app.use(
 
 app.use(express.json());
 app.use(attachUserIfPresent);
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith(".pdf")) {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", "inline");
+      }
+
+      if (filePath.match(/\.(jpg|jpeg|png|webp)$/i)) {
+        res.setHeader("Content-Disposition", "inline");
+      }
+    },
+  })
+);
+
+app.get("/uploads/:folder/:filename", (req, res) => {
+  const { folder, filename } = req.params;
+  const filePath = path.join(__dirname, "uploads", folder, filename);
+
+  if (fs.existsSync(filePath)) {
+    return res.sendFile(filePath);
+  }
+
+  return res.status(404).send("File not found");
+});
 
 app.get("/", (req, res) => {
   res.send("Eltham Konnect Backend Running");
