@@ -15,6 +15,72 @@ const getJamaicaDateString = (date = new Date()) => {
   return formatter.format(date);
 };
 
+const getJamaicaNow = () => {
+  const jamaicaString = new Date().toLocaleString("en-US", {
+    timeZone: "America/Jamaica",
+  });
+  return new Date(jamaicaString);
+};
+
+const getDateRangeByFilter = (filter, customStartDate, customEndDate) => {
+  const today = getJamaicaNow();
+  today.setHours(0, 0, 0, 0);
+
+  const endOfToday = new Date(today);
+  endOfToday.setHours(23, 59, 59, 999);
+
+  let startDate = new Date(today);
+  let endDate = new Date(endOfToday);
+
+  switch (filter) {
+    case "today":
+      break;
+
+    case "thisWeek": {
+      const day = startDate.getDay();
+      const diff = day === 0 ? 6 : day - 1;
+      startDate.setDate(startDate.getDate() - diff);
+      break;
+    }
+
+    case "thisMonth":
+      startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+      break;
+
+    case "thisYear":
+      startDate = new Date(today.getFullYear(), 0, 1);
+      break;
+
+    case "custom":
+      if (!customStartDate || !customEndDate) {
+        throw new Error("Custom start date and end date are required");
+      }
+      startDate = new Date(`${customStartDate}T00:00:00`);
+      endDate = new Date(`${customEndDate}T23:59:59.999`);
+      break;
+
+    default:
+      break;
+  }
+
+  return { startDate, endDate };
+};
+
+const normalizePackageDate = (value) => {
+  if (!value) return null;
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return parsed;
+};
+
+const getBilledWeight = (weight) => {
+  const numericWeight = Number(weight || 0);
+  if (numericWeight <= 0) return 0;
+  return Math.ceil(numericWeight);
+};
+
 const createCustomerNotification = async ({
   customerEkonId,
   customerName,
@@ -78,6 +144,87 @@ const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
   }
 
   return pointsAwarded;
+};
+
+const getPackageWeightAnalysis = async (req, res) => {
+  try {
+    const {
+      filter = "today",
+      startDate: customStartDate = "",
+      endDate: customEndDate = "",
+    } = req.query;
+
+    const { startDate, endDate } = getDateRangeByFilter(
+      filter,
+      customStartDate,
+      customEndDate
+    );
+
+    const packages = await Package.find().sort({ dateReceived: -1, _id: -1 });
+
+    const filteredPackages = packages.filter((pkg) => {
+      const packageDate = normalizePackageDate(pkg.dateReceived || pkg.createdAt);
+      if (!packageDate) return false;
+      return packageDate >= startDate && packageDate <= endDate;
+    });
+
+    const weightMap = {};
+
+    filteredPackages.forEach((pkg) => {
+      const billedWeight = getBilledWeight(pkg.weight);
+
+      if (billedWeight <= 0) return;
+
+      if (!weightMap[billedWeight]) {
+        weightMap[billedWeight] = {
+          billedWeight,
+          packageCount: 0,
+          totalActualWeight: 0,
+        };
+      }
+
+      weightMap[billedWeight].packageCount += 1;
+      weightMap[billedWeight].totalActualWeight += Number(pkg.weight || 0);
+    });
+
+    const groupedWeights = Object.values(weightMap)
+      .sort((a, b) => a.billedWeight - b.billedWeight)
+      .map((item) => ({
+        ...item,
+        totalActualWeight: Number(item.totalActualWeight.toFixed(2)),
+        percentageOfPackages:
+          filteredPackages.length > 0
+            ? Number(((item.packageCount / filteredPackages.length) * 100).toFixed(2))
+            : 0,
+      }));
+
+    const mostCommonWeight =
+      groupedWeights.length > 0
+        ? groupedWeights.reduce((top, current) =>
+            current.packageCount > top.packageCount ? current : top
+          )
+        : null;
+
+    res.json({
+      success: true,
+      message: "Package weight analysis retrieved successfully",
+      data: {
+        filter,
+        startDate,
+        endDate,
+        totalPackages: filteredPackages.length,
+        groupedWeights,
+        mostCommonWeight,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting package weight analysis:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve package weight analysis",
+      error: error.message,
+    });
+  }
 };
 
 const getPackages = async (req, res) => {
@@ -494,6 +641,7 @@ const bulkUpdatePackageStatus = async (req, res) => {
 
 module.exports = {
   getPackages,
+  getPackageWeightAnalysis,
   createPackage,
   updatePackageStatus,
   bulkUpdatePackageStatus,
