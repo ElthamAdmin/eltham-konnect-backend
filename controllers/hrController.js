@@ -70,7 +70,9 @@ const getLinkedUserDetails = async (linkedUserId) => {
   }
 
   const getReportsToDetails = async (reportsToEmployeeId) => {
-  if (!reportsToEmployeeId) {
+  const normalizedManagerId = normalizeString(reportsToEmployeeId);
+
+  if (!normalizedManagerId) {
     return {
       reportsToEmployeeId: "",
       reportsToName: "",
@@ -78,8 +80,8 @@ const getLinkedUserDetails = async (linkedUserId) => {
   }
 
   const manager = await HREmployee.findOne({
-    employeeId: normalizeString(reportsToEmployeeId),
-  }).select("employeeId fullName");
+    employeeId: normalizedManagerId,
+  });
 
   if (!manager) {
     return null;
@@ -472,7 +474,9 @@ if (updates.branch !== undefined) updates.branch = normalizeString(updates.branc
 if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
 
 if (updates.jobLevel !== undefined) {
-  updates.jobLevel = Number(updates.jobLevel || 1);
+  const parsedJobLevel = Number(updates.jobLevel);
+  updates.jobLevel =
+    !Number.isNaN(parsedJobLevel) && parsedJobLevel > 0 ? parsedJobLevel : 1;
 }
 
 if (updates.isDepartmentHead !== undefined) {
@@ -511,7 +515,8 @@ if (updates.isDepartmentHead !== undefined) {
 
         const oldReportsToEmployeeId = employee.reportsToEmployeeId || "";
 const nextReportsToEmployeeId =
-  updates.reportsToEmployeeId !== undefined
+  updates.reportsToEmployeeId !== undefined &&
+  updates.reportsToEmployeeId !== null
     ? normalizeString(updates.reportsToEmployeeId)
     : oldReportsToEmployeeId;
 
@@ -547,14 +552,17 @@ const nextReportsToEmployeeId =
     }
 
     if (nextReportsToEmployeeId) {
-  if (nextReportsToEmployeeId === employeeId) {
+  const normalizedSelfId = normalizeString(employeeId);
+  const normalizedManagerId = normalizeString(nextReportsToEmployeeId);
+
+  if (normalizedManagerId === normalizedSelfId) {
     return res.status(400).json({
       success: false,
       message: "An employee cannot report to themselves",
     });
   }
 
-  const reportsToDetails = await getReportsToDetails(nextReportsToEmployeeId);
+  const reportsToDetails = await getReportsToDetails(normalizedManagerId);
 
   if (!reportsToDetails) {
     return res.status(404).json({
@@ -565,7 +573,7 @@ const nextReportsToEmployeeId =
 
   updates.reportsToEmployeeId = reportsToDetails.reportsToEmployeeId;
   updates.reportsToName = reportsToDetails.reportsToName;
-} else if (updates.reportsToEmployeeId !== undefined) {
+} else {
   updates.reportsToEmployeeId = "";
   updates.reportsToName = "";
 }
@@ -591,6 +599,7 @@ const nextReportsToEmployeeId =
     });
   } catch (error) {
     console.error("Error updating HR employee:", error);
+console.error("Update payload was:", req.body);
     res.status(500).json({
       success: false,
       message: "Failed to update HR employee",
