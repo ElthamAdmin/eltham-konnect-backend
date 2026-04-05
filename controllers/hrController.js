@@ -152,18 +152,6 @@ const buildOrgChart = (employees) => {
   return roots;
 };
 
-  const existingUser = await SystemUser.findOne({ userId: linkedUserId });
-
-  if (!existingUser) {
-    return null;
-  }
-
-  return {
-    linkedUserId: existingUser.userId || "",
-    linkedUserName: existingUser.fullName || "",
-    linkedUserRole: existingUser.role || "",
-  };
-
 const getEmployees = async (req, res) => {
   try {
     let employees;
