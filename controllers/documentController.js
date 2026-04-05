@@ -62,10 +62,25 @@ const getEmployeeDocuments = async (req, res) => {
       });
     }
 
+    const documents = (employee.documents || []).map((doc) => {
+      let fileExists = false;
+
+      if (doc?.fileUrl) {
+        const filename = doc.fileUrl.split("/").pop();
+        const filePath = path.join(__dirname, "../uploads/hr-documents", filename);
+        fileExists = fs.existsSync(filePath);
+      }
+
+      return {
+        ...doc.toObject(),
+        fileExists,
+      };
+    });
+
     res.json({
       success: true,
       message: "Documents retrieved successfully",
-      data: employee.documents || [],
+      data: documents,
     });
   } catch (error) {
     console.error("Get employee documents error:", error);
@@ -131,8 +146,53 @@ const deleteDocument = async (req, res) => {
   }
 };
 
+const removeMissingDocuments = async (req, res) => {
+  try {
+    const { employeeId } = req.params;
+
+    const employee = await HREmployee.findOne({ employeeId });
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    const originalCount = (employee.documents || []).length;
+
+    employee.documents = (employee.documents || []).filter((doc) => {
+      if (!doc?.fileUrl) return false;
+
+      const filename = doc.fileUrl.split("/").pop();
+      const filePath = path.join(__dirname, "../uploads/hr-documents", filename);
+
+      return fs.existsSync(filePath);
+    });
+
+    const removedCount = originalCount - employee.documents.length;
+
+    await employee.save();
+
+    res.json({
+      success: true,
+      message: `${removedCount} missing document record(s) removed successfully`,
+      removedCount,
+      data: employee.documents,
+    });
+  } catch (error) {
+    console.error("Remove missing documents error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to remove missing documents",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   uploadDocument,
   getEmployeeDocuments,
   deleteDocument,
+  removeMissingDocuments,
 };

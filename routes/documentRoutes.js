@@ -8,6 +8,7 @@ const {
   uploadDocument,
   getEmployeeDocuments,
   deleteDocument,
+  removeMissingDocuments,
 } = require("../controllers/documentController");
 
 const { protect, requireAnyPermission, requirePermission } = require("../middleware/authMiddleware");
@@ -62,6 +63,13 @@ router.get(
   protect,
   requireAnyPermission(["hr", "documentSelfService"]),
   getEmployeeDocuments
+);
+
+router.delete(
+  "/:employeeId/missing-files",
+  protect,
+  requirePermission("hr"),
+  removeMissingDocuments
 );
 
 router.delete(
