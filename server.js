@@ -29,6 +29,7 @@ const accountTransactionRoutes = require("./routes/accountTransactionRoutes");
 const authRoutes = require("./routes/authRoutes");
 const auditLogRoutes = require("./routes/auditLogRoutes");
 const hrAnalyticsRoutes = require("./routes/hrAnalyticsRoutes");
+const amazonAssociateRoutes = require("./routes/amazonAssociateRoutes");
 const { attachUserIfPresent } = require("./middleware/authMiddleware");
 
 const app = express();
@@ -38,6 +39,7 @@ const customerInvoiceUploadsDir = path.join(uploadsDir, "customer-invoices");
 const supportAttachmentsDir = path.join(uploadsDir, "support-attachments");
 const hrDocumentsDir = path.join(uploadsDir, "hr-documents");
 const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
+const amazonAssociateDir = path.join(uploadsDir, "amazon-associate");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -57,6 +59,10 @@ if (!fs.existsSync(hrDocumentsDir)) {
 
 if (!fs.existsSync(expenseReceiptsDir)) {
   fs.mkdirSync(expenseReceiptsDir, { recursive: true });
+}
+
+if (!fs.existsSync(amazonAssociateDir)) {
+  fs.mkdirSync(amazonAssociateDir, { recursive: true });
 }
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
@@ -138,6 +144,7 @@ app.use("/api/account-transactions", accountTransactionRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/hr-analytics", hrAnalyticsRoutes);
+app.use("/api/amazon-associate", amazonAssociateRoutes);
 app.use("/api/documents", require("./routes/documentRoutes"));
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
