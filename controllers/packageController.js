@@ -22,6 +22,23 @@ const getJamaicaNow = () => {
   return new Date(jamaicaString);
 };
 
+const getRequestUserDetails = (req) => {
+  const user = req.user || req.admin || req.systemUser || {};
+
+  return {
+    addedByUserId: String(user._id || user.id || req.body.addedByUserId || ""),
+    addedByName:
+      user.name ||
+      user.fullName ||
+      user.username ||
+      user.email ||
+      req.body.addedByName ||
+      "System User",
+    addedByEmail: user.email || req.body.addedByEmail || "",
+    addedByRole: user.role || req.body.addedByRole || "",
+  };
+};
+
 const getDateRangeByFilter = (filter, customStartDate, customEndDate) => {
   const today = getJamaicaNow();
   today.setHours(0, 0, 0, 0);
@@ -229,7 +246,7 @@ const getPackageWeightAnalysis = async (req, res) => {
 
 const getPackages = async (req, res) => {
   try {
-    const packages = await Package.find().sort({ dateReceived: -1 });
+    const packages = await Package.find().sort({ dateReceived: -1, createdAt: -1 });
 
     res.json({
       success: true,
@@ -288,6 +305,7 @@ const createPackage = async (req, res) => {
 
     const packageStatus = status || "At Warehouse";
     const now = new Date();
+    const addedByDetails = getRequestUserDetails(req);
 
     const newPackage = new Package({
       trackingNumber,
@@ -302,6 +320,7 @@ const createPackage = async (req, res) => {
       readyForPickupDate: packageStatus === "Ready for Pickup" ? now : null,
       statusUpdatedAt: now,
       dateReceived: dateReceived || now,
+      ...addedByDetails,
     });
 
     await newPackage.save();
@@ -346,6 +365,10 @@ const createPackage = async (req, res) => {
         status: newPackage.status,
         warehouseLocation: newPackage.warehouseLocation,
         pointsAwarded,
+        addedByName: newPackage.addedByName,
+        addedByEmail: newPackage.addedByEmail,
+        addedByRole: newPackage.addedByRole,
+        createdAt: newPackage.createdAt,
       },
     });
 

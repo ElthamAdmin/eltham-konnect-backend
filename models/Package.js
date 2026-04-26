@@ -1,101 +1,124 @@
 const mongoose = require("mongoose");
 
-const PackageSchema = new mongoose.Schema({
-  trackingNumber: {
-    type: String,
-    required: true,
-    unique: true,
-  },
+const PackageSchema = new mongoose.Schema(
+  {
+    trackingNumber: {
+      type: String,
+      required: true,
+      unique: true,
+    },
 
-  customerEkonId: {
-    type: String,
-    required: true,
-  },
+    customerEkonId: {
+      type: String,
+      required: true,
+    },
 
-  customerName: {
-    type: String,
-    required: true,
-  },
+    customerName: {
+      type: String,
+      required: true,
+    },
 
-  courier: {
-    type: String,
-    default: "",
-  },
+    courier: {
+      type: String,
+      default: "",
+    },
 
-  weight: {
-    type: Number,
-    default: 0,
-  },
+    weight: {
+      type: Number,
+      default: 0,
+    },
 
-  status: {
-    type: String,
-    default: "At Warehouse",
-  },
+    status: {
+      type: String,
+      default: "At Warehouse",
+    },
 
-  warehouseLocation: {
-    type: String,
-    default: "",
-  },
+    warehouseLocation: {
+      type: String,
+      default: "",
+    },
 
-  invoiceStatus: {
-    type: String,
-    default: "Pending",
-  },
+    invoiceStatus: {
+      type: String,
+      default: "Pending",
+    },
 
-  readyForPickup: {
-    type: Boolean,
-    default: false,
-  },
+    readyForPickup: {
+      type: Boolean,
+      default: false,
+    },
 
-  readyForPickupDate: {
-    type: Date,
-    default: null,
-  },
+    readyForPickupDate: {
+      type: Date,
+      default: null,
+    },
 
-  statusUpdatedAt: {
-    type: Date,
-    default: Date.now,
-  },
+    statusUpdatedAt: {
+      type: Date,
+      default: Date.now,
+    },
 
-  dateReceived: {
-    type: Date,
-    default: Date.now,
-  },
+    dateReceived: {
+      type: Date,
+      default: Date.now,
+    },
 
-  customerInvoiceUploaded: {
-    type: Boolean,
-    default: false,
-  },
+    addedByUserId: {
+      type: String,
+      default: "",
+    },
 
-  customerInvoiceUploadNumber: {
-    type: String,
-    default: "",
-  },
+    addedByName: {
+      type: String,
+      default: "System User",
+    },
 
-  customerInvoiceNumber: {
-    type: String,
-    default: "",
-  },
+    addedByEmail: {
+      type: String,
+      default: "",
+    },
 
-  customerInvoiceFileName: {
-    type: String,
-    default: "",
-  },
+    addedByRole: {
+      type: String,
+      default: "",
+    },
 
-  customerInvoiceFilePath: {
-    type: String,
-    default: "",
-  },
+    customerInvoiceUploaded: {
+      type: Boolean,
+      default: false,
+    },
 
-  customerInvoiceNotes: {
-    type: String,
-    default: "",
-  },
+    customerInvoiceUploadNumber: {
+      type: String,
+      default: "",
+    },
 
-  customerInvoiceUploadedAt: {
-    type: Date,
-    default: null,
+    customerInvoiceNumber: {
+      type: String,
+      default: "",
+    },
+
+    customerInvoiceFileName: {
+      type: String,
+      default: "",
+    },
+
+    customerInvoiceFilePath: {
+      type: String,
+      default: "",
+    },
+
+    customerInvoiceNotes: {
+      type: String,
+      default: "",
+    },
+
+    customerInvoiceUploadedAt: {
+      type: Date,
+      default: null,
+    },
   },
-});
+  { timestamps: true }
+);
 
 module.exports = mongoose.model("Package", PackageSchema);
