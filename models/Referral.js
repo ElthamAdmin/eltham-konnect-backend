@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const ReferralSchema = new mongoose.Schema(
   {
+    referralCode: {
+      type: String,
+      required: true,
+    },
+
     referrerEkonId: {
       type: String,
       required: true,
@@ -22,15 +27,10 @@ const ReferralSchema = new mongoose.Schema(
       default: "",
     },
 
-    referralCode: {
-      type: String,
-      required: true,
-    },
-
     status: {
       type: String,
-      enum: ["Pending", "Completed"],
-      default: "Pending",
+      enum: ["Active", "Pending", "Completed", "Cancelled"],
+      default: "Active",
     },
 
     rewardGiven: {
@@ -38,9 +38,9 @@ const ReferralSchema = new mongoose.Schema(
       default: false,
     },
 
-    createdAt: {
-      type: Date,
-      default: Date.now,
+    firstPackageTrackingNumber: {
+      type: String,
+      default: "",
     },
 
     completedAt: {

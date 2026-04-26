@@ -2,6 +2,7 @@ const Package = require("../models/Package");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
+const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
 
 const getJamaicaDateString = (date = new Date()) => {
@@ -325,7 +326,21 @@ const createPackage = async (req, res) => {
 
     await newPackage.save();
 
-    const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
+const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
+
+if (packageStatus === "At Warehouse") {
+  try {
+    const customerPackageCount = await Package.countDocuments({
+      customerEkonId: newPackage.customerEkonId,
+    });
+
+    if (customerPackageCount === 1) {
+      await completeReferral(newPackage.customerEkonId, newPackage.trackingNumber);
+    }
+  } catch (referralError) {
+    console.error("Referral reward processing failed:", referralError.message);
+  }
+}
 
     if (packageStatus === "At Warehouse") {
       await createCustomerNotification({
