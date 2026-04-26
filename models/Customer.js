@@ -41,6 +41,7 @@ const CustomerSchema = new mongoose.Schema(
   type: String,
   unique: true,
   sparse: true,
+  default: "",
 },
 
     referredByCode: {
@@ -121,15 +122,6 @@ const CustomerSchema = new mongoose.Schema(
   }
 );
 
-// =========================
-// AUTO GENERATE REFERRAL CODE
-// =========================
-CustomerSchema.pre("save", function (next) {
-  if (!this.referralCode) {
-    this.referralCode =
-      "EKR" + Math.random().toString(36).substring(2, 8).toUpperCase();
-  }
-  next();
-});
+
 
 module.exports = mongoose.model("Customer", CustomerSchema);
