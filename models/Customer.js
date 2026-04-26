@@ -38,9 +38,10 @@ const CustomerSchema = new mongoose.Schema(
     // =========================
 
     referralCode: {
-      type: String,
-      unique: true,
-    },
+  type: String,
+  unique: true,
+  sparse: true,
+},
 
     referredByCode: {
       type: String,
