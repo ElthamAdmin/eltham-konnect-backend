@@ -40,6 +40,7 @@ const supportAttachmentsDir = path.join(uploadsDir, "support-attachments");
 const hrDocumentsDir = path.join(uploadsDir, "hr-documents");
 const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
 const amazonAssociateDir = path.join(uploadsDir, "amazon-associate");
+const referralRoutes = require("./routes/referralRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -146,6 +147,7 @@ app.use("/api/audit-logs", auditLogRoutes);
 app.use("/api/hr-analytics", hrAnalyticsRoutes);
 app.use("/api/amazon-associate", amazonAssociateRoutes);
 app.use("/api/documents", require("./routes/documentRoutes"));
+app.use("/api/referrals", referralRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
