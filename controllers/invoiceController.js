@@ -72,10 +72,10 @@ const createInvoice = async (req, res) => {
     }
 
     const readyPackages = await Package.find({
-      customerEkonId,
-      readyForPickup: true,
-      invoiceStatus: "Pending",
-    });
+  customerEkonId,
+  readyForPickup: true,
+  invoiceStatus: { $ne: "Issued" },
+});
 
     if (readyPackages.length === 0) {
       return res.status(400).json({
@@ -153,10 +153,14 @@ const createInvoice = async (req, res) => {
 
     await createRedemptionHistory({ customer, invoice, redeemAmount });
 
-    await Package.updateMany(
-      { customerEkonId, readyForPickup: true, invoiceStatus: "Pending" },
-      { $set: { invoiceStatus: "Issued" } }
-    );
+    const trackingNumbers = ratedPackages.map((pkg) => pkg.trackingNumber);
+
+const trackingNumbers = ratedPackages.map((pkg) => pkg.trackingNumber);
+
+await Package.updateMany(
+  { trackingNumber: { $in: trackingNumbers } },
+  { $set: { invoiceStatus: "Issued" } }
+);
 
     await createCustomerNotification({
       customerEkonId: customer.ekonId,
