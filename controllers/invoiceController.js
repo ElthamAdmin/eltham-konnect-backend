@@ -153,12 +153,10 @@ const createInvoice = async (req, res) => {
 
     await createRedemptionHistory({ customer, invoice, redeemAmount });
 
-    const trackingNumbers = ratedPackages.map((pkg) => pkg.trackingNumber);
-
-const trackingNumbers = ratedPackages.map((pkg) => pkg.trackingNumber);
+   const invoicedTrackingNumbers = ratedPackages.map((pkg) => pkg.trackingNumber);
 
 await Package.updateMany(
-  { trackingNumber: { $in: trackingNumbers } },
+  { trackingNumber: { $in: invoicedTrackingNumbers } },
   { $set: { invoiceStatus: "Issued" } }
 );
 
@@ -231,11 +229,11 @@ const generateMultipleInvoice = async (req, res) => {
     }
 
     const readyPackages = await Package.find({
-      _id: { $in: packageIds },
-      customerEkonId,
-      readyForPickup: true,
-      invoiceStatus: "Pending",
-    });
+  _id: { $in: packageIds },
+  customerEkonId,
+  readyForPickup: true,
+  invoiceStatus: { $ne: "Issued" },
+});
 
     if (readyPackages.length === 0) {
       return res.status(400).json({
