@@ -21,6 +21,16 @@ const PointsHistorySchema = new mongoose.Schema({
     required: true,
   },
 
+  reference: {
+  type: String,
+  default: "",
+},
+
+note: {
+  type: String,
+  default: "",
+},
+
   date: {
     type: String,
     default: () => new Date().toISOString().split("T")[0],

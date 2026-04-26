@@ -7,6 +7,7 @@ const ShippingRate = require("../models/ShippingRate");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const CustomerNotification = require("../models/CustomerNotification");
+const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
 
 const getJamaicaDateString = (date = new Date()) => {
@@ -39,6 +40,20 @@ const createCustomerNotification = async ({
     referenceType,
     referenceId,
     isRead: false,
+    date: getJamaicaDateString(),
+  });
+};
+
+const createRedemptionHistory = async ({ customer, invoice, redeemAmount }) => {
+  if (Number(redeemAmount || 0) <= 0) return;
+
+  await PointsHistory.create({
+    customerEkonId: customer.ekonId,
+    customerName: customer.name,
+    action: `Redeemed on ${invoice.invoiceNumber}`,
+    points: -Math.abs(Number(redeemAmount || 0)),
+    reference: invoice.invoiceNumber,
+    note: `Applied JMD ${Number(redeemAmount || 0).toLocaleString()} in EK Points to invoice ${invoice.invoiceNumber}`,
     date: getJamaicaDateString(),
   });
 };
@@ -135,6 +150,8 @@ const createInvoice = async (req, res) => {
       paidAt: null,
       createdAt: getJamaicaDateString(),
     });
+
+    await createRedemptionHistory({ customer, invoice, redeemAmount });
 
     await Package.updateMany(
       { customerEkonId, readyForPickup: true, invoiceStatus: "Pending" },
@@ -289,6 +306,8 @@ const generateMultipleInvoice = async (req, res) => {
       paidAt: null,
       createdAt: getJamaicaDateString(),
     });
+
+    await createRedemptionHistory({ customer, invoice, redeemAmount });
 
     await Package.updateMany(
       { _id: { $in: readyPackages.map((pkg) => pkg._id) } },
