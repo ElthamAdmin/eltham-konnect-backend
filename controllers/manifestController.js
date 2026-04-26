@@ -19,7 +19,6 @@ const createManifest = async (req, res) => {
       data: manifest,
     });
   } catch (error) {
-    console.error("Error creating manifest:", error);
     res.status(500).json({
       success: false,
       message: "Could not create manifest",
@@ -33,42 +32,23 @@ const addPackageToManifest = async (req, res) => {
     const { manifestNumber } = req.params;
     const { trackingNumber } = req.body;
 
-    if (!trackingNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Tracking number is required",
-      });
-    }
-
     const manifest = await Manifest.findOne({ manifestNumber });
-
-    if (!manifest) {
-      return res.status(404).json({
-        success: false,
-        message: "Manifest not found",
-      });
-    }
+    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
 
     if (manifest.status !== "Created") {
       return res.status(400).json({
         success: false,
-        message: "Packages can only be added to a manifest with Created status",
+        message: "Cannot modify manifest after departure",
       });
     }
 
     const pkg = await Package.findOne({ trackingNumber });
-
-    if (!pkg) {
-      return res.status(404).json({
-        success: false,
-        message: "Package not found",
-      });
-    }
+    if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
 
     if (manifest.packages.includes(trackingNumber)) {
       return res.status(400).json({
         success: false,
-        message: "Package is already on this manifest",
+        message: "Package already added",
       });
     }
 
@@ -81,14 +61,126 @@ const addPackageToManifest = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Package added to manifest",
+      message: "Package added",
       data: manifest,
     });
   } catch (error) {
-    console.error("Error adding package to manifest:", error);
     res.status(500).json({
       success: false,
-      message: "Package could not be added",
+      message: "Error adding package",
+      error: error.message,
+    });
+  }
+};
+
+/* ✅ REMOVE PACKAGE */
+const removePackageFromManifest = async (req, res) => {
+  try {
+    const { manifestNumber } = req.params;
+    const { trackingNumber } = req.body;
+
+    const manifest = await Manifest.findOne({ manifestNumber });
+
+    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
+
+    if (manifest.status !== "Created") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot remove packages after departure",
+      });
+    }
+
+    manifest.packages = manifest.packages.filter((t) => t !== trackingNumber);
+    manifest.packageCount = manifest.packages.length;
+    await manifest.save();
+
+    await Package.updateOne(
+      { trackingNumber },
+      { $set: { status: "At Warehouse" } }
+    );
+
+    res.json({
+      success: true,
+      message: "Package removed",
+      data: manifest,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error removing package",
+      error: error.message,
+    });
+  }
+};
+
+/* ✅ DELETE MANIFEST */
+const deleteManifest = async (req, res) => {
+  try {
+    const { manifestNumber } = req.params;
+
+    const manifest = await Manifest.findOne({ manifestNumber });
+
+    if (!manifest) {
+      return res.status(404).json({ success: false, message: "Manifest not found" });
+    }
+
+    if (manifest.status !== "Created") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot delete manifest after departure",
+      });
+    }
+
+    // Reset packages
+    await Package.updateMany(
+      { trackingNumber: { $in: manifest.packages } },
+      { $set: { status: "At Warehouse" } }
+    );
+
+    await manifest.deleteOne();
+
+    res.json({
+      success: true,
+      message: "Manifest deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error deleting manifest",
+      error: error.message,
+    });
+  }
+};
+
+/* ✅ EDIT MANIFEST */
+const updateManifest = async (req, res) => {
+  try {
+    const { manifestNumber } = req.params;
+    const { origin } = req.body;
+
+    const manifest = await Manifest.findOne({ manifestNumber });
+
+    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
+
+    if (manifest.status !== "Created") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot edit after departure",
+      });
+    }
+
+    manifest.origin = origin || manifest.origin;
+    await manifest.save();
+
+    res.json({
+      success: true,
+      message: "Manifest updated",
+      data: manifest,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating manifest",
       error: error.message,
     });
   }
@@ -100,12 +192,7 @@ const departManifest = async (req, res) => {
 
     const manifest = await Manifest.findOne({ manifestNumber });
 
-    if (!manifest) {
-      return res.status(404).json({
-        success: false,
-        message: "Manifest not found",
-      });
-    }
+    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
 
     manifest.status = "In Transit";
     await manifest.save();
@@ -116,10 +203,9 @@ const departManifest = async (req, res) => {
       data: manifest,
     });
   } catch (error) {
-    console.error("Error departing manifest:", error);
     res.status(500).json({
       success: false,
-      message: "Could not update manifest",
+      message: "Error updating manifest",
       error: error.message,
     });
   }
@@ -131,12 +217,7 @@ const arriveManifest = async (req, res) => {
 
     const manifest = await Manifest.findOne({ manifestNumber });
 
-    if (!manifest) {
-      return res.status(404).json({
-        success: false,
-        message: "Manifest not found",
-      });
-    }
+    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
 
     manifest.status = "Arrived Jamaica";
     await manifest.save();
@@ -146,21 +227,19 @@ const arriveManifest = async (req, res) => {
       {
         $set: {
           status: "Cleared Customs",
-          readyForPickup: false,
         },
       }
     );
 
     res.json({
       success: true,
-      message: "Manifest arrived Jamaica",
+      message: "Manifest arrived",
       data: manifest,
     });
   } catch (error) {
-    console.error("Error arriving manifest:", error);
     res.status(500).json({
       success: false,
-      message: "Could not update manifest",
+      message: "Error updating manifest",
       error: error.message,
     });
   }
@@ -175,7 +254,6 @@ const getManifests = async (req, res) => {
       data: manifests,
     });
   } catch (error) {
-    console.error("Error getting manifests:", error);
     res.status(500).json({
       success: false,
       message: "Could not retrieve manifests",
@@ -187,6 +265,9 @@ const getManifests = async (req, res) => {
 module.exports = {
   createManifest,
   addPackageToManifest,
+  removePackageFromManifest,
+  deleteManifest,
+  updateManifest,
   departManifest,
   arriveManifest,
   getManifests,
