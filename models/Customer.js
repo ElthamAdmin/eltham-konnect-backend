@@ -33,6 +33,32 @@ const CustomerSchema = new mongoose.Schema(
       default: "",
     },
 
+    // =========================
+    // REFERRAL SYSTEM (NEW)
+    // =========================
+
+    referralCode: {
+      type: String,
+      unique: true,
+    },
+
+    referredByCode: {
+      type: String,
+      default: "",
+    },
+
+    referredByEkonId: {
+      type: String,
+      default: "",
+    },
+
+    referralRewardGiven: {
+      type: Boolean,
+      default: false,
+    },
+
+    // =========================
+
     pointsBalance: {
       type: Number,
       default: 0,
@@ -93,5 +119,16 @@ const CustomerSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// =========================
+// AUTO GENERATE REFERRAL CODE
+// =========================
+CustomerSchema.pre("save", function (next) {
+  if (!this.referralCode) {
+    this.referralCode =
+      "EKR" + Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+  next();
+});
 
 module.exports = mongoose.model("Customer", CustomerSchema);
