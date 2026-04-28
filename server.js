@@ -41,8 +41,10 @@ const hrDocumentsDir = path.join(uploadsDir, "hr-documents");
 const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
 const amazonAssociateDir = path.join(uploadsDir, "amazon-associate");
 const noticeBoardDir = path.join(uploadsDir, "notice-board");
+const rewardsHubDir = path.join(uploadsDir, "rewards-hub");
 const referralRoutes = require("./routes/referralRoutes");
 const noticeRoutes = require("./routes/noticeRoutes");
+const rewardsHubRoutes = require("./routes/rewardsHubRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -70,6 +72,10 @@ if (!fs.existsSync(amazonAssociateDir)) {
 
 if (!fs.existsSync(noticeBoardDir)) {
   fs.mkdirSync(noticeBoardDir, { recursive: true });
+}
+
+if (!fs.existsSync(rewardsHubDir)) {
+  fs.mkdirSync(rewardsHubDir, { recursive: true });
 }
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
@@ -155,6 +161,7 @@ app.use("/api/amazon-associate", amazonAssociateRoutes);
 app.use("/api/documents", require("./routes/documentRoutes"));
 app.use("/api/referrals", referralRoutes);
 app.use("/api/notices", noticeRoutes);
+app.use("/api/rewards-hub", rewardsHubRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
