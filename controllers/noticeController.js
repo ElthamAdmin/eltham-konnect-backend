@@ -54,6 +54,8 @@ const createNotice = async (req, res) => {
       category,
       priority,
       dueDate: dueDate || null,
+      imageFileName: req.file ? req.file.filename : "",
+      imageFilePath: req.file ? `/uploads/notice-board/${req.file.filename}` : "",
       ...userDetails,
     });
 

@@ -43,6 +43,17 @@ const NoticeSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    imageFileName: {
+  type: String,
+  default: "",
+},
+
+imageFilePath: {
+  type: String,
+  default: "",
+},
+
   },
   { timestamps: true }
 );

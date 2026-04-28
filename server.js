@@ -40,6 +40,7 @@ const supportAttachmentsDir = path.join(uploadsDir, "support-attachments");
 const hrDocumentsDir = path.join(uploadsDir, "hr-documents");
 const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
 const amazonAssociateDir = path.join(uploadsDir, "amazon-associate");
+const noticeBoardDir = path.join(uploadsDir, "notice-board");
 const referralRoutes = require("./routes/referralRoutes");
 const noticeRoutes = require("./routes/noticeRoutes");
 
@@ -65,6 +66,10 @@ if (!fs.existsSync(expenseReceiptsDir)) {
 
 if (!fs.existsSync(amazonAssociateDir)) {
   fs.mkdirSync(amazonAssociateDir, { recursive: true });
+}
+
+if (!fs.existsSync(noticeBoardDir)) {
+  fs.mkdirSync(noticeBoardDir, { recursive: true });
 }
 
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
