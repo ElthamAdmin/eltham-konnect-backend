@@ -45,6 +45,7 @@ const rewardsHubDir = path.join(uploadsDir, "rewards-hub");
 const referralRoutes = require("./routes/referralRoutes");
 const noticeRoutes = require("./routes/noticeRoutes");
 const rewardsHubRoutes = require("./routes/rewardsHubRoutes");
+const rewardsHubEntryRoutes = require("./routes/rewardsHubEntryRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -162,6 +163,7 @@ app.use("/api/documents", require("./routes/documentRoutes"));
 app.use("/api/referrals", referralRoutes);
 app.use("/api/notices", noticeRoutes);
 app.use("/api/rewards-hub", rewardsHubRoutes);
+app.use("/api/rewards-hub-entries", rewardsHubEntryRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
