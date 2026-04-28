@@ -99,8 +99,61 @@ const getCustomerEntries = async (req, res) => {
   }
 };
 
+const pickWinner = async (req, res) => {
+  try {
+    const { hubId } = req.params;
+
+    const entries = await RewardsHubEntry.find({
+      rewardsHubId: hubId,
+    });
+
+    if (!entries.length) {
+      return res.status(400).json({
+        success: false,
+        message: "No entries found for this post",
+      });
+    }
+
+    // OPTIONAL: prevent multiple winners
+    const existingWinner = await RewardsHubEntry.findOne({
+      rewardsHubId: hubId,
+      isWinner: true,
+    });
+
+    if (existingWinner) {
+      return res.status(400).json({
+        success: false,
+        message: "Winner already selected for this post",
+      });
+    }
+
+    // RANDOM SELECTION
+    const randomIndex = Math.floor(Math.random() * entries.length);
+    const winner = entries[randomIndex];
+
+    winner.isWinner = true;
+    winner.hasWon = true;
+    winner.winDate = new Date();
+
+    await winner.save();
+
+    res.json({
+      success: true,
+      message: "Winner selected successfully",
+      data: winner,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to pick winner",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   enterRewardsHub,
   getEntriesByHub,
   getCustomerEntries,
+  pickWinner,
 };

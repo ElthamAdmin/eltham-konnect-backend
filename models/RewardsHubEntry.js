@@ -34,6 +34,16 @@ const RewardsHubEntrySchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    isWinner: {
+      type: Boolean,
+      default: false,
+    },
+
+    winDate: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
