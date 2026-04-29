@@ -123,6 +123,41 @@ const playGame = async (req, res) => {
       isCorrect,
     });
 
+    const Customer = require("../models/Customer");
+const PointsHistory = require("../models/PointsHistory");
+const CustomerNotification = require("../models/CustomerNotification");
+
+if (isCorrect && game.rewardPoints > 0) {
+  const customer = await Customer.findOne({ ekonId: customerEkonId });
+
+  if (customer) {
+    const newBalance = Math.min(
+      1500,
+      Number(customer.pointsBalance || 0) + game.rewardPoints
+    );
+
+    customer.pointsBalance = newBalance;
+    await customer.save();
+
+    await PointsHistory.create({
+      customerId: customer._id,
+      customerName: customer.name,
+      customerEkonId: customer.ekonId,
+      action: `Game Reward (${game.title})`,
+      points: game.rewardPoints,
+    });
+
+    await CustomerNotification.create({
+      notificationNumber: `EK-NOTIF-${Date.now()}`,
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      title: "🎉 You Earned EK Points!",
+      message: `You earned ${game.rewardPoints} EK Points from "${game.title}".`,
+      type: "Rewards",
+    });
+  }
+}
+
     res.json({
       success: true,
       message: isCorrect ? "Game submitted successfully." : "Game submitted, but answer was incorrect.",
