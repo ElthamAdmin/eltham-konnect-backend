@@ -151,9 +151,95 @@ const pickWinner = async (req, res) => {
   }
 };
 
+const RewardsHub = require("../models/RewardsHub");
+const PointsHistory = require("../models/PointsHistory");
+
+const rewardWinner = async (req, res) => {
+  try {
+    const { hubId } = req.params;
+
+    const winner = await RewardsHubEntry.findOne({
+      rewardsHubId: hubId,
+      isWinner: true,
+    });
+
+    if (!winner) {
+      return res.status(400).json({
+        success: false,
+        message: "No winner selected yet",
+      });
+    }
+
+    if (winner.rewardGiven) {
+      return res.status(400).json({
+        success: false,
+        message: "Reward already given",
+      });
+    }
+
+    const hub = await RewardsHub.findById(hubId);
+
+    if (!hub || !hub.rewardPoints) {
+      return res.status(400).json({
+        success: false,
+        message: "No reward points set for this post",
+      });
+    }
+
+    const customer = await Customer.findById(winner.customerId);
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    // ✅ Apply points (respect cap 1500)
+    const newBalance = Math.min(
+      1500,
+      Number(customer.pointsBalance || 0) + hub.rewardPoints
+    );
+
+    customer.pointsBalance = newBalance;
+    await customer.save();
+
+    // ✅ Log history
+    await PointsHistory.create({
+      customerId: customer._id,
+      customerName: customer.name,
+      customerEkonId: customer.ekonId,
+      action: `Rewards Hub Winner (${hub.title})`,
+      points: hub.rewardPoints,
+    });
+
+    // ✅ Mark rewarded
+    winner.rewardGiven = true;
+    winner.rewardDate = new Date();
+    await winner.save();
+
+    res.json({
+      success: true,
+      message: "Winner rewarded successfully",
+      data: {
+        customerName: customer.name,
+        pointsAdded: hub.rewardPoints,
+        newBalance,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to reward winner",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   enterRewardsHub,
   getEntriesByHub,
   getCustomerEntries,
   pickWinner,
+  rewardWinner, // ⭐ add
 };

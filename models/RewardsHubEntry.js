@@ -44,6 +44,17 @@ const RewardsHubEntrySchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // ⭐ NEW
+    rewardGiven: {
+      type: Boolean,
+      default: false,
+    },
+
+    rewardDate: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );

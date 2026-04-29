@@ -23,6 +23,12 @@ const RewardsHubSchema = new mongoose.Schema(
       default: "",
     },
 
+    // ⭐ NEW
+    rewardPoints: {
+      type: Number,
+      default: 0,
+    },
+
     externalLink: {
       type: String,
       default: "",
