@@ -162,6 +162,28 @@ const getGamePlays = async (req, res) => {
   }
 };
 
+const getCustomerGamePlays = async (req, res) => {
+  try {
+    const { ekonId } = req.params;
+
+    const plays = await RewardsHubGamePlay.find({
+      customerEkonId: ekonId,
+    }).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      message: "Customer game plays retrieved successfully",
+      data: plays,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve customer game plays",
+      error: error.message,
+    });
+  }
+};
+
 const deleteGame = async (req, res) => {
   try {
     const { id } = req.params;
@@ -196,5 +218,6 @@ module.exports = {
   createGame,
   playGame,
   getGamePlays,
+  getCustomerGamePlays,
   deleteGame,
 };
