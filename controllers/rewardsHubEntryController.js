@@ -1,5 +1,40 @@
 const RewardsHubEntry = require("../models/RewardsHubEntry");
 const Customer = require("../models/Customer");
+const RewardsHub = require("../models/RewardsHub");
+const PointsHistory = require("../models/PointsHistory");
+const CustomerNotification = require("../models/CustomerNotification");
+
+const getJamaicaDateString = () => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  return formatter.format(new Date());
+};
+
+const createRewardsNotification = async ({
+  customerEkonId,
+  customerName,
+  title,
+  message,
+  referenceId = "",
+}) => {
+  await CustomerNotification.create({
+    notificationNumber: `RWD-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    customerEkonId,
+    customerName,
+    title,
+    message,
+    type: "Rewards Hub",
+    referenceType: "RewardsHub",
+    referenceId,
+    isRead: false,
+    date: getJamaicaDateString(),
+  });
+};
 
 const enterRewardsHub = async (req, res) => {
   try {
@@ -137,6 +172,16 @@ const pickWinner = async (req, res) => {
 
     await winner.save();
 
+    const hub = await RewardsHub.findById(hubId);
+
+await createRewardsNotification({
+  customerEkonId: winner.customerEkonId,
+  customerName: winner.customerName,
+  title: "You Won a Rewards Hub Activity!",
+  message: `Congratulations ${winner.customerName}! You were selected as the winner for ${hub?.title || "a Rewards Hub activity"}. Please check the Rewards Hub or contact Eltham Konnect for next steps.`,
+  referenceId: hubId,
+});
+
     res.json({
       success: true,
       message: "Winner selected successfully",
@@ -150,9 +195,6 @@ const pickWinner = async (req, res) => {
     });
   }
 };
-
-const RewardsHub = require("../models/RewardsHub");
-const PointsHistory = require("../models/PointsHistory");
 
 const rewardWinner = async (req, res) => {
   try {
@@ -217,6 +259,14 @@ const rewardWinner = async (req, res) => {
     winner.rewardGiven = true;
     winner.rewardDate = new Date();
     await winner.save();
+
+    await createRewardsNotification({
+  customerEkonId: customer.ekonId,
+  customerName: customer.name,
+  title: "Your Rewards Hub Prize Was Added!",
+  message: `You received ${hub.rewardPoints} EK Points for winning ${hub.title}. Your new balance is ${newBalance} EK Points.`,
+  referenceId: hubId,
+});
 
     res.json({
       success: true,
