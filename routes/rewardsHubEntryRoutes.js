@@ -6,6 +6,7 @@ const {
   getEntriesByHub,
   getCustomerEntries,
   pickWinner,
+  rewardWinner,
 } = require("../controllers/rewardsHubEntryController");
 
 router.post("/enter", enterRewardsHub);
