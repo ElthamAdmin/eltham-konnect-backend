@@ -16,7 +16,9 @@ const getJamaicaDateString = (date = new Date()) => {
 
 const getCustomers = async (req, res) => {
   try {
-    const customers = await Customer.find().sort({ createdAt: -1 });
+    const customers = await Customer.find({
+  status: { $ne: "Deleted" },
+}).sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -325,6 +327,48 @@ const expireInactivePoints = async (req, res) => {
       }
     }
 
+    const deleteCustomer = async (req, res) => {
+  try {
+    const { ekonId } = req.params;
+
+    const customer = await Customer.findOne({ ekonId });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    // ✅ SOFT DELETE (recommended)
+    customer.status = "Deleted";
+    await customer.save();
+
+    if (req.user) {
+      await writeAuditLog({
+        req,
+        action: "DELETE_CUSTOMER",
+        module: "Customers",
+        description: `Customer ${customer.name} (${customer.ekonId}) was deleted`,
+        targetType: "Customer",
+        targetId: customer.ekonId,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Customer deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting customer:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete customer",
+      error: error.message,
+    });
+  }
+};
+
     res.json({
       success: true,
       message: "Inactive points expiry check completed",
@@ -346,4 +390,5 @@ module.exports = {
   resetCustomerPassword,
   getPointsHistory,
   expireInactivePoints,
+  deleteCustomer, // ✅ ADD THIS
 };

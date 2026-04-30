@@ -16,5 +16,6 @@ router.put("/:ekonId", updateCustomer);
 router.put("/:ekonId/reset-password", resetCustomerPassword);
 router.get("/points-history", getPointsHistory);
 router.post("/expire-inactive-points", expireInactivePoints);
+router.delete("/:ekonId", deleteCustomer);
 
 module.exports = router;
