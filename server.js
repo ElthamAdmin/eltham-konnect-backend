@@ -42,6 +42,7 @@ const expenseReceiptsDir = path.join(uploadsDir, "expense-receipts");
 const amazonAssociateDir = path.join(uploadsDir, "amazon-associate");
 const noticeBoardDir = path.join(uploadsDir, "notice-board");
 const rewardsHubDir = path.join(uploadsDir, "rewards-hub");
+const teamHubDir = path.join(uploadsDir, "team-hub");
 const referralRoutes = require("./routes/referralRoutes");
 const noticeRoutes = require("./routes/noticeRoutes");
 const rewardsHubRoutes = require("./routes/rewardsHubRoutes");
@@ -49,6 +50,7 @@ const rewardsHubEntryRoutes = require("./routes/rewardsHubEntryRoutes");
 const rewardsHubGameRoutes = require("./routes/rewardsHubGameRoutes");
 const rewardsHubLeaderboardRoutes = require("./routes/rewardsHubLeaderboardRoutes");
 const rewardsHubAnalyticsRoutes = require("./routes/rewardsHubAnalyticsRoutes");
+const teamHubRoutes = require("./routes/teamHubRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -170,6 +172,7 @@ app.use("/api/rewards-hub-entries", rewardsHubEntryRoutes);
 app.use("/api/rewards-hub-games", rewardsHubGameRoutes);
 app.use("/api/rewards-hub-leaderboard", rewardsHubLeaderboardRoutes);
 app.use("/api/rewards-hub-analytics", rewardsHubAnalyticsRoutes);
+app.use("/api/team-hub", teamHubRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
