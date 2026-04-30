@@ -33,6 +33,31 @@ const getRateByWeight = async (req, res) => {
       });
     }
 
+    const updateShippingRate = async (req, res) => {
+  try {
+    const { weight } = req.params;
+    const { price } = req.body;
+
+    const rate = await ShippingRate.findOneAndUpdate(
+      { weight: Number(weight) },
+      { price: Number(price) },
+      { new: true, upsert: true }
+    );
+
+    res.json({
+      success: true,
+      message: "Shipping rate updated successfully",
+      data: rate,
+    });
+  } catch (error) {
+    console.error("Error updating shipping rate:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update shipping rate",
+    });
+  }
+};
+
     res.json({
       success: true,
       message: "Shipping rate retrieved successfully",
@@ -50,4 +75,5 @@ const getRateByWeight = async (req, res) => {
 module.exports = {
   getShippingRates,
   getRateByWeight,
+  updateShippingRate,
 };
