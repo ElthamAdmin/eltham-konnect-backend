@@ -247,7 +247,9 @@ const getPackageWeightAnalysis = async (req, res) => {
 
 const getPackages = async (req, res) => {
   try {
-    const packages = await Package.find().sort({ dateReceived: -1, createdAt: -1 });
+const packages = await Package.find({
+  status: { $ne: "Deleted" },
+}).sort({ dateReceived: -1, createdAt: -1 });
 
     res.json({
       success: true,
@@ -677,10 +679,58 @@ const bulkUpdatePackageStatus = async (req, res) => {
   }
 };
 
+const deletePackage = async (req, res) => {
+  try {
+    const { trackingNumber } = req.params;
+
+    const pkg = await Package.findOne({ trackingNumber });
+
+    if (!pkg) {
+      return res.status(404).json({
+        success: false,
+        message: "Package not found",
+      });
+    }
+
+    pkg.status = "Deleted";
+    pkg.readyForPickup = false;
+    pkg.statusUpdatedAt = new Date();
+
+    await pkg.save();
+
+    await writeAuditLog({
+      req,
+      action: "DELETE_PACKAGE",
+      module: "Packages",
+      description: `Package ${pkg.trackingNumber} was deleted`,
+      targetType: "Package",
+      targetId: pkg.trackingNumber,
+      metadata: {
+        customerEkonId: pkg.customerEkonId,
+        customerName: pkg.customerName,
+        previousStatus: pkg.status,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Package deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting package:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete package",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getPackages,
   getPackageWeightAnalysis,
   createPackage,
   updatePackageStatus,
   bulkUpdatePackageStatus,
+  deletePackage,
 };
