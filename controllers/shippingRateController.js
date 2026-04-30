@@ -33,14 +33,38 @@ const getRateByWeight = async (req, res) => {
       });
     }
 
-    const updateShippingRate = async (req, res) => {
+    res.json({
+      success: true,
+      message: "Shipping rate retrieved successfully",
+      data: rate,
+    });
+  } catch (error) {
+    console.error("Error getting shipping rate by weight:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve shipping rate",
+    });
+  }
+};
+
+const updateShippingRate = async (req, res) => {
   try {
     const { weight } = req.params;
     const { price } = req.body;
 
+    if (!weight || price === undefined || price === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Weight and price are required",
+      });
+    }
+
     const rate = await ShippingRate.findOneAndUpdate(
       { weight: Number(weight) },
-      { price: Number(price) },
+      {
+        weight: Number(weight),
+        price: Number(price),
+      },
       { new: true, upsert: true }
     );
 
@@ -54,20 +78,7 @@ const getRateByWeight = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update shipping rate",
-    });
-  }
-};
-
-    res.json({
-      success: true,
-      message: "Shipping rate retrieved successfully",
-      data: rate,
-    });
-  } catch (error) {
-    console.error("Error getting shipping rate by weight:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve shipping rate",
+      error: error.message,
     });
   }
 };
