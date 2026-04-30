@@ -8,6 +8,7 @@ const {
   resetCustomerPassword,
   getPointsHistory,
   expireInactivePoints,
+  deleteCustomer,
 } = require("../controllers/customerController");
 
 router.get("/", getCustomers);
