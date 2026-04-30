@@ -602,42 +602,116 @@ const createPayroll = async (req, res) => {
 
 const getFinanceSummary = async (req, res) => {
   try {
+    const {
+      filter = "today",
+      from = "",
+      to = "",
+      branch = "",
+    } = req.query;
+
+    const now = new Date();
+    let startDate = new Date();
+    let endDate = new Date();
+
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    if (filter === "thisWeek") {
+      const day = startDate.getDay();
+      const diff = day === 0 ? 6 : day - 1;
+      startDate.setDate(startDate.getDate() - diff);
+    }
+
+    if (filter === "thisMonth") {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    if (filter === "thisYear") {
+      startDate = new Date(now.getFullYear(), 0, 1);
+      endDate = new Date(now.getFullYear(), 11, 31);
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    if (filter === "allTime") {
+      startDate = null;
+      endDate = null;
+    }
+
+    if (filter === "custom" && from && to) {
+      startDate = new Date(`${from}T00:00:00`);
+      endDate = new Date(`${to}T23:59:59.999`);
+    }
+
+    const isWithinSummaryRange = (value) => {
+      if (!startDate || !endDate) return true;
+
+      const date = normalizeDateValue(value);
+      if (!date) return false;
+
+      return date >= startDate && date <= endDate;
+    };
+
     const invoices = await Invoice.find();
     const expenses = await Expense.find();
     const payroll = await Payroll.find();
 
-    const paidInvoices = invoices.filter(
-      (inv) => String(inv.status || "").trim().toLowerCase() === "paid"
-    );
-    const unpaidInvoices = invoices.filter(
-      (inv) => String(inv.status || "").trim().toLowerCase() === "unpaid"
+    const branchMatches = (record) => {
+      if (!branch) return true;
+      return String(record.branch || record.customerBranch || "").trim() === branch;
+    };
+
+    const paidInvoices = invoices.filter((inv) => {
+      const statusIsPaid = String(inv.status || "").trim().toLowerCase() === "paid";
+      const dateValue = inv.paidAt || inv.paidDate || inv.createdAt;
+      return statusIsPaid && isWithinSummaryRange(dateValue) && branchMatches(inv);
+    });
+
+    const unpaidInvoices = invoices.filter((inv) => {
+      const statusIsUnpaid =
+        String(inv.status || "").trim().toLowerCase() === "unpaid";
+      const dateValue = inv.createdAt;
+      return statusIsUnpaid && isWithinSummaryRange(dateValue) && branchMatches(inv);
+    });
+
+    const filteredExpenses = expenses.filter((exp) =>
+      isWithinSummaryRange(exp.date || exp.createdAt)
     );
 
-    const totalRevenue = paidInvoices.reduce(
-      (sum, inv) => sum + Number(inv.finalTotal || 0),
-      0
+    const filteredPayroll = payroll.filter((item) =>
+      isWithinSummaryRange(item.payPeriod || item.createdAt)
     );
 
-    const outstandingRevenue = unpaidInvoices.reduce(
-      (sum, inv) => sum + Number(inv.finalTotal || 0),
-      0
+    const totalRevenue = roundMoney(
+      paidInvoices.reduce((sum, inv) => sum + Number(inv.finalTotal || 0), 0)
     );
 
-    const totalExpenses = expenses.reduce(
-      (sum, exp) => sum + Number(exp.amount || 0),
-      0
+    const outstandingRevenue = roundMoney(
+      unpaidInvoices.reduce((sum, inv) => sum + Number(inv.finalTotal || 0), 0)
     );
 
-    const totalPayroll = payroll.reduce(
-      (sum, item) => sum + Number(item.netPay || 0),
-      0
+    const totalExpenses = roundMoney(
+      filteredExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0)
     );
 
-    const netPosition = totalRevenue - totalExpenses - totalPayroll;
+    const totalPayroll = roundMoney(
+      filteredPayroll.reduce((sum, item) => sum + Number(item.netPay || 0), 0)
+    );
+
+    const netPosition = roundMoney(totalRevenue - totalExpenses - totalPayroll);
 
     res.json({
       success: true,
       data: {
+        filters: {
+          filter,
+          from,
+          to,
+          branch,
+          startDate,
+          endDate,
+        },
         totalRevenue,
         outstandingRevenue,
         totalExpenses,
