@@ -309,25 +309,25 @@ const expireInactivePoints = async (req, res) => {
           date: new Date().toISOString().split("T")[0],
         });
 
-        if (req.user) {
-          await writeAuditLog({
-            req,
-            action: "EXPIRE_POINTS",
-            module: "Points History",
-            description: `Points expired for ${customer.name} (${customer.ekonId}) after inactivity`,
-            targetType: "Customer",
-            targetId: customer.ekonId,
-            metadata: {
-              expiredPoints,
-            },
-          });
-        }
-
         expiredCustomers += 1;
       }
     }
 
-    const deleteCustomer = async (req, res) => {
+    res.json({
+      success: true,
+      message: "Inactive points expiry check completed",
+      expiredCustomers,
+    });
+  } catch (error) {
+    console.error("Error expiring inactive points:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to process inactive points expiry",
+    });
+  }
+};
+
+const deleteCustomer = async (req, res) => {
   try {
     const { ekonId } = req.params;
 
@@ -340,7 +340,6 @@ const expireInactivePoints = async (req, res) => {
       });
     }
 
-    // ✅ SOFT DELETE (recommended)
     customer.status = "Deleted";
     await customer.save();
 
@@ -369,20 +368,6 @@ const expireInactivePoints = async (req, res) => {
   }
 };
 
-    res.json({
-      success: true,
-      message: "Inactive points expiry check completed",
-      expiredCustomers,
-    });
-  } catch (error) {
-    console.error("Error expiring inactive points:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to process inactive points expiry",
-    });
-  }
-};
-
 module.exports = {
   getCustomers,
   createCustomer,
@@ -390,5 +375,5 @@ module.exports = {
   resetCustomerPassword,
   getPointsHistory,
   expireInactivePoints,
-  deleteCustomer, // ✅ ADD THIS
+  deleteCustomer,
 };
