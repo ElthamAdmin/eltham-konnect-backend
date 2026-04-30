@@ -37,7 +37,17 @@ const getNotices = async (req, res) => {
 
 const createNotice = async (req, res) => {
   try {
-    const { title, message, category, priority, dueDate } = req.body;
+   const {
+  title,
+  message,
+  category,
+  priority,
+  dueDate,
+  noticeType,
+  signatureName,
+  signatureTitle,
+  stampText,
+} = req.body;
 
     if (!title || !message) {
       return res.status(400).json({
@@ -49,15 +59,22 @@ const createNotice = async (req, res) => {
     const userDetails = getUserDetails(req);
 
     const notice = await Notice.create({
-      title,
-      message,
-      category,
-      priority,
-      dueDate: dueDate || null,
-      imageFileName: req.file ? req.file.filename : "",
-      imageFilePath: req.file ? `/uploads/notice-board/${req.file.filename}` : "",
-      ...userDetails,
-    });
+  title,
+  message,
+  category,
+  priority,
+  dueDate: dueDate || null,
+
+  noticeType: noticeType || "Notice",
+  signatureName: signatureName || userDetails.postedByName,
+  signatureTitle: signatureTitle || userDetails.postedByRole,
+  stampText: stampText || "Eltham Konnect",
+
+  imageFileName: req.file ? req.file.filename : "",
+  imageFilePath: req.file ? `/uploads/notice-board/${req.file.filename}` : "",
+
+  ...userDetails,
+});
 
     res.status(201).json({
       success: true,

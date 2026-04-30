@@ -54,8 +54,31 @@ imageFilePath: {
   default: "",
 },
 
+noticeType: {
+  type: String,
+  enum: ["Notice", "Memorandum"],
+  default: "Notice",
+},
+
+signatureName: {
+  type: String,
+  default: "",
+},
+
+signatureTitle: {
+  type: String,
+  default: "",
+},
+
+stampText: {
+  type: String,
+  default: "Eltham Konnect",
+},
+
   },
   { timestamps: true }
 );
+
+
 
 module.exports = mongoose.model("Notice", NoticeSchema);
