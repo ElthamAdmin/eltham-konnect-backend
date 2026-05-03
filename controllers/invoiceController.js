@@ -423,6 +423,111 @@ const updateInvoicePaymentLink = async (req, res) => {
   }
 };
 
+const applyInvoicePointsAdjustment = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const pointsToRedeem = Number(req.body?.pointsToRedeem || 0);
+
+    if (!pointsToRedeem || pointsToRedeem <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a valid points amount.",
+      });
+    }
+
+    const invoice = await Invoice.findOne({ invoiceNumber });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found.",
+      });
+    }
+
+    if (invoice.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot adjust EK points after invoice is paid.",
+      });
+    }
+
+    const customer = await Customer.findOne({ ekonId: invoice.customerEkonId });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found.",
+      });
+    }
+
+    if (Number(customer.pointsBalance || 0) < 500) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer must have at least 500 EK points to redeem.",
+      });
+    }
+
+    if (pointsToRedeem > Number(customer.pointsBalance || 0)) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer does not have enough EK points.",
+      });
+    }
+
+    const currentFinalTotal = Number(invoice.finalTotal || 0);
+    const redeemAmount = Math.min(pointsToRedeem, currentFinalTotal);
+
+    invoice.pointsRedeemed = Number(invoice.pointsRedeemed || 0) + redeemAmount;
+    invoice.finalTotal = Math.max(0, currentFinalTotal - redeemAmount);
+
+    customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
+    customer.lastActivityDate = getJamaicaDateString();
+
+    await invoice.save();
+    await customer.save();
+
+    await createRedemptionHistory({ customer, invoice, redeemAmount });
+
+    await createCustomerNotification({
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      title: "EK Points Applied to Invoice",
+      message: `JMD ${redeemAmount.toLocaleString()} in EK Points was applied to invoice ${invoice.invoiceNumber}. New balance: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
+
+    await writeAuditLog({
+      req,
+      action: "APPLY_EK_POINTS_TO_INVOICE",
+      module: "Invoices",
+      description: `EK Points applied to invoice ${invoice.invoiceNumber}`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customerEkonId: customer.ekonId,
+        redeemAmount,
+        finalTotal: invoice.finalTotal,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "EK points applied successfully.",
+      data: invoice,
+      customer,
+    });
+  } catch (error) {
+    console.error("Error applying invoice points:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not apply EK points.",
+      error: error.message,
+    });
+  }
+};
+
 const markInvoicePaid = async (req, res) => {
   try {
     const { invoiceNumber } = req.params;
@@ -544,5 +649,6 @@ module.exports = {
   generateMultipleInvoice,
   getInvoices,
   updateInvoicePaymentLink,
+  applyInvoicePointsAdjustment,
   markInvoicePaid,
 };
