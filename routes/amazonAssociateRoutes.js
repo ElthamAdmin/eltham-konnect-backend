@@ -1,6 +1,4 @@
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
 const multer = require("multer");
 
 const router = express.Router();
@@ -15,25 +13,12 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
-const uploadDir = path.join(__dirname, "..", "uploads", "amazon-associate");
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const safeName = file.originalname.replace(/\s+/g, "-");
-    cb(null, `${Date.now()}-${safeName}`);
-  },
-});
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
-  const allowedExtensions = [".jpg", ".jpeg", ".png", ".webp"];
-  const ext = path.extname(file.originalname || "").toLowerCase();
+  const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
 
-  if (!allowedExtensions.includes(ext)) {
+  if (!allowedMimeTypes.includes(file.mimetype)) {
     return cb(new Error("Only JPG, JPEG, PNG, and WEBP images are allowed"));
   }
 
