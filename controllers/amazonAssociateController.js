@@ -1,12 +1,41 @@
 const AmazonAssociateItem = require("../models/AmazonAssociateItem");
-const path = require("path");
-const fs = require("fs");
+const cloudinary = require("cloudinary").v2;
 
-const createItemNumber = () => {
-  return `ASI-${Date.now()}`;
-};
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const createItemNumber = () => `ASI-${Date.now()}`;
 
 const normalizeString = (value) => String(value || "").trim();
+
+const uploadToCloudinary = (fileBuffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      {
+        folder: "eltham-konnect/amazon-associate",
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      }
+    );
+
+    stream.end(fileBuffer);
+  });
+};
+
+const deleteFromCloudinary = async (publicId) => {
+  if (!publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId);
+  } catch (error) {
+    console.error("Cloudinary delete failed:", error.message);
+  }
+};
 
 const getAllAssociateItems = async (req, res) => {
   try {
@@ -54,14 +83,8 @@ const getActiveAssociateItems = async (req, res) => {
 
 const createAssociateItem = async (req, res) => {
   try {
-    const {
-      title,
-      description,
-      affiliateLink,
-      buttonText,
-      sortOrder,
-      isActive,
-    } = req.body;
+    const { title, description, affiliateLink, buttonText, sortOrder, isActive } =
+      req.body;
 
     if (!title || !affiliateLink) {
       return res.status(400).json({
@@ -70,15 +93,21 @@ const createAssociateItem = async (req, res) => {
       });
     }
 
-    const imageUrl = req.file
-      ? `/uploads/amazon-associate/${req.file.filename}`
-      : "";
+    let imageUrl = "";
+    let imagePublicId = "";
+
+    if (req.file) {
+      const uploadResult = await uploadToCloudinary(req.file.buffer);
+      imageUrl = uploadResult.secure_url;
+      imagePublicId = uploadResult.public_id;
+    }
 
     const item = await AmazonAssociateItem.create({
       itemNumber: createItemNumber(),
       title: normalizeString(title),
       description: normalizeString(description),
       imageUrl,
+      imagePublicId,
       affiliateLink: normalizeString(affiliateLink),
       buttonText: normalizeString(buttonText) || "Shop on Amazon",
       sortOrder: Number(sortOrder || 0),
@@ -103,14 +132,8 @@ const createAssociateItem = async (req, res) => {
 const updateAssociateItem = async (req, res) => {
   try {
     const { itemNumber } = req.params;
-    const {
-      title,
-      description,
-      affiliateLink,
-      buttonText,
-      sortOrder,
-      isActive,
-    } = req.body;
+    const { title, description, affiliateLink, buttonText, sortOrder, isActive } =
+      req.body;
 
     const item = await AmazonAssociateItem.findOne({ itemNumber });
 
@@ -123,26 +146,21 @@ const updateAssociateItem = async (req, res) => {
 
     if (title !== undefined) item.title = normalizeString(title);
     if (description !== undefined) item.description = normalizeString(description);
-    if (affiliateLink !== undefined) item.affiliateLink = normalizeString(affiliateLink);
-    if (buttonText !== undefined) {
+    if (affiliateLink !== undefined)
+      item.affiliateLink = normalizeString(affiliateLink);
+    if (buttonText !== undefined)
       item.buttonText = normalizeString(buttonText) || "Shop on Amazon";
-    }
     if (sortOrder !== undefined) item.sortOrder = Number(sortOrder || 0);
     if (isActive !== undefined) {
       item.isActive = isActive === true || isActive === "true";
     }
 
     if (req.file) {
-      if (item.imageUrl) {
-        const oldFilename = item.imageUrl.split("/").pop();
-        const oldPath = path.join(__dirname, "..", "uploads", "amazon-associate", oldFilename);
+      await deleteFromCloudinary(item.imagePublicId);
 
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
-      }
-
-      item.imageUrl = `/uploads/amazon-associate/${req.file.filename}`;
+      const uploadResult = await uploadToCloudinary(req.file.buffer);
+      item.imageUrl = uploadResult.secure_url;
+      item.imagePublicId = uploadResult.public_id;
     }
 
     await item.save();
@@ -175,15 +193,7 @@ const deleteAssociateItem = async (req, res) => {
       });
     }
 
-    if (item.imageUrl) {
-      const filename = item.imageUrl.split("/").pop();
-      const filePath = path.join(__dirname, "..", "uploads", "amazon-associate", filename);
-
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    }
-
+    await deleteFromCloudinary(item.imagePublicId);
     await AmazonAssociateItem.deleteOne({ itemNumber });
 
     res.json({

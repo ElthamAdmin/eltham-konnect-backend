@@ -27,6 +27,12 @@ const AmazonAssociateItemSchema = new mongoose.Schema(
       trim: true,
     },
 
+    imagePublicId: {
+  type: String,
+  default: "",
+  trim: true,
+},
+
     affiliateLink: {
       type: String,
       required: true,
