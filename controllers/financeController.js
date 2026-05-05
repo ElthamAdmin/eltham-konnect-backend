@@ -609,29 +609,52 @@ const getFinanceSummary = async (req, res) => {
       branch = "",
     } = req.query;
 
-    const now = new Date();
-    let startDate = new Date();
-    let endDate = new Date();
+    const getJamaicaYMD = (date = new Date()) => {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Jamaica",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(date);
+    };
 
-    startDate.setHours(0, 0, 0, 0);
-    endDate.setHours(23, 59, 59, 999);
+    const makeJamaicaUtcStart = (ymd) => new Date(`${ymd}T05:00:00.000Z`);
+
+    const addDays = (date, days) => {
+      const copy = new Date(date);
+      copy.setUTCDate(copy.getUTCDate() + days);
+      return copy;
+    };
+
+    const jamaicaTodayYMD = getJamaicaYMD();
+
+    let startDate = makeJamaicaUtcStart(jamaicaTodayYMD);
+    let endDate = addDays(startDate, 1);
+    endDate = new Date(endDate.getTime() - 1);
 
     if (filter === "thisWeek") {
-      const day = startDate.getDay();
+      const day = new Date(`${jamaicaTodayYMD}T00:00:00`).getDay();
       const diff = day === 0 ? 6 : day - 1;
-      startDate.setDate(startDate.getDate() - diff);
+      startDate = addDays(startDate, -diff);
+      endDate = addDays(startDate, 7);
+      endDate = new Date(endDate.getTime() - 1);
     }
 
     if (filter === "thisMonth") {
-      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-      endDate.setHours(23, 59, 59, 999);
+      const [year, month] = jamaicaTodayYMD.split("-");
+      startDate = makeJamaicaUtcStart(`${year}-${month}-01`);
+
+      const nextMonthStart = new Date(startDate);
+      nextMonthStart.setUTCMonth(nextMonthStart.getUTCMonth() + 1);
+
+      endDate = new Date(nextMonthStart.getTime() - 1);
     }
 
     if (filter === "thisYear") {
-      startDate = new Date(now.getFullYear(), 0, 1);
-      endDate = new Date(now.getFullYear(), 11, 31);
-      endDate.setHours(23, 59, 59, 999);
+      const [year] = jamaicaTodayYMD.split("-");
+      startDate = makeJamaicaUtcStart(`${year}-01-01`);
+      endDate = makeJamaicaUtcStart(`${Number(year) + 1}-01-01`);
+      endDate = new Date(endDate.getTime() - 1);
     }
 
     if (filter === "allTime") {
@@ -640,8 +663,10 @@ const getFinanceSummary = async (req, res) => {
     }
 
     if (filter === "custom" && from && to) {
-      startDate = new Date(`${from}T00:00:00`);
-      endDate = new Date(`${to}T23:59:59.999`);
+      startDate = makeJamaicaUtcStart(from);
+      endDate = makeJamaicaUtcStart(to);
+      endDate = addDays(endDate, 1);
+      endDate = new Date(endDate.getTime() - 1);
     }
 
     const isWithinSummaryRange = (value) => {
@@ -669,8 +694,7 @@ const getFinanceSummary = async (req, res) => {
     });
 
     const unpaidInvoices = invoices.filter((inv) => {
-      const statusIsUnpaid =
-        String(inv.status || "").trim().toLowerCase() === "unpaid";
+      const statusIsUnpaid = String(inv.status || "").trim().toLowerCase() === "unpaid";
       const dateValue = inv.createdAt;
       return statusIsUnpaid && isWithinSummaryRange(dateValue) && branchMatches(inv);
     });
