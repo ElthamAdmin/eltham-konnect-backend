@@ -41,40 +41,70 @@ const getRequestUserDetails = (req) => {
 };
 
 const getDateRangeByFilter = (filter, customStartDate, customEndDate) => {
-  const today = getJamaicaNow();
-  today.setHours(0, 0, 0, 0);
+  const getJamaicaYMD = (date = new Date()) => {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Jamaica",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
+  };
 
-  const endOfToday = new Date(today);
-  endOfToday.setHours(23, 59, 59, 999);
+  const makeJamaicaUtcStart = (ymd) => new Date(`${ymd}T05:00:00.000Z`);
 
-  let startDate = new Date(today);
-  let endDate = new Date(endOfToday);
+  const addDays = (date, days) => {
+    const copy = new Date(date);
+    copy.setUTCDate(copy.getUTCDate() + days);
+    return copy;
+  };
+
+  const jamaicaTodayYMD = getJamaicaYMD();
+  let startDate = makeJamaicaUtcStart(jamaicaTodayYMD);
+  let endDate = addDays(startDate, 1);
+  endDate = new Date(endDate.getTime() - 1);
 
   switch (filter) {
     case "today":
       break;
 
     case "thisWeek": {
-      const day = startDate.getDay();
+      const jamaicaNow = makeJamaicaUtcStart(jamaicaTodayYMD);
+      const day = new Date(jamaicaTodayYMD + "T00:00:00").getDay();
       const diff = day === 0 ? 6 : day - 1;
-      startDate.setDate(startDate.getDate() - diff);
+      startDate = addDays(jamaicaNow, -diff);
+      endDate = addDays(startDate, 7);
+      endDate = new Date(endDate.getTime() - 1);
       break;
     }
 
-    case "thisMonth":
-      startDate = new Date(today.getFullYear(), today.getMonth(), 1);
-      break;
+    case "thisMonth": {
+      const [year, month] = jamaicaTodayYMD.split("-");
+      startDate = makeJamaicaUtcStart(`${year}-${month}-01`);
 
-    case "thisYear":
-      startDate = new Date(today.getFullYear(), 0, 1);
+      const nextMonthStart = new Date(startDate);
+      nextMonthStart.setUTCMonth(nextMonthStart.getUTCMonth() + 1);
+
+      endDate = new Date(nextMonthStart.getTime() - 1);
       break;
+    }
+
+    case "thisYear": {
+      const [year] = jamaicaTodayYMD.split("-");
+      startDate = makeJamaicaUtcStart(`${year}-01-01`);
+      endDate = makeJamaicaUtcStart(`${Number(year) + 1}-01-01`);
+      endDate = new Date(endDate.getTime() - 1);
+      break;
+    }
 
     case "custom":
       if (!customStartDate || !customEndDate) {
         throw new Error("Custom start date and end date are required");
       }
-      startDate = new Date(`${customStartDate}T00:00:00`);
-      endDate = new Date(`${customEndDate}T23:59:59.999`);
+
+      startDate = makeJamaicaUtcStart(customStartDate);
+      endDate = makeJamaicaUtcStart(customEndDate);
+      endDate = addDays(endDate, 1);
+      endDate = new Date(endDate.getTime() - 1);
       break;
 
     default:
