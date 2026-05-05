@@ -178,19 +178,18 @@ const getPackageWeightAnalysis = async (req, res) => {
       customEndDate
     );
 
-    const packages = await Package.find().sort({ dateReceived: -1, _id: -1 });
-
-    const filteredPackages = packages.filter((pkg) => {
-      const packageDate = normalizePackageDate(pkg.dateReceived || pkg.createdAt);
-      if (!packageDate) return false;
-      return packageDate >= startDate && packageDate <= endDate;
-    });
+    const packages = await Package.find({
+      status: { $ne: "Deleted" },
+      $or: [
+        { dateReceived: { $gte: startDate, $lte: endDate } },
+        { createdAt: { $gte: startDate, $lte: endDate } },
+      ],
+    }).sort({ dateReceived: -1, createdAt: -1 });
 
     const weightMap = {};
 
-    filteredPackages.forEach((pkg) => {
+    packages.forEach((pkg) => {
       const billedWeight = getBilledWeight(pkg.weight);
-
       if (billedWeight <= 0) return;
 
       if (!weightMap[billedWeight]) {
@@ -211,8 +210,8 @@ const getPackageWeightAnalysis = async (req, res) => {
         ...item,
         totalActualWeight: Number(item.totalActualWeight.toFixed(2)),
         percentageOfPackages:
-          filteredPackages.length > 0
-            ? Number(((item.packageCount / filteredPackages.length) * 100).toFixed(2))
+          packages.length > 0
+            ? Number(((item.packageCount / packages.length) * 100).toFixed(2))
             : 0,
       }));
 
@@ -230,7 +229,7 @@ const getPackageWeightAnalysis = async (req, res) => {
         filter,
         startDate,
         endDate,
-        totalPackages: filteredPackages.length,
+        totalPackages: packages.length,
         groupedWeights,
         mostCommonWeight,
       },
