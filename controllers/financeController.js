@@ -670,13 +670,21 @@ const getFinanceSummary = async (req, res) => {
     }
 
     const isWithinSummaryRange = (value) => {
-      if (!startDate || !endDate) return true;
+  if (!startDate || !endDate) return true;
+  if (!value) return false;
 
-      const date = normalizeDateValue(value);
-      if (!date) return false;
+  let date = null;
 
-      return date >= startDate && date <= endDate;
-    };
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    date = makeJamaicaUtcStart(value);
+  } else {
+    date = normalizeDateValue(value);
+  }
+
+  if (!date) return false;
+
+  return date >= startDate && date <= endDate;
+};
 
     const invoices = await Invoice.find();
     const expenses = await Expense.find();
