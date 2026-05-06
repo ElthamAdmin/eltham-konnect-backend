@@ -21,6 +21,38 @@ const getJamaicaDateString = (date = new Date()) => {
   return formatter.format(date);
 };
 
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const getInvoiceChargesFromBody = (body = {}) => ({
+  customsDuty: roundMoney(body.customsDuty),
+  gct: roundMoney(body.gct),
+  processingFee: roundMoney(body.processingFee),
+  otherAdjustment: roundMoney(body.otherAdjustment),
+  adjustmentNote: String(body.adjustmentNote || "").trim(),
+});
+
+const calculateInvoiceFinalTotal = ({
+  subtotal = 0,
+  customsDuty = 0,
+  gct = 0,
+  processingFee = 0,
+  otherAdjustment = 0,
+  pointsRedeemed = 0,
+}) => {
+  return Math.max(
+    0,
+    roundMoney(
+      Number(subtotal || 0) +
+        Number(customsDuty || 0) +
+        Number(gct || 0) +
+        Number(processingFee || 0) +
+        Number(otherAdjustment || 0) -
+        Number(pointsRedeemed || 0)
+    )
+  );
+};
+
 const createCustomerNotification = async ({
   customerEkonId,
   customerName,
@@ -133,7 +165,13 @@ const createInvoice = async (req, res) => {
       await customer.save();
     }
 
-    const finalTotal = subtotal - redeemAmount;
+    const invoiceCharges = getInvoiceChargesFromBody(req.body);
+
+const finalTotal = calculateInvoiceFinalTotal({
+  subtotal,
+  ...invoiceCharges,
+  pointsRedeemed: redeemAmount,
+});
 
     const invoice = await Invoice.create({
       invoiceNumber: `INV-${Date.now()}`,
@@ -142,6 +180,11 @@ const createInvoice = async (req, res) => {
       packageCount: ratedPackages.length,
       packages: ratedPackages,
       subtotal,
+      customsDuty: invoiceCharges.customsDuty,
+      gct: invoiceCharges.gct,
+      processingFee: invoiceCharges.processingFee,
+      otherAdjustment: invoiceCharges.otherAdjustment,
+      adjustmentNote: invoiceCharges.adjustmentNote,
       pointsRedeemed: redeemAmount,
       finalTotal,
       status: "Unpaid",
@@ -291,7 +334,13 @@ const generateMultipleInvoice = async (req, res) => {
       await customer.save();
     }
 
-    const finalTotal = subtotal - redeemAmount;
+    const invoiceCharges = getInvoiceChargesFromBody(req.body);
+
+const finalTotal = calculateInvoiceFinalTotal({
+  subtotal,
+  ...invoiceCharges,
+  pointsRedeemed: redeemAmount,
+});
 
     const invoice = await Invoice.create({
       invoiceNumber: `INV-${Date.now()}`,
@@ -478,7 +527,14 @@ const applyInvoicePointsAdjustment = async (req, res) => {
     const redeemAmount = Math.min(pointsToRedeem, currentFinalTotal);
 
     invoice.pointsRedeemed = Number(invoice.pointsRedeemed || 0) + redeemAmount;
-    invoice.finalTotal = Math.max(0, currentFinalTotal - redeemAmount);
+    invoice.finalTotal = calculateInvoiceFinalTotal({
+  subtotal: invoice.subtotal,
+  customsDuty: invoice.customsDuty,
+  gct: invoice.gct,
+  processingFee: invoice.processingFee,
+  otherAdjustment: invoice.otherAdjustment,
+  pointsRedeemed: invoice.pointsRedeemed,
+});
 
     customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
     customer.lastActivityDate = getJamaicaDateString();
@@ -523,6 +579,87 @@ const applyInvoicePointsAdjustment = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Could not apply EK points.",
+      error: error.message,
+    });
+  }
+};
+
+const updateInvoiceChargesAdjustment = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+
+    const invoice = await Invoice.findOne({ invoiceNumber });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Invoice not found.",
+      });
+    }
+
+    if (invoice.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot adjust charges after invoice is paid.",
+      });
+    }
+
+    const invoiceCharges = getInvoiceChargesFromBody(req.body);
+
+    invoice.customsDuty = invoiceCharges.customsDuty;
+    invoice.gct = invoiceCharges.gct;
+    invoice.processingFee = invoiceCharges.processingFee;
+    invoice.otherAdjustment = invoiceCharges.otherAdjustment;
+    invoice.adjustmentNote = invoiceCharges.adjustmentNote;
+
+    invoice.finalTotal = calculateInvoiceFinalTotal({
+      subtotal: invoice.subtotal,
+      customsDuty: invoice.customsDuty,
+      gct: invoice.gct,
+      processingFee: invoice.processingFee,
+      otherAdjustment: invoice.otherAdjustment,
+      pointsRedeemed: invoice.pointsRedeemed,
+    });
+
+    await invoice.save();
+
+    await createCustomerNotification({
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
+      title: "Invoice Charges Updated",
+      message: `Invoice ${invoice.invoiceNumber} was updated. New balance: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      type: "Invoice Update",
+      referenceType: "Invoice",
+      referenceId: invoice.invoiceNumber,
+    });
+
+    await writeAuditLog({
+      req,
+      action: "UPDATE_INVOICE_CHARGES",
+      module: "Invoices",
+      description: `Invoice charges updated for ${invoice.invoiceNumber}`,
+      targetType: "Invoice",
+      targetId: invoice.invoiceNumber,
+      metadata: {
+        customsDuty: invoice.customsDuty,
+        gct: invoice.gct,
+        processingFee: invoice.processingFee,
+        otherAdjustment: invoice.otherAdjustment,
+        adjustmentNote: invoice.adjustmentNote,
+        finalTotal: invoice.finalTotal,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Invoice charges updated successfully.",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Error updating invoice charges:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not update invoice charges.",
       error: error.message,
     });
   }
@@ -649,6 +786,7 @@ module.exports = {
   generateMultipleInvoice,
   getInvoices,
   updateInvoicePaymentLink,
+  updateInvoiceChargesAdjustment,
   applyInvoicePointsAdjustment,
   markInvoicePaid,
 };

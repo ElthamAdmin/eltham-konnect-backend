@@ -7,6 +7,7 @@ const {
   getInvoices,
   updateInvoicePaymentLink,
   markInvoicePaid,
+  updateInvoiceChargesAdjustment,
   applyInvoicePointsAdjustment,
 } = require("../controllers/invoiceController");
 
@@ -15,6 +16,7 @@ router.post("/", createInvoice);
 router.post("/generate-multiple", generateMultipleInvoice);
 router.put("/:invoiceNumber/payment-link", updateInvoicePaymentLink);
 router.put("/:invoiceNumber/apply-points", applyInvoicePointsAdjustment);
+router.put("/:invoiceNumber/charges", updateInvoiceChargesAdjustment);
 router.put("/pay/:invoiceNumber", markInvoicePaid);
 
 module.exports = router;

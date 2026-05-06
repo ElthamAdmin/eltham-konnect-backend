@@ -35,6 +35,31 @@ const InvoiceSchema = new mongoose.Schema({
     default: 0,
   },
 
+  customsDuty: {
+    type: Number,
+    default: 0,
+  },
+
+  gct: {
+    type: Number,
+    default: 0,
+  },
+
+  processingFee: {
+    type: Number,
+    default: 0,
+  },
+
+  otherAdjustment: {
+    type: Number,
+    default: 0,
+  },
+
+  adjustmentNote: {
+    type: String,
+    default: "",
+  },
+
   pointsRedeemed: {
     type: Number,
     default: 0,
