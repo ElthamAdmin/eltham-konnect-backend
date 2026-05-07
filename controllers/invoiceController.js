@@ -729,15 +729,15 @@ const markInvoicePaid = async (req, res) => {
     const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
 
     await Package.updateMany(
-      { trackingNumber: { $in: trackingNumbers } },
-      {
-        $set: {
-          status: "Delivered",
-          readyForPickup: false,
-          invoiceStatus: "Paid",
-        },
-      }
-    );
+  { trackingNumber: { $in: trackingNumbers } },
+  {
+    $set: {
+      status: "Ready for Pickup",
+      readyForPickup: true,
+      invoiceStatus: "Paid",
+    },
+  }
+);
 
     await createCustomerNotification({
       customerEkonId: invoice.customerEkonId,
