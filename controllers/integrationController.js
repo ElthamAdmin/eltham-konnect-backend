@@ -3,6 +3,7 @@ const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
 const IntegrationLog = require("../models/IntegrationLog");
+const UnmatchedPackage = require("../models/UnmatchedPackage");
 const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
 
@@ -37,6 +38,40 @@ const createIntegrationLog = async ({
     message,
     payload,
     errorDetails,
+  });
+};
+
+const createUnmatchedPackage = async ({
+  trackingNumber = "",
+  customerEkonId = "",
+  customerName = "",
+  courier = "",
+  weight = 0,
+  warehouseLocation = "",
+  dateReceived = null,
+  externalPackageId = "",
+  externalWarehouseId = "",
+  externalStatus = "",
+  integrationSource = "Freight Partner",
+  issueReason = "",
+  rawPayload = {},
+}) => {
+  return await UnmatchedPackage.create({
+    unmatchedNumber: `UNM-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    trackingNumber,
+    customerEkonId,
+    customerName,
+    courier,
+    weight: Number(weight || 0),
+    warehouseLocation,
+    dateReceived: dateReceived || new Date(),
+    externalPackageId,
+    externalWarehouseId,
+    externalStatus,
+    integrationSource,
+    issueReason,
+    status: "Pending Review",
+    rawPayload,
   });
 };
 
@@ -98,22 +133,71 @@ const receiveFreightPackage = async (req, res) => {
       integrationSource = req.integrationPartner?.partnerName || "Freight Partner",
     } = payload;
 
-    if (!trackingNumber || !customerEkonId) {
-      await createIntegrationLog({
-        source: req.integrationPartner?.partnerName || "Freight Partner",
-        status: "Failed",
-        trackingNumber,
-        customerEkonId,
-        message: "Missing tracking number or customer EKON ID.",
-        payload,
-        errorDetails: "trackingNumber and customerEkonId are required.",
-      });
+    if (!trackingNumber) {
+  await createIntegrationLog({
+    source: integrationSource,
+    status: "Failed",
+    trackingNumber,
+    customerEkonId,
+    message: "Missing tracking number.",
+    payload,
+    errorDetails: "trackingNumber is required.",
+  });
 
-      return res.status(400).json({
-        success: false,
-        message: "trackingNumber and customerEkonId are required.",
-      });
-    }
+  return res.status(400).json({
+    success: false,
+    message: "trackingNumber is required.",
+  });
+}
+
+if (!customerEkonId) {
+  const unmatched = await createUnmatchedPackage({
+    trackingNumber,
+    customerEkonId,
+    customerName,
+    courier,
+    weight,
+    warehouseLocation,
+    dateReceived,
+    externalPackageId,
+    externalWarehouseId,
+    externalStatus,
+    integrationSource,
+    issueReason: "Missing customer EKON ID.",
+    rawPayload: payload,
+  });
+
+  await createIntegrationLog({
+    source: integrationSource,
+    status: "Failed",
+    trackingNumber,
+    customerEkonId,
+    message: "Package saved to unmatched review queue because customer EKON ID is missing.",
+    payload,
+    errorDetails: "Missing customer EKON ID.",
+  });
+
+  await writeAuditLog({
+    req,
+    action: "CREATE_UNMATCHED_PACKAGE",
+    module: "Integrations",
+    description: `Unmatched package ${trackingNumber} saved for review due to missing EKON ID`,
+    targetType: "UnmatchedPackage",
+    targetId: unmatched.unmatchedNumber,
+    metadata: {
+      trackingNumber,
+      integrationSource,
+      issueReason: "Missing customer EKON ID.",
+    },
+  });
+
+  return res.status(202).json({
+    success: true,
+    needsReview: true,
+    message: "Package saved to unmatched review queue. Customer EKON ID is missing.",
+    data: unmatched,
+  });
+}
 
     const existingPackage = await Package.findOne({ trackingNumber });
 
@@ -137,21 +221,54 @@ const receiveFreightPackage = async (req, res) => {
     const customer = await Customer.findOne({ ekonId: customerEkonId });
 
     if (!customer) {
-      await createIntegrationLog({
-        source: req.integrationPartner?.partnerName || "Freight Partner",
-        status: "Failed",
-        trackingNumber,
-        customerEkonId,
-        message: "Customer EKON ID not found.",
-        payload,
-        errorDetails: `No customer found for ${customerEkonId}`,
-      });
+  const unmatched = await createUnmatchedPackage({
+    trackingNumber,
+    customerEkonId,
+    customerName,
+    courier,
+    weight,
+    warehouseLocation,
+    dateReceived,
+    externalPackageId,
+    externalWarehouseId,
+    externalStatus,
+    integrationSource,
+    issueReason: `Customer not found for EKON ID ${customerEkonId}.`,
+    rawPayload: payload,
+  });
 
-      return res.status(404).json({
-        success: false,
-        message: `Customer not found for EKON ID ${customerEkonId}.`,
-      });
-    }
+  await createIntegrationLog({
+    source: integrationSource,
+    status: "Failed",
+    trackingNumber,
+    customerEkonId,
+    message: "Package saved to unmatched review queue because customer was not found.",
+    payload,
+    errorDetails: `No customer found for ${customerEkonId}`,
+  });
+
+  await writeAuditLog({
+    req,
+    action: "CREATE_UNMATCHED_PACKAGE",
+    module: "Integrations",
+    description: `Unmatched package ${trackingNumber} saved for review due to invalid EKON ID ${customerEkonId}`,
+    targetType: "UnmatchedPackage",
+    targetId: unmatched.unmatchedNumber,
+    metadata: {
+      trackingNumber,
+      customerEkonId,
+      integrationSource,
+      issueReason: `Customer not found for EKON ID ${customerEkonId}.`,
+    },
+  });
+
+  return res.status(202).json({
+    success: true,
+    needsReview: true,
+    message: "Package saved to unmatched review queue. Customer could not be matched.",
+    data: unmatched,
+  });
+}
 
     const now = new Date();
 
