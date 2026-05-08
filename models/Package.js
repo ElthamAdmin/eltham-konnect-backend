@@ -23,6 +23,36 @@ const PackageSchema = new mongoose.Schema(
       default: "",
     },
 
+    integrationSource: {
+  type: String,
+  default: "",
+},
+
+externalWarehouseId: {
+  type: String,
+  default: "",
+},
+
+externalPackageId: {
+  type: String,
+  default: "",
+},
+
+externalStatus: {
+  type: String,
+  default: "",
+},
+
+lastExternalSyncAt: {
+  type: Date,
+  default: null,
+},
+
+syncNotes: {
+  type: String,
+  default: "",
+},
+
     weight: {
       type: Number,
       default: 0,

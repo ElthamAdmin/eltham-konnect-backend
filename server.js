@@ -51,6 +51,7 @@ const rewardsHubGameRoutes = require("./routes/rewardsHubGameRoutes");
 const rewardsHubLeaderboardRoutes = require("./routes/rewardsHubLeaderboardRoutes");
 const rewardsHubAnalyticsRoutes = require("./routes/rewardsHubAnalyticsRoutes");
 const teamHubRoutes = require("./routes/teamHubRoutes");
+const integrationRoutes = require("./routes/integrationRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -173,6 +174,7 @@ app.use("/api/rewards-hub-games", rewardsHubGameRoutes);
 app.use("/api/rewards-hub-leaderboard", rewardsHubLeaderboardRoutes);
 app.use("/api/rewards-hub-analytics", rewardsHubAnalyticsRoutes);
 app.use("/api/team-hub", teamHubRoutes);
+app.use("/api/integrations", integrationRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
