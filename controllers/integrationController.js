@@ -95,11 +95,12 @@ const receiveFreightPackage = async (req, res) => {
       externalPackageId = "",
       externalWarehouseId = "",
       externalStatus = "ARRIVED",
-      integrationSource = "Freight Partner",
+      integrationSource = req.integrationPartner?.partnerName || "Freight Partner",
     } = payload;
 
     if (!trackingNumber || !customerEkonId) {
       await createIntegrationLog({
+        source: req.integrationPartner?.partnerName || "Freight Partner",
         status: "Failed",
         trackingNumber,
         customerEkonId,
@@ -118,6 +119,7 @@ const receiveFreightPackage = async (req, res) => {
 
     if (existingPackage) {
       await createIntegrationLog({
+        source: req.integrationPartner?.partnerName || "Freight Partner",
         status: "Duplicate",
         trackingNumber,
         customerEkonId,
@@ -136,6 +138,7 @@ const receiveFreightPackage = async (req, res) => {
 
     if (!customer) {
       await createIntegrationLog({
+        source: req.integrationPartner?.partnerName || "Freight Partner",
         status: "Failed",
         trackingNumber,
         customerEkonId,
@@ -207,6 +210,7 @@ const receiveFreightPackage = async (req, res) => {
     });
 
     await createIntegrationLog({
+      source: integrationSource,
       status: "Success",
       trackingNumber,
       customerEkonId: customer.ekonId,

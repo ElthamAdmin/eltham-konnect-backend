@@ -53,6 +53,7 @@ const rewardsHubAnalyticsRoutes = require("./routes/rewardsHubAnalyticsRoutes");
 const teamHubRoutes = require("./routes/teamHubRoutes");
 const integrationRoutes = require("./routes/integrationRoutes");
 const integrationLogRoutes = require("./routes/integrationLogRoutes");
+const freightPartnerRoutes = require("./routes/freightPartnerRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -177,6 +178,7 @@ app.use("/api/rewards-hub-analytics", rewardsHubAnalyticsRoutes);
 app.use("/api/team-hub", teamHubRoutes);
 app.use("/api/integrations", integrationRoutes);
 app.use("/api/integration-logs", integrationLogRoutes);
+app.use("/api/freight-partners", freightPartnerRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 

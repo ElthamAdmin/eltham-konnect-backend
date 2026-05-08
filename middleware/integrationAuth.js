@@ -1,28 +1,50 @@
-const integrationAuth = (req, res, next) => {
-  const providedKey = req.headers["x-ekos-api-key"];
-  const expectedKey = process.env.FREIGHT_INTEGRATION_API_KEY;
+const FreightPartner = require("../models/FreightPartner");
 
-  if (!expectedKey) {
-    return res.status(500).json({
+const integrationAuth = async (req, res, next) => {
+  try {
+    const providedKey = req.headers["x-ekos-api-key"];
+
+    if (!providedKey) {
+      return res.status(401).json({
+        success: false,
+        message: "Missing integration API key.",
+      });
+    }
+
+    const partner = await FreightPartner.findOne({
+      apiKey: providedKey,
+      status: "Active",
+    });
+
+    const fallbackKey = process.env.FREIGHT_INTEGRATION_API_KEY;
+
+    if (!partner && providedKey !== fallbackKey) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or inactive integration API key.",
+      });
+    }
+
+    req.integrationPartner = partner || {
+      partnerName: "Legacy Freight Integration",
+      partnerNumber: "LEGACY",
+    };
+
+    req.user = {
+      userId: partner?.partnerNumber || "FREIGHT-INTEGRATION",
+      fullName: partner?.partnerName || "Freight Partner API",
+      role: "Integration",
+    };
+
+    next();
+  } catch (error) {
+    console.error("Integration auth error:", error);
+    res.status(500).json({
       success: false,
-      message: "Freight integration API key is not configured on the server.",
+      message: "Integration authentication failed.",
+      error: error.message,
     });
   }
-
-  if (!providedKey || providedKey !== expectedKey) {
-    return res.status(401).json({
-      success: false,
-      message: "Invalid or missing integration API key.",
-    });
-  }
-
-  req.user = {
-    userId: "FREIGHT-INTEGRATION",
-    fullName: "Freight Partner API",
-    role: "Integration",
-  };
-
-  next();
 };
 
 module.exports = integrationAuth;
