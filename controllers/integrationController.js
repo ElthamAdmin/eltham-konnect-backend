@@ -115,6 +115,265 @@ const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
   return pointsAwarded;
 };
 
+const fetchLtwPackagesPage = async ({ page = 1, limit = 25 }) => {
+  const baseUrl = process.env.LTW_API_BASE_URL;
+  const apiUrlSlug = process.env.LTW_API_URL_SLUG;
+  const apiToken = process.env.LTW_API_TOKEN;
+
+  if (!baseUrl || !apiUrlSlug || !apiToken) {
+    throw new Error("LTW API credentials are missing from environment variables.");
+  }
+
+  const url = `${baseUrl}/api/v1/shipments/${apiUrlSlug}/package?page=${page}&limit=${limit}&search=`;
+
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      "x-api": apiToken,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.message || "LTW API request failed.");
+  }
+
+  return data;
+};
+
+const syncLtwPackages = async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
+
+    const ltwData = await fetchLtwPackagesPage({ page, limit });
+    const ltwPackages = ltwData.packages || [];
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    let unmatchedCount = 0;
+    let failedCount = 0;
+
+    const results = [];
+
+    for (const ltwPkg of ltwPackages) {
+      try {
+        const trackingNumber = String(ltwPkg.tracking_number || "").trim();
+        const customerEkonId = String(ltwPkg.airWayBill || "").trim().toUpperCase();
+        const customerName = String(ltwPkg.consignee || "").trim();
+        const weight = Number(ltwPkg.weight || 0);
+        const courier = ltwPkg.description || "LTW";
+        const warehouseLocation = "LTW Warehouse";
+        const externalPackageId = ltwPkg.id || "";
+        const externalWarehouseId = ltwPkg.shipper_id || "";
+        const externalStatus = ltwPkg.current_status_id || "";
+        const dateReceived = ltwPkg.created_at || new Date();
+
+        if (!trackingNumber) {
+          failedCount += 1;
+          results.push({
+            status: "Failed",
+            reason: "Missing tracking number",
+            ltwPackageId: externalPackageId,
+          });
+          continue;
+        }
+
+        const existingPackage = await Package.findOne({ trackingNumber });
+
+        if (existingPackage) {
+          duplicateCount += 1;
+          results.push({
+            trackingNumber,
+            status: "Duplicate",
+            message: "Package already exists in EKOS.",
+          });
+          continue;
+        }
+
+        const existingUnmatched = await UnmatchedPackage.findOne({
+          trackingNumber,
+          status: "Pending Review",
+        });
+
+        if (existingUnmatched) {
+          duplicateCount += 1;
+          results.push({
+            trackingNumber,
+            status: "Duplicate Unmatched",
+            message: "Package already exists in unmatched review queue.",
+          });
+          continue;
+        }
+
+        const customer = customerEkonId
+          ? await Customer.findOne({ ekonId: customerEkonId })
+          : null;
+
+        if (!customer) {
+          await UnmatchedPackage.create({
+            unmatchedNumber: `UNM-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+            trackingNumber,
+            customerEkonId,
+            customerName,
+            courier,
+            weight,
+            warehouseLocation,
+            dateReceived,
+            externalPackageId,
+            externalWarehouseId,
+            externalStatus,
+            integrationSource: "LTW API",
+            issueReason: customerEkonId
+              ? `Customer not found for EKON ID ${customerEkonId}.`
+              : "Missing customer EKON ID from LTW airWayBill.",
+            status: "Pending Review",
+            rawPayload: ltwPkg,
+          });
+
+          unmatchedCount += 1;
+
+          await createIntegrationLog({
+            source: "LTW API",
+            status: "Failed",
+            trackingNumber,
+            customerEkonId,
+            message: "LTW package saved to unmatched review queue.",
+            payload: ltwPkg,
+            errorDetails: customerEkonId
+              ? `Customer not found for EKON ID ${customerEkonId}.`
+              : "Missing customer EKON ID from LTW airWayBill.",
+          });
+
+          results.push({
+            trackingNumber,
+            status: "Unmatched",
+            customerEkonId,
+          });
+
+          continue;
+        }
+
+        const now = new Date();
+
+        const newPackage = await Package.create({
+          trackingNumber,
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          courier,
+          weight,
+          status: "At Warehouse",
+          warehouseLocation,
+          invoiceStatus: "Pending",
+          readyForPickup: false,
+          readyForPickupDate: null,
+          statusUpdatedAt: now,
+          dateReceived,
+
+          integrationSource: "LTW API",
+          externalWarehouseId,
+          externalPackageId,
+          externalStatus,
+          lastExternalSyncAt: now,
+          syncNotes: "Created from LTW API sync.",
+
+          addedByUserId: "LTW-API-SYNC",
+          addedByName: "LTW API Sync",
+          addedByEmail: "",
+          addedByRole: "Integration",
+        });
+
+        const pointsAwarded = await awardWarehousePointsIfEligible(
+          customer,
+          newPackage,
+          req
+        );
+
+        await CustomerNotification.create({
+          notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          title: "Package Received at Warehouse",
+          message: `Your package ${newPackage.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
+          type: "Package Update",
+          referenceType: "Package",
+          referenceId: newPackage.trackingNumber,
+          isRead: false,
+          date: getJamaicaDateString(),
+        });
+
+        await createIntegrationLog({
+          source: "LTW API",
+          status: "Success",
+          trackingNumber,
+          customerEkonId: customer.ekonId,
+          message: "Package imported successfully from LTW API.",
+          payload: ltwPkg,
+        });
+
+        await writeAuditLog({
+          req,
+          action: "IMPORT_LTW_PACKAGE",
+          module: "Integrations",
+          description: `Package ${trackingNumber} imported from LTW API for ${customer.name}`,
+          targetType: "Package",
+          targetId: trackingNumber,
+          metadata: {
+            customerEkonId: customer.ekonId,
+            externalPackageId,
+            externalWarehouseId,
+            externalStatus,
+            pointsAwarded,
+          },
+        });
+
+        importedCount += 1;
+
+        results.push({
+          trackingNumber,
+          status: "Imported",
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          pointsAwarded,
+        });
+      } catch (itemError) {
+        failedCount += 1;
+
+        results.push({
+          trackingNumber: ltwPkg?.tracking_number || "",
+          status: "Failed",
+          error: itemError.message,
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: "LTW package sync completed.",
+      data: {
+        page,
+        limit,
+        totalReceivedFromLtw: ltwPackages.length,
+        importedCount,
+        duplicateCount,
+        unmatchedCount,
+        failedCount,
+        results,
+      },
+    });
+  } catch (error) {
+    console.error("LTW sync error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "LTW sync failed.",
+      error: error.message,
+    });
+  }
+};
+
 const receiveFreightPackage = async (req, res) => {
   const payload = req.body || {};
 
@@ -381,4 +640,5 @@ if (!customerEkonId) {
 
 module.exports = {
   receiveFreightPackage,
+  syncLtwPackages,
 };
