@@ -490,9 +490,26 @@ if (!customerEkonId) {
       });
     }
 
-    const customer = await Customer.findOne({ ekonId: customerEkonId });
+    let customer = await Customer.findOne({
+  ekonId: customerEkonId,
+});
 
-    if (!customer) {
+let customerMatchMethod = customer ? "EKON ID" : "";
+
+if (!customer && customerName) {
+  customer = await Customer.findOne({
+    name: {
+      $regex: `^${customerName.trim()}$`,
+      $options: "i",
+    },
+  });
+
+  if (customer) {
+    customerMatchMethod = "Customer Name";
+  }
+}
+
+if (!customer) {
   const unmatched = await createUnmatchedPackage({
     trackingNumber,
     customerEkonId,
@@ -514,7 +531,8 @@ if (!customerEkonId) {
     status: "Failed",
     trackingNumber,
     customerEkonId,
-    message: "Package saved to unmatched review queue because customer was not found.",
+    message:
+      "Package saved to unmatched review queue because customer was not found.",
     payload,
     errorDetails: `No customer found for ${customerEkonId}`,
   });
@@ -537,7 +555,8 @@ if (!customerEkonId) {
   return res.status(202).json({
     success: true,
     needsReview: true,
-    message: "Package saved to unmatched review queue. Customer could not be matched.",
+    message:
+      "Package saved to unmatched review queue. Customer could not be matched.",
     data: unmatched,
   });
 }
@@ -563,7 +582,7 @@ if (!customerEkonId) {
       externalPackageId,
       externalStatus,
       lastExternalSyncAt: now,
-      syncNotes: "Created from freight partner integration.",
+      syncNotes: `Created from freight partner integration. Matched by ${customerMatchMethod || "unknown method"}. Original EKON received: ${customerEkonId || "N/A"}.`,
 
       addedByUserId: "FREIGHT-INTEGRATION",
       addedByName: "Freight Partner API",
