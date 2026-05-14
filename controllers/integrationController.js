@@ -1,5 +1,6 @@
 const Package = require("../models/Package");
 const Customer = require("../models/Customer");
+const FreightPartner = require("../models/FreightPartner");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
 const IntegrationLog = require("../models/IntegrationLog");
@@ -638,7 +639,348 @@ if (!customerEkonId) {
   }
 };
 
+const splitCustomerNameForKP = (fullName = "") => {
+  const cleanName = String(fullName || "").trim();
+  const parts = cleanName.split(" ").filter(Boolean);
+
+  if (parts.length === 0) {
+    return { firstName: "", lastName: "" };
+  }
+
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+};
+
+const verifyKpPartnerKey = async (apiKey = "") => {
+  const cleanKey = String(apiKey || "").trim();
+
+  if (!cleanKey) return null;
+
+  return await FreightPartner.findOne({
+    apiKey: cleanKey,
+    status: "Active",
+  });
+};
+
+const getKpCustomers = async (req, res) => {
+  try {
+    const apiKey = req.query.id || req.query.apiToken;
+    const partner = await verifyKpPartnerKey(apiKey);
+
+    if (!partner) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized KP customer sync request.",
+      });
+    }
+
+    const customers = await Customer.find({
+      status: "Active",
+    }).sort({ createdAt: -1 });
+
+    const formattedCustomers = customers.map((customer) => {
+      const { firstName, lastName } = splitCustomerNameForKP(customer.name);
+
+      return {
+        UserCode: customer.ekonId,
+        FirstName: firstName,
+        LastName: lastName,
+        Branch: customer.branch || "Eltham Park",
+        CustomerServiceTypeID: "59cadcd4-7508-450b-85aa-9ec908d168fe",
+        CustomerLevelInstructions: "",
+        CourierServiceTypeID: "59cadcd4-7508-450b-85aa-9ec908d168fe",
+        CourierLevelInstructions: "",
+      };
+    });
+
+    partner.lastSyncAt = new Date();
+    await partner.save();
+
+    await createIntegrationLog({
+      source: partner.partnerName || "KP Logistics",
+      eventType: "CUSTOMER_SYNC",
+      status: "Success",
+      message: `KP pulled ${formattedCustomers.length} active EKOS customers.`,
+      payload: {
+        customerCount: formattedCustomers.length,
+      },
+    });
+
+    return res.json(formattedCustomers);
+  } catch (error) {
+    console.error("KP customer sync error:", error);
+
+    await createIntegrationLog({
+      source: "KP Logistics",
+      eventType: "CUSTOMER_SYNC",
+      status: "Failed",
+      message: "KP customer sync failed.",
+      errorDetails: error.message,
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: "KP customer sync failed.",
+      error: error.message,
+    });
+  }
+};
+
+const receiveKpPackages = async (req, res) => {
+  try {
+    const payload = req.body;
+
+    if (!Array.isArray(payload)) {
+      return res.status(400).json({
+        success: false,
+        message: "KP package payload must be an array.",
+      });
+    }
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    let unmatchedCount = 0;
+    let failedCount = 0;
+
+    const results = [];
+
+    for (const kpPackage of payload) {
+      try {
+        const apiKey = kpPackage.apiToken || req.query.id || req.query.apiToken;
+        const partner = await verifyKpPartnerKey(apiKey);
+
+        if (!partner) {
+          failedCount += 1;
+
+          results.push({
+            trackingNumber: kpPackage.trackingNumber || "",
+            status: "Failed",
+            message: "Unauthorized KP API key.",
+          });
+
+          continue;
+        }
+
+        const trackingNumber = String(kpPackage.trackingNumber || "").trim();
+        const customerEkonId = String(kpPackage.userCode || "").trim().toUpperCase();
+        const firstName = String(kpPackage.firstName || "").trim();
+        const lastName = String(kpPackage.lastName || "").trim();
+        const customerName = `${firstName} ${lastName}`.trim();
+        const weight = Number(kpPackage.weight || 0);
+        const now = new Date();
+
+        if (!trackingNumber) {
+          failedCount += 1;
+
+          await createIntegrationLog({
+            source: partner.partnerName || "KP Logistics",
+            eventType: "PACKAGE_ARRIVAL",
+            status: "Failed",
+            message: "KP package missing tracking number.",
+            payload: kpPackage,
+            errorDetails: "trackingNumber is required.",
+          });
+
+          results.push({
+            status: "Failed",
+            message: "Missing tracking number.",
+          });
+
+          continue;
+        }
+
+        const existingPackage = await Package.findOne({ trackingNumber });
+
+        if (existingPackage) {
+          duplicateCount += 1;
+
+          await createIntegrationLog({
+            source: partner.partnerName || "KP Logistics",
+            eventType: "PACKAGE_ARRIVAL",
+            status: "Duplicate",
+            trackingNumber,
+            customerEkonId,
+            message: "KP package already exists in EKOS. Duplicate ignored.",
+            payload: kpPackage,
+          });
+
+          results.push({
+            trackingNumber,
+            status: "Duplicate",
+            message: "Package already exists in EKOS.",
+          });
+
+          continue;
+        }
+
+        const customer = customerEkonId
+          ? await Customer.findOne({ ekonId: customerEkonId })
+          : null;
+
+        if (!customer) {
+          const unmatched = await createUnmatchedPackage({
+            trackingNumber,
+            customerEkonId,
+            customerName,
+            courier: "KP Logistics",
+            weight,
+            warehouseLocation: "KP Warehouse",
+            dateReceived: kpPackage.entryDateTime || kpPackage.entryDate || now,
+            externalPackageId: kpPackage.packageID || "",
+            externalWarehouseId: kpPackage.courierID || "KP",
+            externalStatus: kpPackage.claimed ? "CLAIMED" : "ARRIVED",
+            integrationSource: partner.partnerName || "KP Logistics",
+            issueReason: customerEkonId
+              ? `Customer not found for EKON ID ${customerEkonId}.`
+              : "Missing customer EKON ID from KP userCode.",
+            rawPayload: kpPackage,
+          });
+
+          unmatchedCount += 1;
+
+          await createIntegrationLog({
+            source: partner.partnerName || "KP Logistics",
+            eventType: "PACKAGE_ARRIVAL",
+            status: "Failed",
+            trackingNumber,
+            customerEkonId,
+            message: "KP package saved to unmatched review queue.",
+            payload: kpPackage,
+            errorDetails: customerEkonId
+              ? `Customer not found for EKON ID ${customerEkonId}.`
+              : "Missing customer EKON ID from KP userCode.",
+          });
+
+          results.push({
+            trackingNumber,
+            status: "Unmatched",
+            unmatchedNumber: unmatched.unmatchedNumber,
+            customerEkonId,
+          });
+
+          continue;
+        }
+
+        const newPackage = await Package.create({
+          trackingNumber,
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          courier: "KP Logistics",
+          weight,
+          status: "At Warehouse",
+          warehouseLocation: "KP Warehouse",
+          invoiceStatus: "Pending",
+          readyForPickup: false,
+          readyForPickupDate: null,
+          statusUpdatedAt: now,
+          dateReceived: kpPackage.entryDateTime || kpPackage.entryDate || now,
+
+          integrationSource: partner.partnerName || "KP Logistics",
+          externalWarehouseId: kpPackage.courierID || "KP",
+          externalPackageId: kpPackage.packageID || "",
+          externalStatus: kpPackage.claimed ? "CLAIMED" : "ARRIVED",
+          lastExternalSyncAt: now,
+          syncNotes: "Created from KP Logistics API push.",
+
+          addedByUserId: "KP-API",
+          addedByName: "KP Logistics API",
+          addedByEmail: "",
+          addedByRole: "Integration",
+        });
+
+        const pointsAwarded = await awardWarehousePointsIfEligible(
+          customer,
+          newPackage,
+          req
+        );
+
+        await CustomerNotification.create({
+          notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          title: "Package Received at Warehouse",
+          message: `Your package ${newPackage.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
+          type: "Package Update",
+          referenceType: "Package",
+          referenceId: newPackage.trackingNumber,
+          isRead: false,
+          date: getJamaicaDateString(),
+        });
+
+        await createIntegrationLog({
+          source: partner.partnerName || "KP Logistics",
+          eventType: "PACKAGE_ARRIVAL",
+          status: "Success",
+          trackingNumber,
+          customerEkonId: customer.ekonId,
+          message: "Package imported successfully from KP Logistics API.",
+          payload: kpPackage,
+        });
+
+        partner.lastSyncAt = new Date();
+        await partner.save();
+
+        importedCount += 1;
+
+        results.push({
+          trackingNumber,
+          status: "Imported",
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          pointsAwarded,
+        });
+      } catch (itemError) {
+        failedCount += 1;
+
+        results.push({
+          trackingNumber: kpPackage?.trackingNumber || "",
+          status: "Failed",
+          error: itemError.message,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "KP package sync completed.",
+      data: {
+        totalReceivedFromKp: payload.length,
+        importedCount,
+        duplicateCount,
+        unmatchedCount,
+        failedCount,
+        results,
+      },
+    });
+  } catch (error) {
+    console.error("KP package sync error:", error);
+
+    await createIntegrationLog({
+      source: "KP Logistics",
+      eventType: "PACKAGE_ARRIVAL",
+      status: "Failed",
+      message: "KP package sync failed.",
+      payload: req.body,
+      errorDetails: error.message,
+    });
+
+    return res.status(500).json({
+      success: false,
+      message: "KP package sync failed.",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   receiveFreightPackage,
   syncLtwPackages,
+  getKpCustomers,
+  receiveKpPackages,
 };
