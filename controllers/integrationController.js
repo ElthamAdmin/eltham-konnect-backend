@@ -209,9 +209,21 @@ const syncLtwPackages = async (req, res) => {
           continue;
         }
 
-        const customer = customerEkonId
-          ? await Customer.findOne({ ekonId: customerEkonId })
-          : null;
+        let customer = customerEkonId
+  ? await Customer.findOne({ ekonId: customerEkonId })
+  : null;
+
+let customerMatchMethod = customer ? "EKON ID" : "";
+
+if (!customer && customerName) {
+  customer = await Customer.findOne({
+    name: { $regex: `^${customerName.trim()}$`, $options: "i" },
+  });
+
+  if (customer) {
+    customerMatchMethod = "LTW consignee name";
+  }
+}
 
         if (!customer) {
           await UnmatchedPackage.create({
@@ -278,7 +290,7 @@ const syncLtwPackages = async (req, res) => {
           externalPackageId,
           externalStatus,
           lastExternalSyncAt: now,
-          syncNotes: "Created from LTW API sync.",
+          syncNotes: `Created from LTW API sync. Matched by ${customerMatchMethod || "unknown method"}. LTW airWayBill: ${customerEkonId || "N/A"}.`,
 
           addedByUserId: "LTW-API-SYNC",
           addedByName: "LTW API Sync",
