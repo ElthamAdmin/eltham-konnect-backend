@@ -732,9 +732,11 @@ const markInvoicePaid = async (req, res) => {
   { trackingNumber: { $in: trackingNumbers } },
   {
     $set: {
-      status: "Ready for Pickup",
-      readyForPickup: true,
+      status: "Delivered",
+      readyForPickup: false,
+      readyForPickupDate: null,
       invoiceStatus: "Paid",
+      statusUpdatedAt: now,
     },
   }
 );
@@ -781,6 +783,64 @@ const markInvoicePaid = async (req, res) => {
   }
 };
 
+const reconcilePaidInvoicePackages = async (req, res) => {
+  try {
+    const paidInvoices = await Invoice.find({ status: "Paid" });
+
+    let updatedPackages = 0;
+
+    for (const invoice of paidInvoices) {
+      const trackingNumbers = (invoice.packages || [])
+        .map((pkg) => pkg.trackingNumber)
+        .filter(Boolean);
+
+      if (trackingNumbers.length === 0) continue;
+
+      const result = await Package.updateMany(
+        { trackingNumber: { $in: trackingNumbers } },
+        {
+          $set: {
+            status: "Delivered",
+            readyForPickup: false,
+            readyForPickupDate: null,
+            invoiceStatus: "Paid",
+            statusUpdatedAt: new Date(),
+          },
+        }
+      );
+
+      updatedPackages += result.modifiedCount || 0;
+    }
+
+    await writeAuditLog({
+      req,
+      action: "RECONCILE_PAID_INVOICE_PACKAGES",
+      module: "Invoices",
+      description: `Reconciled paid invoice packages and marked them delivered`,
+      targetType: "Package",
+      targetId: "PAID-INVOICE-RECONCILE",
+      metadata: {
+        paidInvoiceCount: paidInvoices.length,
+        updatedPackages,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Paid invoice packages reconciled successfully.",
+      paidInvoiceCount: paidInvoices.length,
+      updatedPackages,
+    });
+  } catch (error) {
+    console.error("Reconcile paid invoice packages error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not reconcile paid invoice packages.",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   createInvoice,
   generateMultipleInvoice,
@@ -789,4 +849,5 @@ module.exports = {
   updateInvoiceChargesAdjustment,
   applyInvoicePointsAdjustment,
   markInvoicePaid,
+  reconcilePaidInvoicePackages,
 };
