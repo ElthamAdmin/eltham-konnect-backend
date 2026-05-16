@@ -9,6 +9,7 @@ const AccountTransaction = require("../models/AccountTransaction");
 const CustomerNotification = require("../models/CustomerNotification");
 const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
+const { postJournalEntry } = require("../utils/generalLedgerPoster");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -725,6 +726,32 @@ const markInvoicePaid = async (req, res) => {
       notes: `Invoice payment received for ${invoice.customerName}`,
       transactionDate: now,
     });
+
+    try {
+  await postJournalEntry({
+    entryDate: getJamaicaDateString(now),
+    memo: `Invoice payment received from ${invoice.customerName}`,
+    reference: invoice.invoiceNumber,
+    sourceModule: "Invoices",
+    createdBy: req.user?.fullName || "System User",
+    lines: [
+      {
+        accountCode: "1000",
+        debit: Number(invoice.finalTotal || 0),
+        credit: 0,
+        description: `Cash received for invoice ${invoice.invoiceNumber}`,
+      },
+      {
+        accountCode: "4000",
+        debit: 0,
+        credit: Number(invoice.finalTotal || 0),
+        description: `Revenue earned from invoice ${invoice.invoiceNumber}`,
+      },
+    ],
+  });
+} catch (ledgerError) {
+  console.error("Invoice journal posting failed:", ledgerError.message);
+}
 
     const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
 

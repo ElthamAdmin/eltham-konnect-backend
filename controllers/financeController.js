@@ -5,6 +5,7 @@ const HREmployee = require("../models/HREmployee");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
+const { postJournalEntry } = require("../utils/generalLedgerPoster");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -244,6 +245,32 @@ const createExpense = async (req, res) => {
         transactionDate: new Date(date),
       });
     }
+
+    try {
+  await postJournalEntry({
+    entryDate: date,
+    memo: `Expense payment: ${description}`,
+    reference: category,
+    sourceModule: "Expenses",
+    createdBy: req.user?.fullName || "System User",
+    lines: [
+      {
+        accountCode: "6000",
+        debit: numericAmount,
+        credit: 0,
+        description: `${category}: ${description}`,
+      },
+      {
+        accountCode: "1000",
+        debit: 0,
+        credit: numericAmount,
+        description: `Expense paid from ${account.accountName}`,
+      },
+    ],
+  });
+} catch (ledgerError) {
+  console.error("Expense journal posting failed:", ledgerError.message);
+}
 
     const receiptUrl = req.file
       ? `/uploads/expense-receipts/${req.file.filename}`
@@ -531,6 +558,32 @@ const createPayroll = async (req, res) => {
         transactionDate: new Date(),
       });
     }
+
+    try {
+  await postJournalEntry({
+    entryDate: new Date().toISOString().slice(0, 10),
+    memo: `Payroll payment for ${finalEmployeeName}`,
+    reference: `Payroll ${payPeriod}`,
+    sourceModule: "Payroll",
+    createdBy: req.user?.fullName || "System User",
+    lines: [
+      {
+        accountCode: "6100",
+        debit: Number(payrollBreakdown.netPay || 0),
+        credit: 0,
+        description: `Payroll expense for ${finalEmployeeName}`,
+      },
+      {
+        accountCode: "1000",
+        debit: 0,
+        credit: Number(payrollBreakdown.netPay || 0),
+        description: `Payroll paid from ${account.accountName}`,
+      },
+    ],
+  });
+} catch (ledgerError) {
+  console.error("Payroll journal posting failed:", ledgerError.message);
+}
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
