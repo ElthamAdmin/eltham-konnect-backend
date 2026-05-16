@@ -8,7 +8,16 @@ const {
   getBalanceSheet,
 } = require("../controllers/accountingController");
 
+const {
+  closeAccountingPeriod,
+} = require("../controllers/accountingPeriodController");
+
 router.get("/profit-loss", protect, getProfitAndLoss);
 router.get("/balance-sheet", protect, getBalanceSheet);
+router.post(
+  "/close-period",
+  protect,
+  closeAccountingPeriod
+);
 
 module.exports = router;
