@@ -721,8 +721,8 @@ const getKpApiKeyFromRequest = (req, item = {}) => {
 
 const getKpCustomers = async (req, res) => {
   try {
-    const apiKey = getKpApiKeyFromRequest(req);
-    const partner = await verifyKpPartnerKey(apiKey);
+    const partner =
+  req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req)));
 
     if (!partner) {
       return res.status(401).json({
@@ -803,8 +803,8 @@ const receiveKpPackages = async (req, res) => {
 
     for (const kpPackage of payload) {
       try {
-        const apiKey = getKpApiKeyFromRequest(req, kpPackage);
-        const partner = await verifyKpPartnerKey(apiKey);
+        const partner =
+  req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req, kpPackage)));
 
         if (!partner) {
           failedCount += 1;
