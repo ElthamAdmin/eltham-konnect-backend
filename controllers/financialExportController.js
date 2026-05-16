@@ -1,6 +1,6 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
 const JournalEntry = require("../models/JournalEntry");
-const GeneralLedger = require("../models/GeneralLedger");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const Expense = require("../models/Expense");
 const Payroll = require("../models/Payroll");
 const Invoice = require("../models/Invoice");
@@ -69,13 +69,13 @@ const exportTrialBalance = async (req, res) => {
 
 const exportGeneralLedger = async (req, res) => {
   try {
-    const ledger = await GeneralLedger.find().sort({
-      createdAt: -1,
-    });
+    const ledger = await GeneralLedgerTransaction.find().sort({
+  createdAt: -1,
+});
 
     const rows = ledger.map((entry) => [
       entry.entryDate,
-      entry.journalEntryNumber,
+      entry.entryNumber,
       entry.accountCode,
       entry.accountName,
       entry.accountCategory,
