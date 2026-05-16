@@ -52,6 +52,7 @@ const rewardsHubLeaderboardRoutes = require("./routes/rewardsHubLeaderboardRoute
 const rewardsHubAnalyticsRoutes = require("./routes/rewardsHubAnalyticsRoutes");
 const teamHubRoutes = require("./routes/teamHubRoutes");
 const integrationRoutes = require("./routes/integrationRoutes");
+const chartOfAccountsRoutes = require("./routes/chartOfAccountsRoutes");
 const debtManagerRoutes = require("./routes/debtManagerRoutes");
 const unmatchedPackageRoutes = require("./routes/unmatchedPackageRoutes");
 const integrationLogRoutes = require("./routes/integrationLogRoutes");
@@ -179,6 +180,7 @@ app.use("/api/rewards-hub-leaderboard", rewardsHubLeaderboardRoutes);
 app.use("/api/rewards-hub-analytics", rewardsHubAnalyticsRoutes);
 app.use("/api/team-hub", teamHubRoutes);
 app.use("/api/integrations", integrationRoutes);
+app.use("/api/chart-of-accounts", chartOfAccountsRoutes);
 app.use("/api/debt-manager", debtManagerRoutes);
 app.use("/api/unmatched-packages", unmatchedPackageRoutes);
 app.use("/api/integration-logs", integrationLogRoutes);
