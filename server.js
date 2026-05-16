@@ -207,6 +207,10 @@ app.use(
   "/api/fiscal-years",
   require("./routes/fiscalYearRoutes")
 );
+app.use(
+  "/api/corporate-profile",
+  require("./routes/corporateProfileRoutes")
+);
 app.use("/api/accounts-payable", accountsPayableRoutes);
 app.use("/api/banking", bankingRoutes);
 app.use("/api/debt-manager", debtManagerRoutes);
