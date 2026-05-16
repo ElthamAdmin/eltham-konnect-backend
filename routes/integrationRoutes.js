@@ -19,7 +19,7 @@ router.post("/kp/packages", receiveKpPackages);
 router.get(
   "/ltw/sync-packages",
   protect,
-  requirePermission("users"),
+  requirePermission("integrations"),
   syncLtwPackages
 );
 
