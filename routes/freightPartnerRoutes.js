@@ -10,9 +10,9 @@ const {
   rotateFreightPartnerApiKey,
 } = require("../controllers/freightPartnerController");
 
-router.get("/", protect, requirePermission("users"), getFreightPartners);
-router.post("/", protect, requirePermission("users"), createFreightPartner);
-router.put("/:partnerNumber", protect, requirePermission("users"), updateFreightPartner);
-router.put("/:partnerNumber/rotate-key", protect, requirePermission("users"), rotateFreightPartnerApiKey);
+router.get("/", protect, requirePermission("freightPartners"), getFreightPartners);
+router.post("/", protect, requirePermission("freightPartners"), createFreightPartner);
+router.put("/:partnerNumber", protect, requirePermission("freightPartners"), updateFreightPartner);
+router.put("/:partnerNumber/rotate-key", protect, requirePermission("freightPartners"), rotateFreightPartnerApiKey);
 
 module.exports = router;

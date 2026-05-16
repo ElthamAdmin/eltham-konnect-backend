@@ -688,8 +688,14 @@ const splitCustomerNameForKP = (fullName = "") => {
   };
 };
 
+const cleanBearerToken = (value = "") => {
+  return String(value || "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+};
+
 const verifyKpPartnerKey = async (apiKey = "") => {
-  const cleanKey = String(apiKey || "").trim();
+  const cleanKey = cleanBearerToken(apiKey);
 
   if (!cleanKey) return null;
 
@@ -699,9 +705,23 @@ const verifyKpPartnerKey = async (apiKey = "") => {
   });
 };
 
+const getKpApiKeyFromRequest = (req, item = {}) => {
+  return (
+    req.query.id ||
+    req.query.apiToken ||
+    item.apiToken ||
+    item.ApiToken ||
+    item.token ||
+    req.headers.authorization ||
+    req.headers.Authorization ||
+    req.headers["x-api-key"] ||
+    ""
+  );
+};
+
 const getKpCustomers = async (req, res) => {
   try {
-    const apiKey = req.query.id || req.query.apiToken;
+    const apiKey = getKpApiKeyFromRequest(req);
     const partner = await verifyKpPartnerKey(apiKey);
 
     if (!partner) {
@@ -783,7 +803,7 @@ const receiveKpPackages = async (req, res) => {
 
     for (const kpPackage of payload) {
       try {
-        const apiKey = kpPackage.apiToken || req.query.id || req.query.apiToken;
+        const apiKey = getKpApiKeyFromRequest(req, kpPackage);
         const partner = await verifyKpPartnerKey(apiKey);
 
         if (!partner) {
