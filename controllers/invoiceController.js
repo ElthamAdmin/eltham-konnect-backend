@@ -10,6 +10,7 @@ const CustomerNotification = require("../models/CustomerNotification");
 const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
 const { postJournalEntry } = require("../utils/generalLedgerPoster");
+const ChartOfAccount = require("../models/ChartOfAccount");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -214,6 +215,51 @@ await Package.updateMany(
       referenceId: invoice.invoiceNumber,
     });
 
+    const accountsReceivableAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "1100",
+  });
+
+const revenueAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "4000",
+  });
+
+if (
+  accountsReceivableAccount &&
+  revenueAccount
+) {
+  await postJournalEntry({
+    entryDate: getJamaicaDateString(),
+    memo: `Invoice created for ${invoice.customerName}`,
+    reference: invoice.invoiceNumber,
+    sourceModule: "Invoices",
+    createdBy: req.user?.name || "System User",
+    lines: [
+      {
+        accountCode:
+          accountsReceivableAccount.accountCode,
+        accountName:
+          accountsReceivableAccount.accountName,
+        debit: Number(invoice.finalTotal || 0),
+        credit: 0,
+        description:
+          "Customer invoice receivable",
+      },
+      {
+        accountCode:
+          revenueAccount.accountCode,
+        accountName:
+          revenueAccount.accountName,
+        debit: 0,
+        credit: Number(invoice.finalTotal || 0),
+        description:
+          "Shipping revenue earned",
+      },
+    ],
+  });
+}
+
     await writeAuditLog({
       req,
       action: "CREATE_INVOICE",
@@ -375,6 +421,51 @@ const finalTotal = calculateInvoiceFinalTotal({
       referenceType: "Invoice",
       referenceId: invoice.invoiceNumber,
     });
+
+    const accountsReceivableAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "1100",
+  });
+
+const revenueAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "4000",
+  });
+
+if (
+  accountsReceivableAccount &&
+  revenueAccount
+) {
+  await postJournalEntry({
+    entryDate: getJamaicaDateString(),
+    memo: `Invoice created for ${invoice.customerName}`,
+    reference: invoice.invoiceNumber,
+    sourceModule: "Invoices",
+    createdBy: req.user?.name || "System User",
+    lines: [
+      {
+        accountCode:
+          accountsReceivableAccount.accountCode,
+        accountName:
+          accountsReceivableAccount.accountName,
+        debit: Number(invoice.finalTotal || 0),
+        credit: 0,
+        description:
+          "Customer invoice receivable",
+      },
+      {
+        accountCode:
+          revenueAccount.accountCode,
+        accountName:
+          revenueAccount.accountName,
+        debit: 0,
+        credit: Number(invoice.finalTotal || 0),
+        description:
+          "Shipping revenue earned",
+      },
+    ],
+  });
+}
 
     await writeAuditLog({
       req,
@@ -726,6 +817,49 @@ const markInvoicePaid = async (req, res) => {
       notes: `Invoice payment received for ${invoice.customerName}`,
       transactionDate: now,
     });
+
+    const accountsReceivableAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "1100",
+  });
+
+const cashAccount =
+  await ChartOfAccount.findOne({
+    accountCode: "1000",
+  });
+
+if (
+  accountsReceivableAccount &&
+  cashAccount
+) {
+  await postJournalEntry({
+    entryDate: getJamaicaDateString(),
+    memo: `Invoice payment received from ${invoice.customerName}`,
+    reference: invoice.invoiceNumber,
+    sourceModule: "Invoices",
+    createdBy: req.user?.name || "System User",
+    lines: [
+      {
+        accountCode: cashAccount.accountCode,
+        accountName: cashAccount.accountName,
+        debit: Number(invoice.finalTotal || 0),
+        credit: 0,
+        description:
+          "Cash received from customer",
+      },
+      {
+        accountCode:
+          accountsReceivableAccount.accountCode,
+        accountName:
+          accountsReceivableAccount.accountName,
+        debit: 0,
+        credit: Number(invoice.finalTotal || 0),
+        description:
+          "Customer receivable cleared",
+      },
+    ],
+  });
+}
 
     try {
   await postJournalEntry({
