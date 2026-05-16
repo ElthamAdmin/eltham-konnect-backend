@@ -1,9 +1,5 @@
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
-const Expense = require("../models/Expense");
-const Payroll = require("../models/Payroll");
-const DebtAccount = require("../models/DebtAccount");
-const CashFlowSnapshot = require("../models/CashFlowSnapshot");
 
 const getCashFlowStatement = async (req, res) => {
   try {
@@ -22,53 +18,35 @@ const getCashFlowStatement = async (req, res) => {
       const amount = Number(trx.amount || 0);
 
       // OPERATING ACTIVITIES
-      if (
-        trx.transactionType === "Invoice Payment"
-      ) {
+      if (trx.transactionType === "Invoice Payment") {
         operatingInflows += amount;
       }
 
       if (
-        trx.transactionType === "Expense Payment"
-      ) {
-        operatingOutflows += amount;
-      }
-
-      if (
+        trx.transactionType === "Expense Payment" ||
         trx.transactionType === "Payroll Payment"
       ) {
         operatingOutflows += amount;
       }
 
       // FINANCING ACTIVITIES
-      if (
-        trx.transactionType === "Loan Received"
-      ) {
+      if (trx.transactionType === "Loan Received") {
         financingInflows += amount;
       }
 
       if (
-        trx.transactionType === "Loan Payment"
-      ) {
-        financingOutflows += amount;
-      }
-
-      if (
+        trx.transactionType === "Loan Payment" ||
         trx.transactionType === "Credit Card Payment"
       ) {
         financingOutflows += amount;
       }
 
       // INVESTING ACTIVITIES
-      if (
-        trx.transactionType === "Asset Purchase"
-      ) {
+      if (trx.transactionType === "Asset Purchase") {
         investingOutflows += amount;
       }
 
-      if (
-        trx.transactionType === "Asset Sale"
-      ) {
+      if (trx.transactionType === "Asset Sale") {
         investingInflows += amount;
       }
     }
@@ -90,42 +68,41 @@ const getCashFlowStatement = async (req, res) => {
       0
     );
 
-    const statement = {
-      operatingActivities: {
-        inflows: operatingInflows,
-        outflows: operatingOutflows,
-        net: netOperatingCashFlow,
-      },
-
-      investingActivities: {
-        inflows: investingInflows,
-        outflows: investingOutflows,
-        net: netInvestingCashFlow,
-      },
-
-      financingActivities: {
-        inflows: financingInflows,
-        outflows: financingOutflows,
-        net: netFinancingCashFlow,
-      },
-
-      openingCashBalance: 0,
-
-      closingCashBalance: totalCashBalance,
-
-      netCashMovement:
-        netOperatingCashFlow +
-        netInvestingCashFlow +
-        netFinancingCashFlow,
-    };
-
     res.json({
       success: true,
-      data: statement,
+
+      data: {
+        operatingActivities: {
+          inflows: operatingInflows,
+          outflows: operatingOutflows,
+          net: netOperatingCashFlow,
+        },
+
+        investingActivities: {
+          inflows: investingInflows,
+          outflows: investingOutflows,
+          net: netInvestingCashFlow,
+        },
+
+        financingActivities: {
+          inflows: financingInflows,
+          outflows: financingOutflows,
+          net: netFinancingCashFlow,
+        },
+
+        openingCashBalance: 0,
+
+        closingCashBalance: totalCashBalance,
+
+        netCashMovement:
+          netOperatingCashFlow +
+          netInvestingCashFlow +
+          netFinancingCashFlow,
+      },
     });
   } catch (error) {
     console.error(
-      "Error generating cash flow statement:",
+      "Cash Flow Statement Error:",
       error
     );
 
