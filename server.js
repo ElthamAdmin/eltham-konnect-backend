@@ -203,6 +203,10 @@ app.use("/api/fixed-assets", fixedAssetRoutes);
 app.use("/api/tax-center", taxCenterRoutes);
 app.use("/api/budgets", budgetRoutes);
 app.use("/api/accounting-periods", accountingPeriodManagementRoutes);
+app.use(
+  "/api/fiscal-years",
+  require("./routes/fiscalYearRoutes")
+);
 app.use("/api/accounts-payable", accountsPayableRoutes);
 app.use("/api/banking", bankingRoutes);
 app.use("/api/debt-manager", debtManagerRoutes);
