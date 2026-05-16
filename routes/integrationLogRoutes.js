@@ -7,6 +7,6 @@ const {
   getIntegrationLogs,
 } = require("../controllers/integrationLogController");
 
-router.get("/", protect, requirePermission("users"), getIntegrationLogs);
+router.get("/", protect, requirePermission("integrations"), getIntegrationLogs);
 
 module.exports = router;
