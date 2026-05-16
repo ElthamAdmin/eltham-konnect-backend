@@ -1,8 +1,23 @@
 const FreightPartner = require("../models/FreightPartner");
 
+const cleanBearerToken = (value = "") => {
+  return String(value || "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+};
+
 const integrationAuth = async (req, res, next) => {
   try {
-    const providedKey = req.headers["x-ekos-api-key"];
+    const providedKey = cleanBearerToken(
+      req.headers.authorization ||
+        req.headers.Authorization ||
+        req.headers["x-ekos-api-key"] ||
+        req.headers["x-api-key"] ||
+        req.headers["x-api"] ||
+        req.query.id ||
+        req.query.apiToken ||
+        ""
+    );
 
     if (!providedKey) {
       return res.status(401).json({
