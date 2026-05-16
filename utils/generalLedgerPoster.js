@@ -1,5 +1,6 @@
 const JournalEntry = require("../models/JournalEntry");
 const ChartOfAccount = require("../models/ChartOfAccount");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -31,19 +32,20 @@ const postJournalEntry = async ({
     throw new Error("Journal entry is not balanced.");
   }
 
+  const entryNumber = `JE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const preparedLines = [];
+
   for (const line of lines) {
     const account = await ChartOfAccount.findOne({
       accountCode: line.accountCode,
     });
 
     if (!account) {
-      throw new Error(
-        `Chart account ${line.accountCode} not found`
-      );
+      throw new Error(`Chart account ${line.accountCode} not found`);
     }
 
-    const debit = Number(line.debit || 0);
-    const credit = Number(line.credit || 0);
+    const debit = roundMoney(line.debit);
+    const credit = roundMoney(line.credit);
 
     let updatedBalance = Number(account.currentBalance || 0);
 
@@ -56,12 +58,22 @@ const postJournalEntry = async ({
     }
 
     account.currentBalance = roundMoney(updatedBalance);
-
     await account.save();
+
+    preparedLines.push({
+      accountCode: account.accountCode,
+      accountName: account.accountName,
+      debit,
+      credit,
+      description: line.description || "",
+      accountCategory: account.accountCategory,
+      normalBalance: account.normalBalance,
+      runningBalance: account.currentBalance,
+    });
   }
 
   const entry = await JournalEntry.create({
-    entryNumber: `JE-${Date.now()}`,
+    entryNumber,
     entryDate,
     memo,
     reference,
@@ -70,8 +82,33 @@ const postJournalEntry = async ({
     totalDebit,
     totalCredit,
     status: "Posted",
-    lines,
+    lines: preparedLines.map((line) => ({
+      accountCode: line.accountCode,
+      accountName: line.accountName,
+      debit: line.debit,
+      credit: line.credit,
+      description: line.description,
+    })),
   });
+
+  for (const line of preparedLines) {
+    await GeneralLedgerTransaction.create({
+      ledgerNumber: `GL-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+      entryNumber,
+      entryDate,
+      accountCode: line.accountCode,
+      accountName: line.accountName,
+      accountCategory: line.accountCategory,
+      normalBalance: line.normalBalance,
+      debit: line.debit,
+      credit: line.credit,
+      runningBalance: line.runningBalance,
+      reference,
+      sourceModule,
+      memo,
+      description: line.description,
+    });
+  }
 
   return entry;
 };
