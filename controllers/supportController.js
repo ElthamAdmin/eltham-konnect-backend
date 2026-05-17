@@ -40,7 +40,13 @@ const createTicket = async (req, res) => {
       customerName = user.name;
     }
 
-    const { subject, message } = req.body;
+        const {
+      subject,
+      message,
+      priority,
+      category,
+      assignedTo,
+    } = req.body;
 
     if (!customerEkonId || !customerName || !subject || !message) {
       return res.status(400).json({
@@ -59,8 +65,14 @@ const createTicket = async (req, res) => {
       attachmentFilePath: req.file
         ? `/uploads/support-attachments/${req.file.filename}`
         : "",
-      replies: [],
+            replies: [],
       status: "Open",
+      priority: priority || "Medium",
+      category: category || "General",
+      assignedTo: assignedTo || "",
+      escalationLevel: "None",
+      reopenedCount: 0,
+      customerSatisfaction: 0,
       date: new Date().toISOString().split("T")[0],
     });
 
@@ -126,8 +138,22 @@ const addReplyToTicket = async (req, res) => {
       createdAt: new Date(),
     });
 
+        if (
+      !isCustomer &&
+      !ticket.firstResponseAt
+    ) {
+      const responseTime =
+        Math.round(
+          (new Date() - new Date(ticket.createdAt)) / 60000
+        );
+
+      ticket.firstResponseAt = new Date();
+      ticket.firstResponseMinutes = responseTime;
+    }
+
     if (ticket.status === "Closed" || ticket.status === "Resolved") {
       ticket.status = "In Progress";
+      ticket.reopenedCount += 1;
     }
 
     await ticket.save();
@@ -183,7 +209,20 @@ const updateTicketStatus = async (req, res) => {
       });
     }
 
-    ticket.status = status;
+        ticket.status = status;
+
+    if (
+      (status === "Resolved" || status === "Closed") &&
+      !ticket.resolvedAt
+    ) {
+      const resolutionTime =
+        Math.round(
+          (new Date() - new Date(ticket.createdAt)) / 60000
+        );
+
+      ticket.resolvedAt = new Date();
+      ticket.resolutionMinutes = resolutionTime;
+    }
     await ticket.save();
 
     res.json({

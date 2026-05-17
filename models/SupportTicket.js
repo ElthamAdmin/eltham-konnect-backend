@@ -65,14 +65,64 @@ const SupportTicketSchema = new mongoose.Schema({
     type: [SupportReplySchema],
     default: [],
   },
-  status: {
+    status: {
     type: String,
+    enum: ["Open", "In Progress", "Resolved", "Closed"],
     default: "Open",
   },
-  date: {
+
+  priority: {
     type: String,
-    default: () => new Date().toISOString().split("T")[0],
+    enum: ["Low", "Medium", "High", "Critical"],
+    default: "Medium",
   },
+
+  category: {
+    type: String,
+    default: "General",
+  },
+
+  assignedTo: {
+    type: String,
+    default: "",
+  },
+
+  firstResponseAt: {
+    type: Date,
+    default: null,
+  },
+
+  firstResponseMinutes: {
+    type: Number,
+    default: 0,
+  },
+
+  resolvedAt: {
+    type: Date,
+    default: null,
+  },
+
+  resolutionMinutes: {
+    type: Number,
+    default: 0,
+  },
+
+  reopenedCount: {
+    type: Number,
+    default: 0,
+  },
+
+  customerSatisfaction: {
+    type: Number,
+    default: 0,
+  },
+
+  escalationLevel: {
+    type: String,
+    enum: ["None", "Supervisor", "Management", "Critical"],
+    default: "None",
+  },
+
   createdAt: {
     type: Date,
     default: Date.now,
