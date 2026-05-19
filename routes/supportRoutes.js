@@ -9,6 +9,11 @@ const {
   createTicket,
   addReplyToTicket,
   updateTicketStatus,
+  getSupportStaff,
+  assignTicket,
+  addInternalNote,
+  updateCustomerSatisfaction,
+  reopenTicket,
 } = require("../controllers/supportController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -49,8 +54,13 @@ const upload = multer({
 });
 
 router.get("/", protect, getTickets);
+router.get("/staff", protect, getSupportStaff);
 router.post("/", protect, upload.single("attachmentFile"), createTicket);
 router.post("/:ticketNumber/reply", protect, upload.single("attachmentFile"), addReplyToTicket);
 router.put("/:ticketNumber/status", protect, updateTicketStatus);
+router.put("/:ticketNumber/assign", protect, assignTicket);
+router.post("/:ticketNumber/internal-note", protect, addInternalNote);
+router.put("/:ticketNumber/satisfaction", protect, updateCustomerSatisfaction);
+router.put("/:ticketNumber/reopen", protect, reopenTicket);
 
 module.exports = router;

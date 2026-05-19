@@ -31,6 +31,24 @@ const SupportReplySchema = new mongoose.Schema(
   { _id: true }
 );
 
+const InternalNoteSchema = new mongoose.Schema(
+  {
+    note: {
+      type: String,
+      required: true,
+    },
+    addedBy: {
+      type: String,
+      default: "",
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: true }
+);
+
 const SupportTicketSchema = new mongoose.Schema({
   ticketNumber: {
     type: String,
@@ -83,6 +101,36 @@ const SupportTicketSchema = new mongoose.Schema({
   },
 
   assignedTo: {
+    type: String,
+    default: "",
+  },
+
+    assignedToUserId: {
+    type: String,
+    default: "",
+  },
+
+  assignedToRole: {
+    type: String,
+    default: "",
+  },
+
+  internalNotes: {
+    type: [InternalNoteSchema],
+    default: [],
+  },
+
+  lastCustomerReplyAt: {
+    type: Date,
+    default: null,
+  },
+
+  lastStaffReplyAt: {
+    type: Date,
+    default: null,
+  },
+
+  satisfactionComment: {
     type: String,
     default: "",
   },
