@@ -194,6 +194,25 @@ const awardWarehousePointsIfEligible = async (customer, pkg, req) => {
   return pointsAwarded;
 };
 
+const completeReferralIfFirstWarehousePackage = async (pkg) => {
+  try {
+    if (!pkg) return null;
+    if (pkg.status !== "At Warehouse") return null;
+
+    const customerPackageCount = await Package.countDocuments({
+      customerEkonId: pkg.customerEkonId,
+      status: { $ne: "Deleted" },
+    });
+
+    if (customerPackageCount !== 1) return null;
+
+    return await completeReferral(pkg.customerEkonId, pkg.trackingNumber);
+  } catch (error) {
+    console.error("Referral reward processing failed:", error.message);
+    return null;
+  }
+};
+
 const getPackageWeightAnalysis = async (req, res) => {
   try {
     const {
@@ -360,17 +379,7 @@ const createPackage = async (req, res) => {
 const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
 
 if (packageStatus === "At Warehouse") {
-  try {
-    const customerPackageCount = await Package.countDocuments({
-      customerEkonId: newPackage.customerEkonId,
-    });
-
-    if (customerPackageCount === 1) {
-      await completeReferral(newPackage.customerEkonId, newPackage.trackingNumber);
-    }
-  } catch (referralError) {
-    console.error("Referral reward processing failed:", referralError.message);
-  }
+  await completeReferralIfFirstWarehousePackage(newPackage);
 }
 
     if (packageStatus === "At Warehouse") {
@@ -497,7 +506,9 @@ const updatePackageStatus = async (req, res) => {
       customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
 
       if (customer) {
-        pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+                pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+
+        await completeReferralIfFirstWarehousePackage(pkg);
 
         await createCustomerNotification({
           customerEkonId: customer.ekonId,
@@ -636,8 +647,10 @@ const bulkUpdatePackageStatus = async (req, res) => {
         customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
 
         if (customer) {
-          pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+                    pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
           totalPointsAwarded += pointsAwarded;
+
+          await completeReferralIfFirstWarehousePackage(pkg);
 
           await createCustomerNotification({
             customerEkonId: customer.ekonId,
