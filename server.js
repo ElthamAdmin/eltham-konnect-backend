@@ -69,6 +69,7 @@ const debtManagerRoutes = require("./routes/debtManagerRoutes");
 const unmatchedPackageRoutes = require("./routes/unmatchedPackageRoutes");
 const integrationLogRoutes = require("./routes/integrationLogRoutes");
 const freightPartnerRoutes = require("./routes/freightPartnerRoutes");
+const posRoutes = require("./routes/posRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -217,6 +218,7 @@ app.use("/api/debt-manager", debtManagerRoutes);
 app.use("/api/unmatched-packages", unmatchedPackageRoutes);
 app.use("/api/integration-logs", integrationLogRoutes);
 app.use("/api/freight-partners", freightPartnerRoutes);
+app.use("/api/pos", posRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
