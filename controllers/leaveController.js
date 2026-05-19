@@ -1,5 +1,6 @@
 const LeaveRequest = require("../models/LeaveRequest");
 const HREmployee = require("../models/HREmployee");
+const SystemUser = require("../models/SystemUser");
 
 const LEAVE_TYPES = ["Vacation", "Sick", "Unpaid", "Emergency"];
 const LEAVE_STATUSES = ["Pending", "Approved", "Rejected", "Cancelled"];
@@ -282,7 +283,25 @@ const approveLeaveRequest = async (req, res) => {
       employee.leaveBalanceSick -= leaveRequest.totalDays;
     }
 
-    await employee.save();
+        await employee.save();
+
+    if (employee.linkedUserId) {
+      const linkedUser = await SystemUser.findOne({
+        userId: employee.linkedUserId,
+      });
+
+      if (linkedUser) {
+        if (leaveRequest.leaveType === "Vacation") {
+          linkedUser.dutyStatus = "Vacation Leave";
+        } else if (leaveRequest.leaveType === "Sick") {
+          linkedUser.dutyStatus = "Sick Leave";
+        } else {
+          linkedUser.dutyStatus = "Out of Office";
+        }
+
+        await linkedUser.save();
+      }
+    }
 
     leaveRequest.status = "Approved";
     leaveRequest.adminComment = normalizeString(adminComment);

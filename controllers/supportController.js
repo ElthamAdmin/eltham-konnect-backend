@@ -247,7 +247,7 @@ const getSupportStaff = async (req, res) => {
       status: "Active",
       permissions: { $in: ["support", "users"] },
     })
-      .select("userId fullName role branch permissions")
+            .select("userId fullName role branch permissions dutyStatus")
       .sort({ fullName: 1 });
 
     res.json({
@@ -284,6 +284,13 @@ const assignTicket = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Assigned staff member not found",
+      });
+    }
+
+        if (staff.dutyStatus !== "Clocked In") {
+      return res.status(400).json({
+        success: false,
+        message: `${staff.fullName} is currently ${staff.dutyStatus || "Off Duty"} and should not be assigned new tickets.`,
       });
     }
 

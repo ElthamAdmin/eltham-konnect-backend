@@ -70,9 +70,17 @@ const SystemUserSchema = new mongoose.Schema(
       department: { type: String, default: "" },
     },
 
-    dutyStatus: {
+        dutyStatus: {
       type: String,
-      enum: ["Off Duty", "On Duty", "At Lunch"],
+      enum: [
+        "Clocked In",
+        "At Lunch",
+        "Off Duty",
+        "Vacation Leave",
+        "Sick Leave",
+        "Out of Office",
+        "Absent",
+      ],
       default: "Off Duty",
     },
 
