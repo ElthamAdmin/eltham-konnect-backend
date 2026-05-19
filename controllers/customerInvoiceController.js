@@ -1,6 +1,7 @@
 const Customer = require("../models/Customer");
 const CustomerInvoiceUpload = require("../models/CustomerInvoiceUpload");
 const Package = require("../models/Package");
+const CustomerNotification = require("../models/CustomerNotification");
 const { writeAuditLog } = require("../utils/auditLogger");
 
 const getMyInvoiceUploads = async (req, res) => {
@@ -99,7 +100,18 @@ const uploadCustomerInvoice = async (req, res) => {
     pkg.customerInvoiceNotes = notes || "";
     pkg.customerInvoiceUploadedAt = new Date();
 
-    await pkg.save();
+        await pkg.save();
+
+    await CustomerNotification.create({
+      notificationNumber: `CNT-${Date.now()}`,
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      type: "Invoice Upload",
+      title: "Invoice Uploaded Successfully",
+      message: `Your invoice for package ${pkg.trackingNumber} was uploaded successfully and is now connected to your package record.`,
+      isRead: false,
+      date: new Date().toISOString().split("T")[0],
+    });
 
     try {
       if (req.user) {
