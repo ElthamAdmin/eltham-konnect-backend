@@ -4,8 +4,8 @@ const multer = require("multer");
 const router = express.Router();
 
 const {
-  getAllAssociateItems,
   getActiveAssociateItems,
+  getStorefrontDashboard,
   createAssociateItem,
   updateAssociateItem,
   deleteAssociateItem,
@@ -34,6 +34,7 @@ const upload = multer({
 });
 
 router.get("/", protect, getAllAssociateItems);
+router.get("/dashboard", protect, getStorefrontDashboard);
 router.get("/active", getActiveAssociateItems);
 router.post("/", protect, upload.single("image"), createAssociateItem);
 router.put("/:itemNumber", protect, upload.single("image"), updateAssociateItem);

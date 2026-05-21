@@ -33,10 +33,63 @@ const AmazonAssociateItemSchema = new mongoose.Schema(
   trim: true,
 },
 
-    affiliateLink: {
+        affiliateLink: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
+    },
+
+    productType: {
+      type: String,
+      enum: ["Amazon Affiliate", "EK Inventory"],
+      default: "Amazon Affiliate",
+    },
+
+    category: {
+      type: String,
+      default: "General",
+      trim: true,
+    },
+
+    sourceSupplier: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    costPrice: {
+      type: Number,
+      default: 0,
+    },
+
+    sellingPrice: {
+      type: Number,
+      default: 0,
+    },
+
+    quantityInStock: {
+      type: Number,
+      default: 0,
+    },
+
+    lowStockAlertLevel: {
+      type: Number,
+      default: 2,
+    },
+
+    unitsSold: {
+      type: Number,
+      default: 0,
+    },
+
+    totalRevenue: {
+      type: Number,
+      default: 0,
+    },
+
+    totalProfit: {
+      type: Number,
+      default: 0,
     },
 
     buttonText: {

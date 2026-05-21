@@ -83,13 +83,35 @@ const getActiveAssociateItems = async (req, res) => {
 
 const createAssociateItem = async (req, res) => {
   try {
-    const { title, description, affiliateLink, buttonText, sortOrder, isActive } =
-      req.body;
+    const {
+      title,
+      description,
+      affiliateLink,
+      buttonText,
+      sortOrder,
+      isActive,
+      productType,
+      category,
+      sourceSupplier,
+      costPrice,
+      sellingPrice,
+      quantityInStock,
+      lowStockAlertLevel,
+    } = req.body;
 
-    if (!title || !affiliateLink) {
+    const finalProductType = productType || "Amazon Affiliate";
+
+    if (!title) {
       return res.status(400).json({
         success: false,
-        message: "Title and affiliate link are required",
+        message: "Product title is required",
+      });
+    }
+
+    if (finalProductType === "Amazon Affiliate" && !affiliateLink) {
+      return res.status(400).json({
+        success: false,
+        message: "Affiliate link is required for Amazon affiliate products",
       });
     }
 
@@ -109,21 +131,30 @@ const createAssociateItem = async (req, res) => {
       imageUrl,
       imagePublicId,
       affiliateLink: normalizeString(affiliateLink),
-      buttonText: normalizeString(buttonText) || "Shop on Amazon",
+      productType: finalProductType,
+      category: normalizeString(category) || "General",
+      sourceSupplier: normalizeString(sourceSupplier),
+      costPrice: Number(costPrice || 0),
+      sellingPrice: Number(sellingPrice || 0),
+      quantityInStock: Number(quantityInStock || 0),
+      lowStockAlertLevel: Number(lowStockAlertLevel || 2),
+      buttonText:
+        normalizeString(buttonText) ||
+        (finalProductType === "EK Inventory" ? "Request Item" : "Shop on Amazon"),
       sortOrder: Number(sortOrder || 0),
       isActive: isActive === false || isActive === "false" ? false : true,
     });
 
     res.status(201).json({
       success: true,
-      message: "Amazon associate item created successfully",
+      message: "Storefront item created successfully",
       data: item,
     });
   } catch (error) {
-    console.error("Error creating Amazon associate item:", error);
+    console.error("Error creating storefront item:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to create Amazon associate item",
+      message: "Failed to create storefront item",
       error: error.message,
     });
   }
@@ -132,27 +163,51 @@ const createAssociateItem = async (req, res) => {
 const updateAssociateItem = async (req, res) => {
   try {
     const { itemNumber } = req.params;
-    const { title, description, affiliateLink, buttonText, sortOrder, isActive } =
-      req.body;
+
+    const {
+      title,
+      description,
+      affiliateLink,
+      buttonText,
+      sortOrder,
+      isActive,
+      productType,
+      category,
+      sourceSupplier,
+      costPrice,
+      sellingPrice,
+      quantityInStock,
+      lowStockAlertLevel,
+    } = req.body;
 
     const item = await AmazonAssociateItem.findOne({ itemNumber });
 
     if (!item) {
       return res.status(404).json({
         success: false,
-        message: "Amazon associate item not found",
+        message: "Storefront item not found",
       });
     }
 
     if (title !== undefined) item.title = normalizeString(title);
     if (description !== undefined) item.description = normalizeString(description);
-    if (affiliateLink !== undefined)
-      item.affiliateLink = normalizeString(affiliateLink);
-    if (buttonText !== undefined)
-      item.buttonText = normalizeString(buttonText) || "Shop on Amazon";
+    if (affiliateLink !== undefined) item.affiliateLink = normalizeString(affiliateLink);
+    if (productType !== undefined) item.productType = productType;
+    if (category !== undefined) item.category = normalizeString(category) || "General";
+    if (sourceSupplier !== undefined) item.sourceSupplier = normalizeString(sourceSupplier);
+    if (costPrice !== undefined) item.costPrice = Number(costPrice || 0);
+    if (sellingPrice !== undefined) item.sellingPrice = Number(sellingPrice || 0);
+    if (quantityInStock !== undefined) item.quantityInStock = Number(quantityInStock || 0);
+    if (lowStockAlertLevel !== undefined) item.lowStockAlertLevel = Number(lowStockAlertLevel || 2);
+    if (buttonText !== undefined) item.buttonText = normalizeString(buttonText) || item.buttonText;
     if (sortOrder !== undefined) item.sortOrder = Number(sortOrder || 0);
-    if (isActive !== undefined) {
-      item.isActive = isActive === true || isActive === "true";
+    if (isActive !== undefined) item.isActive = isActive === true || isActive === "true";
+
+    if (item.productType === "Amazon Affiliate" && !item.affiliateLink) {
+      return res.status(400).json({
+        success: false,
+        message: "Affiliate link is required for Amazon affiliate products",
+      });
     }
 
     if (req.file) {
@@ -167,14 +222,59 @@ const updateAssociateItem = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Amazon associate item updated successfully",
+      message: "Storefront item updated successfully",
       data: item,
     });
   } catch (error) {
-    console.error("Error updating Amazon associate item:", error);
+    console.error("Error updating storefront item:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to update Amazon associate item",
+      message: "Failed to update storefront item",
+      error: error.message,
+    });
+  }
+};
+
+const getStorefrontDashboard = async (req, res) => {
+  try {
+    const items = await AmazonAssociateItem.find();
+
+    const ekInventory = items.filter((item) => item.productType === "EK Inventory");
+    const affiliateItems = items.filter((item) => item.productType === "Amazon Affiliate");
+
+    const inventoryValue = ekInventory.reduce(
+      (sum, item) => sum + Number(item.costPrice || 0) * Number(item.quantityInStock || 0),
+      0
+    );
+
+    const potentialRevenue = ekInventory.reduce(
+      (sum, item) => sum + Number(item.sellingPrice || 0) * Number(item.quantityInStock || 0),
+      0
+    );
+
+    const lowStockItems = ekInventory.filter(
+      (item) => Number(item.quantityInStock || 0) <= Number(item.lowStockAlertLevel || 0)
+    );
+
+    res.json({
+      success: true,
+      message: "Storefront dashboard retrieved successfully",
+      data: {
+        totalItems: items.length,
+        activeItems: items.filter((item) => item.isActive).length,
+        affiliateItems: affiliateItems.length,
+        inventoryItems: ekInventory.length,
+        inventoryValue,
+        potentialRevenue,
+        potentialProfit: potentialRevenue - inventoryValue,
+        lowStockItems,
+      },
+    });
+  } catch (error) {
+    console.error("Storefront dashboard error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load storefront dashboard",
       error: error.message,
     });
   }
@@ -213,6 +313,7 @@ const deleteAssociateItem = async (req, res) => {
 module.exports = {
   getAllAssociateItems,
   getActiveAssociateItems,
+  getStorefrontDashboard,
   createAssociateItem,
   updateAssociateItem,
   deleteAssociateItem,
