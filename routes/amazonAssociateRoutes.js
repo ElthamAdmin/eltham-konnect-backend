@@ -4,6 +4,7 @@ const multer = require("multer");
 const router = express.Router();
 
 const {
+  getAllAssociateItems,
   getActiveAssociateItems,
   getStorefrontDashboard,
   createAssociateItem,
