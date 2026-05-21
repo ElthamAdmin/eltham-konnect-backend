@@ -303,12 +303,43 @@ const approveLeaveRequest = async (req, res) => {
       }
     }
 
+        await employee.save();
+
     leaveRequest.status = "Approved";
     leaveRequest.adminComment = normalizeString(adminComment);
     leaveRequest.reviewedAt = new Date();
     leaveRequest.reviewedBy = req.user?.email || "";
 
     await leaveRequest.save();
+
+        const today = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Jamaica",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    if (
+      leaveRequest.linkedUserId &&
+      leaveRequest.startDate <= today &&
+      leaveRequest.endDate >= today
+    ) {
+      const linkedUser = await SystemUser.findOne({
+        userId: leaveRequest.linkedUserId,
+      });
+
+      if (linkedUser) {
+        if (leaveRequest.leaveType === "Vacation") {
+          linkedUser.dutyStatus = "Vacation Leave";
+        } else if (leaveRequest.leaveType === "Sick") {
+          linkedUser.dutyStatus = "Sick Leave";
+        } else {
+          linkedUser.dutyStatus = "Out of Office";
+        }
+
+        await linkedUser.save();
+      }
+    }
 
     res.json({
       success: true,

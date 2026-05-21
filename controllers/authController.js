@@ -2,6 +2,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const SystemUser = require("../models/SystemUser");
 const AttendanceLog = require("../models/AttendanceLog");
+const LeaveRequest = require("../models/LeaveRequest");
 
 const getJamaicaNow = () => {
   const now = new Date();
@@ -111,6 +112,76 @@ const calculateWorkedMinutes = (clockInTime, clockOutTime, lunchMinutes = 0) => 
   return Math.max(totalMinutes - Number(lunchMinutes || 0), 0);
 };
 
+const isTodayWithinLeave = (leaveRequest, todayDateString) => {
+  return (
+    leaveRequest.status === "Approved" &&
+    leaveRequest.startDate <= todayDateString &&
+    leaveRequest.endDate >= todayDateString
+  );
+};
+
+const getLeaveDutyStatus = (leaveType) => {
+  if (leaveType === "Vacation") return "Vacation Leave";
+  if (leaveType === "Sick") return "Sick Leave";
+  return "Out of Office";
+};
+
+const runDailyAttendanceMaintenance = async () => {
+  const now = getJamaicaNow();
+  const workDate = getTodayDateString();
+
+  const forceClockOutTime = new Date(now);
+  forceClockOutTime.setHours(18, 0, 0, 0);
+
+  const approvedLeaves = await LeaveRequest.find({
+    status: "Approved",
+    startDate: { $lte: workDate },
+    endDate: { $gte: workDate },
+    linkedUserId: { $ne: "" },
+  });
+
+  for (const leave of approvedLeaves) {
+    const user = await SystemUser.findOne({ userId: leave.linkedUserId });
+
+    if (user) {
+      user.dutyStatus = getLeaveDutyStatus(leave.leaveType);
+      await user.save();
+    }
+  }
+
+  if (now >= forceClockOutTime) {
+    const openLogs = await AttendanceLog.find({
+      workDate,
+      sessionStatus: { $in: ["On Duty", "At Lunch"] },
+    });
+
+    for (const attendance of openLogs) {
+      if (attendance.sessionStatus === "At Lunch" && attendance.lunchOutTime && !attendance.lunchInTime) {
+        attendance.lunchInTime = forceClockOutTime;
+      }
+
+      attendance.clockOutTime = forceClockOutTime;
+      attendance.workedMinutes = calculateWorkedMinutes(
+        attendance.clockInTime,
+        attendance.clockOutTime,
+        attendance.lunchMinutes
+      );
+      attendance.sessionStatus = "Completed";
+      attendance.notes = `${attendance.notes || ""} Auto clock-out applied at 6:00 PM.`.trim();
+
+      await attendance.save();
+
+      await SystemUser.findOneAndUpdate(
+        { userId: attendance.userId },
+        {
+          dutyStatus: "Off Duty",
+          lastLogoutAt: forceClockOutTime,
+        }
+      );
+    }
+  }
+};
+
 const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -180,6 +251,8 @@ const loginUser = async (req, res) => {
 };
 const clockIn = async (req, res) => {
   try {
+    await runDailyAttendanceMaintenance();
+
     const { userId } = req.user;
 
     const user = await SystemUser.findOne({ userId });
@@ -193,15 +266,36 @@ const clockIn = async (req, res) => {
 
     const workDate = getTodayDateString();
 
+    const activeLeave = await LeaveRequest.findOne({
+      linkedUserId: user.userId,
+      status: "Approved",
+      startDate: { $lte: workDate },
+      endDate: { $gte: workDate },
+    });
+
+    if (activeLeave) {
+      user.dutyStatus = getLeaveDutyStatus(activeLeave.leaveType);
+      await user.save();
+
+      return res.status(400).json({
+        success: false,
+        message: `You are scheduled for ${activeLeave.leaveType} leave today and cannot clock in.`,
+      });
+    }
+
     let attendance = await AttendanceLog.findOne({
       userId: user.userId,
       workDate,
     });
 
     if (attendance && attendance.sessionStatus !== "Completed") {
-      return res.status(400).json({
-        success: false,
-        message: "User is already clocked in for today",
+      user.dutyStatus = "Clocked In";
+      await user.save();
+
+      return res.json({
+        success: true,
+        message: "You are already clocked in for today.",
+        data: attendance,
       });
     }
 
@@ -217,7 +311,7 @@ const clockIn = async (req, res) => {
       workedMinutes: 0,
     });
 
-    user.dutyStatus = "On Duty";
+    user.dutyStatus = "Clocked In";
     await user.save();
 
     res.json({
@@ -314,7 +408,7 @@ const lunchIn = async (req, res) => {
     attendance.sessionStatus = "On Duty";
     await attendance.save();
 
-    user.dutyStatus = "On Duty";
+        user.dutyStatus = "Clocked In";
     await user.save();
 
     res.json({
@@ -483,6 +577,7 @@ const forceClockOutStaff = async (req, res) => {
 
 const getMyAttendanceToday = async (req, res) => {
   try {
+        await runDailyAttendanceMaintenance();
     const { userId } = req.user;
     const workDate = getTodayDateString();
 
@@ -509,6 +604,7 @@ const getMyAttendanceToday = async (req, res) => {
 
 const getTodayAttendanceAdmin = async (req, res) => {
   try {
+        await runDailyAttendanceMaintenance();
     const workDate = getTodayDateString();
 
     const attendance = await AttendanceLog.find({ workDate }).sort({ createdAt: -1 });
