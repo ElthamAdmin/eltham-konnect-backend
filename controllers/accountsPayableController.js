@@ -1,5 +1,7 @@
 const Vendor = require("../models/Vendor");
 const AccountsPayable = require("../models/AccountsPayable");
+const FinancialAccount = require("../models/FinancialAccount");
+const AccountTransaction = require("../models/AccountTransaction");
 
 const getVendors = async (req, res) => {
   try {
@@ -140,9 +142,103 @@ const createAccountsPayable = async (req, res) => {
   }
 };
 
+const markAccountsPayablePaid = async (req, res) => {
+  try {
+    const { payableNumber } = req.params;
+    const { paymentAccountNumber, paymentDate, notes } = req.body;
+
+    if (!paymentAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment account is required",
+      });
+    }
+
+    const payable = await AccountsPayable.findOne({ payableNumber });
+
+    if (!payable) {
+      return res.status(404).json({
+        success: false,
+        message: "Accounts payable record not found",
+      });
+    }
+
+    if (payable.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "This payable is already marked as paid",
+      });
+    }
+
+    const account = await FinancialAccount.findOne({
+      accountNumber: paymentAccountNumber,
+    });
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment account not found",
+      });
+    }
+
+    const paymentAmount = Number(payable.balanceDue || payable.amount || 0);
+
+    payable.amountPaid = Number(payable.amount || 0);
+    payable.balanceDue = 0;
+    payable.status = "Paid";
+    payable.paymentAccountNumber = account.accountNumber;
+    payable.paymentAccountName = account.accountName;
+    payable.notes = notes || payable.notes || "";
+
+    await payable.save();
+
+    const vendor = await Vendor.findOne({
+      vendorCode: payable.vendorCode,
+    });
+
+    if (vendor) {
+      vendor.currentBalance = Math.max(
+        0,
+        Number(vendor.currentBalance || 0) - paymentAmount
+      );
+      await vendor.save();
+    }
+
+    account.balance = Number(account.balance || 0) - paymentAmount;
+    await account.save();
+
+    await AccountTransaction.create({
+      transactionNumber: `TXN-${Date.now()}`,
+      accountNumber: account.accountNumber,
+      accountName: account.accountName,
+      type: "Expense",
+      category: "Accounts Payable",
+      description: `Paid payable ${payable.payableNumber} - ${payable.vendorName}`,
+      amount: paymentAmount,
+      transactionDate: paymentDate || new Date().toISOString().slice(0, 10),
+      reference: payable.payableNumber,
+    });
+
+    res.json({
+      success: true,
+      message: "Accounts payable marked as paid successfully",
+      data: payable,
+    });
+  } catch (error) {
+    console.error("Mark payable paid error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not mark payable as paid",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getVendors,
   createVendor,
   getAccountsPayable,
   createAccountsPayable,
+  markAccountsPayablePaid,
 };
