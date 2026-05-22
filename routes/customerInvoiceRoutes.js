@@ -26,6 +26,8 @@ const allowedTypes = [
   "image/jpg",
   "image/png",
   "image/webp",
+  "image/heic",
+  "image/heif",
 ];
 
 const upload = multer({
@@ -34,7 +36,7 @@ const upload = multer({
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Only PDF, JPG, JPEG, PNG, and WEBP files are allowed"));
+      cb(new Error("Only PDF or image invoice files are allowed"));
     }
   },
 });
