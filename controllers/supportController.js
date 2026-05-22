@@ -287,12 +287,19 @@ const assignTicket = async (req, res) => {
       });
     }
 
-        if (staff.dutyStatus !== "Clocked In") {
-      return res.status(400).json({
-        success: false,
-        message: `${staff.fullName} is currently ${staff.dutyStatus || "Off Duty"} and should not be assigned new tickets.`,
-      });
-    }
+        const unavailableStatuses = [
+  "Vacation Leave",
+  "Sick Leave",
+  "Out of Office",
+  "Absent",
+];
+
+if (unavailableStatuses.includes(staff.dutyStatus)) {
+  return res.status(400).json({
+    success: false,
+    message: `${staff.fullName} is currently ${staff.dutyStatus} and should not be assigned new tickets.`,
+  });
+}
 
     ticket.assignedToUserId = staff.userId;
     ticket.assignedTo = staff.fullName;
