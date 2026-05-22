@@ -362,6 +362,11 @@ if (!customer && customerName) {
       }
     }
 
+    console.log(
+  "KP PACKAGE IMPORT SUCCESSFUL:",
+  importedCount
+);
+
     res.json({
       success: true,
       message: "LTW package sync completed.",
@@ -738,6 +743,11 @@ const getKpCustomers = async (req, res) => {
     const partner =
   req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req)));
 
+  console.log(
+  "KP PARTNER FOUND:",
+  partner ? partner.partnerName : "NOT FOUND"
+);
+
     if (!partner) {
       return res.status(401).json({
         success: false,
@@ -798,6 +808,12 @@ const getKpCustomers = async (req, res) => {
 };
 
 const receiveKpPackages = async (req, res) => {
+
+  console.log("============== KP PACKAGE REQUEST START ==============");
+console.log("TIME:", new Date().toISOString());
+console.log("HEADERS:", JSON.stringify(req.headers, null, 2));
+console.log("BODY:", JSON.stringify(req.body, null, 2));
+console.log("======================================================");
   try {
     console.log(
   "RAW KP PAYLOAD:",
