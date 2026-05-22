@@ -723,6 +723,16 @@ const getKpApiKeyFromRequest = (req, item = {}) => {
   );
 };
 
+const getKpValue = (item, keys = []) => {
+  for (const key of keys) {
+    if (item[key] !== undefined && item[key] !== null && String(item[key]).trim() !== "") {
+      return item[key];
+    }
+  }
+
+  return "";
+};
+
 const getKpCustomers = async (req, res) => {
   try {
     const partner =
@@ -822,12 +832,43 @@ const receiveKpPackages = async (req, res) => {
           continue;
         }
 
-        const trackingNumber = String(kpPackage.trackingNumber || "").trim();
-        const customerEkonId = String(kpPackage.userCode || "").trim().toUpperCase();
-        const firstName = String(kpPackage.firstName || "").trim();
-        const lastName = String(kpPackage.lastName || "").trim();
+                const trackingNumber = String(
+          getKpValue(kpPackage, [
+            "trackingNumber",
+            "TrackingNumber",
+            "tracking_number",
+            "Tracking",
+            "tracking",
+          ])
+        ).trim();
+
+        const customerEkonId = String(
+          getKpValue(kpPackage, [
+            "userCode",
+            "UserCode",
+            "customerEkonId",
+            "CustomerEkonId",
+            "customerCode",
+            "CustomerCode",
+          ])
+        )
+          .trim()
+          .toUpperCase();
+
+        const firstName = String(
+          getKpValue(kpPackage, ["firstName", "FirstName", "firstname"])
+        ).trim();
+
+        const lastName = String(
+          getKpValue(kpPackage, ["lastName", "LastName", "lastname"])
+        ).trim();
+
         const customerName = `${firstName} ${lastName}`.trim();
-        const weight = Number(kpPackage.weight || 0);
+
+        const weight = Number(
+          getKpValue(kpPackage, ["weight", "Weight", "actualWeight", "ActualWeight"]) || 0
+        );
+
         const now = new Date();
 
         if (!trackingNumber) {
@@ -886,10 +927,13 @@ const receiveKpPackages = async (req, res) => {
             courier: "KP Logistics",
             weight,
             warehouseLocation: "KP Warehouse",
-            dateReceived: kpPackage.entryDateTime || kpPackage.entryDate || now,
-            externalPackageId: kpPackage.packageID || "",
-            externalWarehouseId: kpPackage.courierID || "KP",
-            externalStatus: kpPackage.claimed ? "CLAIMED" : "ARRIVED",
+                        dateReceived:
+              getKpValue(kpPackage, ["entryDateTime", "EntryDateTime", "entryDate", "EntryDate"]) ||
+              now,
+            externalPackageId: getKpValue(kpPackage, ["packageID", "PackageID", "packageId", "PackageId"]) || "",
+            externalWarehouseId: getKpValue(kpPackage, ["courierID", "CourierID", "courierId", "CourierId"]) || "KP",
+            externalStatus:
+              getKpValue(kpPackage, ["claimed", "Claimed"]) ? "CLAIMED" : "ARRIVED",
             integrationSource: partner.partnerName || "KP Logistics",
             issueReason: customerEkonId
               ? `Customer not found for EKON ID ${customerEkonId}.`
@@ -934,12 +978,15 @@ const receiveKpPackages = async (req, res) => {
           readyForPickup: false,
           readyForPickupDate: null,
           statusUpdatedAt: now,
-          dateReceived: kpPackage.entryDateTime || kpPackage.entryDate || now,
+                    dateReceived:
+            getKpValue(kpPackage, ["entryDateTime", "EntryDateTime", "entryDate", "EntryDate"]) ||
+            now,
 
           integrationSource: partner.partnerName || "KP Logistics",
-          externalWarehouseId: kpPackage.courierID || "KP",
-          externalPackageId: kpPackage.packageID || "",
-          externalStatus: kpPackage.claimed ? "CLAIMED" : "ARRIVED",
+          externalWarehouseId: getKpValue(kpPackage, ["courierID", "CourierID", "courierId", "CourierId"]) || "KP",
+          externalPackageId: getKpValue(kpPackage, ["packageID", "PackageID", "packageId", "PackageId"]) || "",
+          externalStatus:
+            getKpValue(kpPackage, ["claimed", "Claimed"]) ? "CLAIMED" : "ARRIVED",
           lastExternalSyncAt: now,
           syncNotes: "Created from KP Logistics API push.",
 
@@ -954,6 +1001,19 @@ const receiveKpPackages = async (req, res) => {
           newPackage,
           req
         );
+
+                try {
+          const customerPackageCount = await Package.countDocuments({
+            customerEkonId: newPackage.customerEkonId,
+            status: { $ne: "Deleted" },
+          });
+
+          if (customerPackageCount === 1) {
+            await completeReferral(newPackage.customerEkonId, newPackage.trackingNumber);
+          }
+        } catch (referralError) {
+          console.error("KP referral reward processing failed:", referralError.message);
+        }
 
         await CustomerNotification.create({
           notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
