@@ -799,14 +799,28 @@ const getKpCustomers = async (req, res) => {
 
 const receiveKpPackages = async (req, res) => {
   try {
-    const payload = req.body;
+    console.log(
+  "RAW KP PAYLOAD:",
+  JSON.stringify(req.body, null, 2)
+);
 
-    if (!Array.isArray(payload)) {
-      return res.status(400).json({
-        success: false,
-        message: "KP package payload must be an array.",
-      });
-    }
+let payload = [];
+
+if (Array.isArray(req.body)) {
+  payload = req.body;
+} else if (Array.isArray(req.body.packages)) {
+  payload = req.body.packages;
+} else if (Array.isArray(req.body.data)) {
+  payload = req.body.data;
+} else {
+  return res.status(400).json({
+    success: false,
+    message:
+      "KP package payload must contain an array.",
+  });
+}
+
+console.log("KP PACKAGE COUNT:", payload.length);
 
     let importedCount = 0;
     let duplicateCount = 0;
@@ -816,6 +830,11 @@ const receiveKpPackages = async (req, res) => {
     const results = [];
 
     for (const kpPackage of payload) {
+
+      console.log(
+  "PROCESSING KP PACKAGE:",
+  JSON.stringify(kpPackage, null, 2)
+);
       try {
         const partner =
   req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req, kpPackage)));
@@ -915,9 +934,17 @@ const receiveKpPackages = async (req, res) => {
           continue;
         }
 
+        console.log("KP CUSTOMER EKON ID:", customerEkonId);
+console.log("KP CUSTOMER NAME:", customerName);
+
         const customer = customerEkonId
           ? await Customer.findOne({ ekonId: customerEkonId })
           : null;
+
+          console.log(
+  "KP CUSTOMER MATCH:",
+  customer ? customer.ekonId : "NOT FOUND"
+);
 
         if (!customer) {
           const unmatched = await createUnmatchedPackage({
