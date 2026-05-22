@@ -229,10 +229,10 @@ const loginUser = async (req, res) => {
     };
 
     const token = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET || "eltham-konnect-secret",
-      { expiresIn: "12h" }
-    );
+  tokenPayload,
+  process.env.JWT_SECRET || "eltham-konnect-secret",
+  { expiresIn: "10h" }
+);
 
     res.json({
       success: true,
