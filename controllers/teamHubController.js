@@ -1,3 +1,4 @@
+const path = require("path");
 const TeamChannel = require("../models/TeamChannel");
 const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
@@ -37,10 +38,28 @@ exports.getMessages = async (req, res) => {
 exports.sendMessage = async (req, res) => {
   const { channelId, message } = req.body;
 
+  const files = req.files || [];
+
+  const attachments = files.map((file) => ({
+    originalName: file.originalname,
+    fileName: file.filename,
+    fileUrl: `/uploads/team-hub/${file.filename}`,
+    mimeType: file.mimetype,
+    size: file.size,
+  }));
+
+  if (!message && attachments.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Message or attachment is required.",
+    });
+  }
+
   const newMessage = await TeamMessage.create({
     channelId,
     senderId: req.user.userId,
     message,
+    attachments,
   });
 
   res.json({ success: true, data: newMessage });

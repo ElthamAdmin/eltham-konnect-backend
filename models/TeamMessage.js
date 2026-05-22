@@ -9,7 +9,15 @@ const TeamMessageSchema = new mongoose.Schema(
     },
     senderId: { type: String, required: true },
     message: { type: String, default: "" },
-    attachments: [{ type: String }],
+    attachments: [
+  {
+    originalName: { type: String, default: "" },
+    fileName: { type: String, default: "" },
+    fileUrl: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
+    size: { type: Number, default: 0 },
+  },
+],
     mentions: [{ type: String }],
     readBy: [{ type: String }],
   },

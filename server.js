@@ -104,6 +104,10 @@ if (!fs.existsSync(rewardsHubDir)) {
   fs.mkdirSync(rewardsHubDir, { recursive: true });
 }
 
+if (!fs.existsSync(teamHubDir)) {
+  fs.mkdirSync(teamHubDir, { recursive: true });
+}
+
 const allowedOrigins = (process.env.CORS_ORIGIN || "")
   .split(",")
   .map((item) => item.trim())
