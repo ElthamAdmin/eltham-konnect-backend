@@ -948,9 +948,21 @@ console.log("KP PACKAGE COUNT:", payload.length);
         console.log("KP CUSTOMER EKON ID:", customerEkonId);
 console.log("KP CUSTOMER NAME:", customerName);
 
-        const customer = customerEkonId
+                let customer = customerEkonId
           ? await Customer.findOne({ ekonId: customerEkonId })
           : null;
+
+        let customerMatchMethod = customer ? "EKON ID" : "";
+
+        if (!customer && customerName) {
+          customer = await Customer.findOne({
+            name: { $regex: `^${customerName.trim()}$`, $options: "i" },
+          });
+
+          if (customer) {
+            customerMatchMethod = "KP customer name";
+          }
+        }
 
           console.log(
   "KP CUSTOMER MATCH:",
@@ -1026,7 +1038,7 @@ console.log("KP CUSTOMER NAME:", customerName);
           externalStatus:
             getKpValue(kpPackage, ["claimed", "Claimed"]) ? "CLAIMED" : "ARRIVED",
           lastExternalSyncAt: now,
-          syncNotes: "Created from KP Logistics API push.",
+                    syncNotes: `Created from KP Logistics API push. Matched by ${customerMatchMethod || "unknown method"}. Original KP userCode: ${customerEkonId || "N/A"}.`,
 
           addedByUserId: "KP-API",
           addedByName: "KP Logistics API",

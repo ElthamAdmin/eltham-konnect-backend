@@ -13,8 +13,8 @@ const {
 
 router.post("/freight/packages", integrationAuth, receiveFreightPackage);
 
-router.get("/kp/customers", getKpCustomers);
-router.post("/kp/packages", receiveKpPackages);
+router.get("/kp/customers", integrationAuth, getKpCustomers);
+router.post("/kp/packages", integrationAuth, receiveKpPackages);
 
 router.get(
   "/ltw/sync-packages",

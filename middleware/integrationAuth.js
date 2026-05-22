@@ -3,6 +3,10 @@ const FreightPartner = require("../models/FreightPartner");
 const cleanBearerToken = (value = "") => {
   return String(value || "")
     .replace(/^Bearer\s+/i, "")
+    .replace(/^Token\s+/i, "")
+    .replace(/^Authorization:\s*/i, "")
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "")
     .trim();
 };
 
@@ -18,7 +22,6 @@ const integrationAuth = async (req, res, next) => {
         req.query.apiToken ||
         ""
     );
-
     if (!providedKey) {
       return res.status(401).json({
         success: false,
