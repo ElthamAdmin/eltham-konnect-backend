@@ -4,6 +4,8 @@ const cleanBearerToken = (value = "") => {
   return String(value || "")
     .replace(/^Bearer\s+/i, "")
     .replace(/^Token\s+/i, "")
+    .replace(/^ApiKey\s+/i, "")
+    .replace(/^Api-Key\s+/i, "")
     .replace(/^Authorization:\s*/i, "")
     .replace(/^"+|"+$/g, "")
     .replace(/^'+|'+$/g, "")
