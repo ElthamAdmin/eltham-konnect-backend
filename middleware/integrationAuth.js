@@ -12,16 +12,31 @@ const cleanBearerToken = (value = "") => {
 
 const integrationAuth = async (req, res, next) => {
   try {
-    const providedKey = cleanBearerToken(
-      req.headers.authorization ||
-        req.headers.Authorization ||
-        req.headers["x-ekos-api-key"] ||
-        req.headers["x-api-key"] ||
-        req.headers["x-api"] ||
-        req.query.id ||
-        req.query.apiToken ||
-        ""
-    );
+    const firstBodyItem = Array.isArray(req.body) ? req.body[0] || {} : req.body || {};
+
+const providedKey = cleanBearerToken(
+  req.headers.authorization ||
+    req.headers.Authorization ||
+    req.headers["x-ekos-api-key"] ||
+    req.headers["x-api-key"] ||
+    req.headers["x-api"] ||
+    req.query.id ||
+    req.query.apiToken ||
+    firstBodyItem.apiToken ||
+    firstBodyItem.ApiToken ||
+    firstBodyItem.token ||
+    ""
+);
+
+console.log("KP AUTH DEBUG:", {
+  path: req.originalUrl,
+  method: req.method,
+  hasAuthorization: !!req.headers.authorization,
+  hasQueryId: !!req.query.id,
+  hasQueryApiToken: !!req.query.apiToken,
+  hasBodyApiToken: !!firstBodyItem.apiToken,
+  providedKeyPreview: providedKey ? `${providedKey.slice(0, 10)}...` : "NONE",
+});
     if (!providedKey) {
       return res.status(401).json({
         success: false,
