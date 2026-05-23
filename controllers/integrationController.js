@@ -735,15 +735,14 @@ const getKpValue = (item, keys = []) => {
 
 const getKpCustomers = async (req, res) => {
   try {
-    const partner =
-  req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req)));
+    const partner = req.integrationPartner;
 
-  console.log(
+console.log(
   "KP PARTNER FOUND:",
   partner ? partner.partnerName : "NOT FOUND"
 );
 
-    if (!partner) {
+if (!partner) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized KP customer sync request.",
@@ -847,10 +846,9 @@ console.log("KP PACKAGE COUNT:", payload.length);
   JSON.stringify(kpPackage, null, 2)
 );
       try {
-        const partner =
-  req.integrationPartner || (await verifyKpPartnerKey(getKpApiKeyFromRequest(req, kpPackage)));
+        const partner = req.integrationPartner;
 
-        if (!partner) {
+if (!partner) {
           failedCount += 1;
 
           results.push({
