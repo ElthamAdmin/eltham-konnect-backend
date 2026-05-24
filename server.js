@@ -71,6 +71,7 @@ const integrationLogRoutes = require("./routes/integrationLogRoutes");
 const freightPartnerRoutes = require("./routes/freightPartnerRoutes");
 const businessAnalyticsRoutes = require("./routes/businessAnalyticsRoutes");
 const posRoutes = require("./routes/posRoutes");
+const marketplaceCartRoutes = require("./routes/marketplaceCartRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -225,6 +226,7 @@ app.use("/api/integration-logs", integrationLogRoutes);
 app.use("/api/freight-partners", freightPartnerRoutes);
 app.use("/api/business-analytics", businessAnalyticsRoutes);
 app.use("/api/pos", posRoutes);
+app.use("/api/marketplace-cart", marketplaceCartRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
