@@ -101,7 +101,26 @@ const getAllMarketplaceOrders = async (req, res) => {
 const updateMarketplaceOrderStatus = async (req, res) => {
   try {
     const { orderNumber } = req.params;
-    const { status } = req.body;
+    const { status, note } = req.body;
+
+    const allowedStatuses = [
+      "Pending Review",
+      "Approved",
+      "Awaiting Payment",
+      "Paid",
+      "Preparing",
+      "Ready For Pickup",
+      "Out For Delivery",
+      "Completed",
+      "Cancelled",
+    ];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid marketplace order status",
+      });
+    }
 
     const order = await MarketplaceOrder.findOne({ orderNumber });
 
@@ -113,6 +132,14 @@ const updateMarketplaceOrderStatus = async (req, res) => {
     }
 
     order.status = status;
+
+    order.statusHistory.push({
+      status,
+      note: note || "",
+      updatedBy: req.user?.fullName || req.user?.name || req.user?.email || "System User",
+      updatedAt: new Date(),
+    });
+
     await order.save();
 
     res.json({

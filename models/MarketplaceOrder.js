@@ -40,18 +40,43 @@ const MarketplaceOrderSchema = new mongoose.Schema(
       default: 0,
     },
     status: {
+  type: String,
+  enum: [
+    "Pending Review",
+    "Approved",
+    "Awaiting Payment",
+    "Paid",
+    "Preparing",
+    "Ready For Pickup",
+    "Out For Delivery",
+    "Completed",
+    "Cancelled",
+  ],
+  default: "Pending Review",
+},
+
+statusHistory: [
+  {
+    status: {
       type: String,
-      enum: [
-        "Pending Review",
-        "Awaiting Payment",
-        "Paid",
-        "Preparing",
-        "Ready For Pickup",
-        "Delivered",
-        "Cancelled",
-      ],
       default: "Pending Review",
     },
+    note: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    updatedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
     customerNote: {
       type: String,
       default: "",
