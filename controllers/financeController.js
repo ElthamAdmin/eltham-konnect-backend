@@ -4,6 +4,8 @@ const Payroll = require("../models/Payroll");
 const HREmployee = require("../models/HREmployee");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
+const ChartOfAccount = require("../models/ChartOfAccount");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
 const { postJournalEntry } = require("../utils/generalLedgerPoster");
 
@@ -655,12 +657,7 @@ const createPayroll = async (req, res) => {
 
 const getFinanceSummary = async (req, res) => {
   try {
-    const {
-      filter = "today",
-      from = "",
-      to = "",
-      branch = "",
-    } = req.query;
+    const { filter = "today", from = "", to = "", branch = "" } = req.query;
 
     const getJamaicaYMD = (date = new Date()) => {
       return new Intl.DateTimeFormat("en-CA", {
@@ -723,68 +720,104 @@ const getFinanceSummary = async (req, res) => {
     }
 
     const isWithinSummaryRange = (value) => {
-  if (!startDate || !endDate) return true;
-  if (!value) return false;
+      if (!startDate || !endDate) return true;
+      if (!value) return false;
 
-  let date = null;
+      let date = null;
 
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    date = makeJamaicaUtcStart(value);
-  } else {
-    date = normalizeDateValue(value);
-  }
+      if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        date = makeJamaicaUtcStart(value);
+      } else {
+        date = normalizeDateValue(value);
+      }
 
-  if (!date) return false;
+      if (!date) return false;
 
-  return date >= startDate && date <= endDate;
-};
+      return date >= startDate && date <= endDate;
+    };
 
+    const ledgerTransactions = await GeneralLedgerTransaction.find();
+    const chartAccounts = await ChartOfAccount.find({ status: "Active" });
     const invoices = await Invoice.find();
-    const expenses = await Expense.find();
-    const payroll = await Payroll.find();
+
+    const filteredLedger = ledgerTransactions.filter((item) =>
+      isWithinSummaryRange(item.entryDate || item.createdAt)
+    );
+
+    const totalRevenue = roundMoney(
+      filteredLedger
+        .filter((item) => item.accountCategory === "Revenue")
+        .reduce(
+          (sum, item) =>
+            sum + Number(item.credit || 0) - Number(item.debit || 0),
+          0
+        )
+    );
+
+    const totalExpenses = roundMoney(
+      filteredLedger
+        .filter(
+          (item) =>
+            item.accountCategory === "Expense" ||
+            item.accountCategory === "Cost of Sales"
+        )
+        .reduce(
+          (sum, item) =>
+            sum + Number(item.debit || 0) - Number(item.credit || 0),
+          0
+        )
+    );
+
+    const totalPayroll = roundMoney(
+      filteredLedger
+        .filter(
+          (item) =>
+            String(item.accountName || "").toLowerCase().includes("payroll") ||
+            String(item.sourceModule || "").toLowerCase().includes("payroll")
+        )
+        .reduce(
+          (sum, item) =>
+            sum + Number(item.debit || 0) - Number(item.credit || 0),
+          0
+        )
+    );
 
     const branchMatches = (record) => {
       if (!branch) return true;
       return String(record.branch || record.customerBranch || "").trim() === branch;
     };
 
+    const unpaidInvoices = invoices.filter((inv) => {
+      const statusIsUnpaid =
+        String(inv.status || "").trim().toLowerCase() === "unpaid";
+      return statusIsUnpaid && branchMatches(inv);
+    });
+
     const paidInvoices = invoices.filter((inv) => {
-      const statusIsPaid = String(inv.status || "").trim().toLowerCase() === "paid";
+      const statusIsPaid =
+        String(inv.status || "").trim().toLowerCase() === "paid";
       const dateValue = inv.paidAt || inv.paidDate || inv.createdAt;
       return statusIsPaid && isWithinSummaryRange(dateValue) && branchMatches(inv);
     });
-
-    const unpaidInvoices = invoices.filter((inv) => {
-      const statusIsUnpaid = String(inv.status || "").trim().toLowerCase() === "unpaid";
-      const dateValue = inv.createdAt;
-      return statusIsUnpaid && isWithinSummaryRange(dateValue) && branchMatches(inv);
-    });
-
-    const filteredExpenses = expenses.filter((exp) =>
-      isWithinSummaryRange(exp.date || exp.createdAt)
-    );
-
-    const filteredPayroll = payroll.filter((item) =>
-      isWithinSummaryRange(item.payPeriod || item.createdAt)
-    );
-
-    const totalRevenue = roundMoney(
-      paidInvoices.reduce((sum, inv) => sum + Number(inv.finalTotal || 0), 0)
-    );
 
     const outstandingRevenue = roundMoney(
       unpaidInvoices.reduce((sum, inv) => sum + Number(inv.finalTotal || 0), 0)
     );
 
-    const totalExpenses = roundMoney(
-      filteredExpenses.reduce((sum, exp) => sum + Number(exp.amount || 0), 0)
+    const cashOnHand = roundMoney(
+      chartAccounts
+        .filter(
+          (account) =>
+            account.accountCategory === "Asset" &&
+            (
+              String(account.accountName || "").toLowerCase().includes("cash") ||
+              String(account.accountName || "").toLowerCase().includes("bank")
+            )
+        )
+        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
     );
 
-    const totalPayroll = roundMoney(
-      filteredPayroll.reduce((sum, item) => sum + Number(item.netPay || 0), 0)
-    );
-
-    const netPosition = roundMoney(totalRevenue - totalExpenses - totalPayroll);
+    const netPosition = roundMoney(totalRevenue - totalExpenses);
 
     res.json({
       success: true,
@@ -803,6 +836,7 @@ const getFinanceSummary = async (req, res) => {
         totalPayroll,
         paidInvoices: paidInvoices.length,
         unpaidInvoices: unpaidInvoices.length,
+        cashOnHand,
         netPosition,
       },
     });
