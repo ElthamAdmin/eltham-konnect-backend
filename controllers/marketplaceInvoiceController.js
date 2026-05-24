@@ -1,5 +1,6 @@
 const MarketplaceInvoice = require("../models/MarketplaceInvoice");
 const MarketplaceOrder = require("../models/MarketplaceOrder");
+const AmazonAssociateItem = require("../models/AmazonAssociateItem");
 
 const createInvoiceNumber = () => `MKI-${Date.now()}`;
 
@@ -158,6 +159,43 @@ const markMarketplaceInvoicePaid = async (req, res) => {
       });
     }
 
+    if (invoice.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Marketplace invoice is already marked as paid",
+      });
+    }
+
+    for (const invoiceItem of invoice.items || []) {
+      const product = await AmazonAssociateItem.findOne({
+        itemNumber: invoiceItem.itemNumber,
+        productType: "EK Inventory",
+      });
+
+      if (!product) continue;
+
+      const quantitySold = Number(invoiceItem.quantity || 0);
+      const sellingPrice = Number(invoiceItem.sellingPrice || 0);
+      const costPrice = Number(product.costPrice || 0);
+      const lineRevenue = Number(invoiceItem.lineTotal || sellingPrice * quantitySold);
+      const lineProfit = (sellingPrice - costPrice) * quantitySold;
+
+      product.quantityInStock = Math.max(
+        0,
+        Number(product.quantityInStock || 0) - quantitySold
+      );
+
+      product.unitsSold = Number(product.unitsSold || 0) + quantitySold;
+      product.totalRevenue = Number(product.totalRevenue || 0) + lineRevenue;
+      product.totalProfit = Number(product.totalProfit || 0) + lineProfit;
+
+      if (product.quantityInStock <= 0) {
+        product.quantityInStock = 0;
+      }
+
+      await product.save();
+    }
+
     invoice.status = "Paid";
     invoice.paidAt = new Date();
     await invoice.save();
@@ -170,7 +208,7 @@ const markMarketplaceInvoicePaid = async (req, res) => {
       order.status = "Paid";
       order.statusHistory.push({
         status: "Paid",
-        note: `Marketplace invoice ${invoice.invoiceNumber} marked as paid`,
+        note: `Marketplace invoice ${invoice.invoiceNumber} marked as paid and inventory updated`,
         updatedBy: req.user?.fullName || req.user?.name || req.user?.email || "System User",
         updatedAt: new Date(),
       });
@@ -180,7 +218,7 @@ const markMarketplaceInvoicePaid = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Marketplace invoice marked as paid",
+      message: "Marketplace invoice marked as paid and inventory updated",
       data: invoice,
     });
   } catch (error) {
