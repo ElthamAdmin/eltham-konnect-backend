@@ -192,10 +192,57 @@ const markMarketplaceInvoicePaid = async (req, res) => {
   }
 };
 
+const updateMarketplaceInvoiceCharges = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { deliveryFee = 0, discount = 0 } = req.body;
+
+    const invoice = await MarketplaceInvoice.findOne({ invoiceNumber });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message: "Marketplace invoice not found",
+      });
+    }
+
+    if (invoice.status === "Paid") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot adjust charges after invoice is paid",
+      });
+    }
+
+    invoice.deliveryFee = Number(deliveryFee || 0);
+    invoice.discount = Number(discount || 0);
+    invoice.finalTotal = Math.max(
+      0,
+      Number(invoice.subtotal || 0) +
+        Number(invoice.deliveryFee || 0) -
+        Number(invoice.discount || 0)
+    );
+
+    await invoice.save();
+
+    res.json({
+      success: true,
+      message: "Marketplace invoice charges updated",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Update marketplace invoice charges error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not update marketplace invoice charges",
+    });
+  }
+};
+
 module.exports = {
   generateMarketplaceInvoice,
   getAllMarketplaceInvoices,
   getMyMarketplaceInvoices,
   updateMarketplaceInvoicePaymentLink,
   markMarketplaceInvoicePaid,
+  updateMarketplaceInvoiceCharges,
 };
