@@ -256,6 +256,57 @@ const getStorefrontDashboard = async (req, res) => {
       (item) => Number(item.quantityInStock || 0) <= Number(item.lowStockAlertLevel || 0)
     );
 
+    const zeroStockItems = ekInventory.filter(
+  (item) => Number(item.quantityInStock || 0) === 0
+);
+
+const slowMovingItems = ekInventory.filter(
+  (item) =>
+    Number(item.quantityInStock || 0) > 0 &&
+    Number(item.unitsSold || 0) === 0
+);
+
+const totalUnitsSold = ekInventory.reduce(
+  (sum, item) => sum + Number(item.unitsSold || 0),
+  0
+);
+
+const totalRevenue = ekInventory.reduce(
+  (sum, item) => sum + Number(item.totalRevenue || 0),
+  0
+);
+
+const totalProfit = ekInventory.reduce(
+  (sum, item) => sum + Number(item.totalProfit || 0),
+  0
+);
+
+const averageMargin =
+  totalRevenue > 0
+    ? ((totalProfit / totalRevenue) * 100).toFixed(1)
+    : "0.0";
+
+const bestSellingProducts = [...ekInventory]
+  .sort(
+    (a, b) =>
+      Number(b.unitsSold || 0) - Number(a.unitsSold || 0)
+  )
+  .slice(0, 5);
+
+let inventoryHealth = "Healthy";
+
+if (
+  zeroStockItems.length >= 5 ||
+  lowStockItems.length >= 8
+) {
+  inventoryHealth = "Critical";
+} else if (
+  zeroStockItems.length >= 2 ||
+  lowStockItems.length >= 4
+) {
+  inventoryHealth = "Moderate";
+}
+
     res.json({
       success: true,
       message: "Storefront dashboard retrieved successfully",
@@ -267,7 +318,18 @@ const getStorefrontDashboard = async (req, res) => {
         inventoryValue,
         potentialRevenue,
         potentialProfit: potentialRevenue - inventoryValue,
-        lowStockItems,
+
+totalUnitsSold,
+totalRevenue,
+totalProfit,
+averageMargin,
+
+inventoryHealth,
+
+lowStockItems,
+zeroStockItems,
+slowMovingItems,
+bestSellingProducts,
       },
     });
   } catch (error) {
