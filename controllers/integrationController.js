@@ -1,4 +1,5 @@
 const Package = require("../models/Package");
+const Manifest = require("../models/Manifest");
 const Customer = require("../models/Customer");
 const FreightPartner = require("../models/FreightPartner");
 const PointsHistory = require("../models/PointsHistory");
@@ -1141,9 +1142,214 @@ console.log("KP CUSTOMER NAME:", customerName);
   }
 };
 
+const updateKpPackage = async (req, res) => {
+  try {
+    const payload = Array.isArray(req.body)
+      ? req.body
+      : [req.body];
+
+    const results = [];
+
+    for (const item of payload) {
+      const trackingNumber = String(
+        getKpValue(item, [
+          "trackingNumber",
+          "TrackingNumber",
+        ])
+      ).trim();
+
+      if (!trackingNumber) {
+        results.push({
+          status: "Failed",
+          message: "Missing tracking number",
+        });
+        continue;
+      }
+
+      const pkg = await Package.findOne({ trackingNumber });
+
+      if (!pkg) {
+        results.push({
+          trackingNumber,
+          status: "Not Found",
+        });
+        continue;
+      }
+
+      pkg.weight = Number(
+        getKpValue(item, ["weight", "Weight"]) || pkg.weight
+      );
+
+      pkg.externalStatus =
+        getKpValue(item, ["claimed", "Claimed"])
+          ? "CLAIMED"
+          : "ARRIVED";
+
+      pkg.lastExternalSyncAt = new Date();
+
+      pkg.syncNotes = `Updated from KP package update API at ${new Date().toISOString()}`;
+
+      await pkg.save();
+
+      results.push({
+        trackingNumber,
+        status: "Updated",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "KP package updates processed.",
+      data: results,
+    });
+  } catch (error) {
+    console.error("KP update package error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "KP package update failed.",
+      error: error.message,
+    });
+  }
+};
+
+const deleteKpPackage = async (req, res) => {
+  try {
+    const payload = Array.isArray(req.body)
+      ? req.body
+      : [req.body];
+
+    const results = [];
+
+    for (const item of payload) {
+      const trackingNumber = String(
+        getKpValue(item, [
+          "trackingNumber",
+          "TrackingNumber",
+        ])
+      ).trim();
+
+      if (!trackingNumber) {
+        results.push({
+          status: "Failed",
+          message: "Missing tracking number",
+        });
+        continue;
+      }
+
+      const pkg = await Package.findOne({ trackingNumber });
+
+      if (!pkg) {
+        results.push({
+          trackingNumber,
+          status: "Not Found",
+        });
+        continue;
+      }
+
+      pkg.status = "Deleted by KP";
+      pkg.externalStatus = "DELETED";
+      pkg.lastExternalSyncAt = new Date();
+
+      pkg.syncNotes = `Deleted from KP API at ${new Date().toISOString()}`;
+
+      await pkg.save();
+
+      results.push({
+        trackingNumber,
+        status: "Deleted",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "KP package deletions processed.",
+      data: results,
+    });
+  } catch (error) {
+    console.error("KP delete package error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "KP package delete failed.",
+      error: error.message,
+    });
+  }
+};
+
+const updateKpManifest = async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const manifestData = payload.Manifest || {};
+
+    const manifestCode =
+      manifestData.ManifestCode || "";
+
+    if (!manifestCode) {
+      return res.status(400).json({
+        success: false,
+        message: "ManifestCode is required.",
+      });
+    }
+
+    let manifest = await Manifest.findOne({
+      manifestNumber: manifestCode,
+    });
+
+    if (!manifest) {
+      manifest = await Manifest.create({
+        manifestNumber: manifestCode,
+        origin: "KP Logistics",
+        packageCount:
+          Number(manifestData.ItemCount || 0),
+        status: "In Transit",
+      });
+    }
+
+    manifest.packageCount =
+      Number(manifestData.ItemCount || 0);
+
+    manifest.status = "In Transit";
+
+    manifest.awbNumber =
+      manifestData.AWBNumber || "";
+
+    manifest.flightDate =
+      manifestData.FlightDate || null;
+
+    manifest.totalWeight =
+      Number(manifestData.Weight || 0);
+
+    manifest.integrationSource = "KP Logistics";
+
+    manifest.lastExternalSyncAt = new Date();
+
+    manifest.rawPayload = payload;
+
+    await manifest.save();
+
+    return res.json({
+      success: true,
+      message: "KP manifest updated successfully.",
+      data: manifest,
+    });
+  } catch (error) {
+    console.error("KP manifest update error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "KP manifest update failed.",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   receiveFreightPackage,
   syncLtwPackages,
   getKpCustomers,
   receiveKpPackages,
+  updateKpPackage,
+  deleteKpPackage,
+  updateKpManifest,
 };
