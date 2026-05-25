@@ -20,6 +20,7 @@ const SYSTEM_ACCOUNTS = {
   PENSION_PAYABLE: "2140",
 
   OWNER_EQUITY: "3000",
+  OWNER_DRAWINGS: "3050",
   RETAINED_EARNINGS: "3100",
 
   SHIPPING_REVENUE: "4000",
@@ -102,6 +103,12 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
     accountCategory: "Equity",
     normalBalance: "Credit",
   },
+  {
+  accountCode: "3050",
+  accountName: "Owner Drawings",
+  accountCategory: "Equity",
+  normalBalance: "Debit",
+},
   {
     accountCode: "3100",
     accountName: "Retained Earnings",

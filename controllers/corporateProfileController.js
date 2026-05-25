@@ -1,5 +1,9 @@
 const CorporateProfile = require("../models/CorporateProfile");
 
+const {
+  ensureSystemAccounts,
+} = require("../utils/generalLedgerPoster");
+
 const getCorporateProfile = async (req, res) => {
   try {
     let profile = await CorporateProfile.findOne();
@@ -37,7 +41,20 @@ const updateCorporateProfile = async (req, res) => {
 
     Object.assign(profile, req.body);
 
-    await profile.save();
+await ensureSystemAccounts();
+
+profile.ownerEquityAccountCreated = true;
+profile.ownerDrawingsAccountCreated = true;
+profile.retainedEarningsAccountCreated = true;
+
+if (
+  profile.fiscalYearStart &&
+  profile.fiscalYearEnd
+) {
+  profile.fiscalYearInitialized = true;
+}
+
+await profile.save();
 
     res.json({
       success: true,

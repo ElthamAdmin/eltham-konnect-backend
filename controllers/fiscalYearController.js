@@ -47,6 +47,15 @@ const createFiscalYear = async (req, res) => {
       isCurrentYear: true,
     });
 
+    if (req.body.isCurrentYear === true) {
+  await FiscalYear.updateMany(
+    {},
+    {
+      isCurrentYear: false,
+    }
+  );
+}
+
     if (!currentYear) {
       req.body.isCurrentYear = true;
     }
@@ -85,6 +94,13 @@ const closeFiscalYear = async (req, res) => {
     const year = await FiscalYear.findOne({
       fiscalYear,
     });
+
+    if (year?.status === "Locked") {
+  return res.status(400).json({
+    success: false,
+    message: "Locked fiscal years cannot be modified",
+  });
+}
 
     if (!year) {
       return res.status(404).json({

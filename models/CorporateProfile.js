@@ -105,6 +105,26 @@ const corporateProfileSchema = new mongoose.Schema(
       default: "",
     },
 
+    ownerEquityAccountCreated: {
+  type: Boolean,
+  default: false,
+},
+
+ownerDrawingsAccountCreated: {
+  type: Boolean,
+  default: false,
+},
+
+retainedEarningsAccountCreated: {
+  type: Boolean,
+  default: false,
+},
+
+fiscalYearInitialized: {
+  type: Boolean,
+  default: false,
+},
+
     transitionStatus: {
       type: String,
       enum: [
