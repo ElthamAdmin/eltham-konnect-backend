@@ -853,84 +853,114 @@ const getFinanceSummary = async (req, res) => {
 const getFinancialReports = async (req, res) => {
   try {
     const { from = "", to = "" } = req.query;
-
     const { startDate, endDate } = buildDateRange(from, to);
 
-    const invoices = await Invoice.find();
-    const expenses = await Expense.find();
-    const payroll = await Payroll.find();
-    const accounts = await FinancialAccount.find();
-
-    const filteredPaidInvoices = invoices.filter((inv) => {
-      const statusIsPaid = String(inv.status || "").trim().toLowerCase() === "paid";
-      const dateValue = inv.paidAt || inv.paidDate || inv.createdAt;
-      return statusIsPaid && isDateWithinRange(dateValue, startDate, endDate);
+    const ledgerTransactions = await GeneralLedgerTransaction.find().sort({
+      entryDate: 1,
+      createdAt: 1,
     });
 
-    const filteredUnpaidInvoices = invoices.filter((inv) => {
-      const statusIsUnpaid =
-        String(inv.status || "").trim().toLowerCase() === "unpaid";
-      const dateValue = inv.createdAt;
-      return statusIsUnpaid && isDateWithinRange(dateValue, startDate, endDate);
-    });
+    const chartAccounts = await ChartOfAccount.find({ status: "Active" });
 
-    const filteredExpenses = expenses.filter((exp) =>
-      isDateWithinRange(exp.date || exp.createdAt, startDate, endDate)
+    const filteredLedger = ledgerTransactions.filter((item) =>
+      isDateWithinRange(item.entryDate || item.createdAt, startDate, endDate)
     );
 
-    const filteredPayroll = payroll.filter((item) =>
-      isDateWithinRange(item.payPeriod || item.createdAt, startDate, endDate)
+    const calculateLedgerCategoryTotal = (category, normalSide = "Credit") => {
+      return roundMoney(
+        filteredLedger
+          .filter((item) => item.accountCategory === category)
+          .reduce((sum, item) => {
+            const debit = Number(item.debit || 0);
+            const credit = Number(item.credit || 0);
+
+            if (normalSide === "Debit") {
+              return sum + debit - credit;
+            }
+
+            return sum + credit - debit;
+          }, 0)
+      );
+    };
+
+    const revenue = calculateLedgerCategoryTotal("Revenue", "Credit");
+    const costOfSales = calculateLedgerCategoryTotal("Cost of Sales", "Debit");
+    const operatingExpenses = calculateLedgerCategoryTotal("Expense", "Debit");
+
+    const payrollExpense = roundMoney(
+      filteredLedger
+        .filter(
+          (item) =>
+            item.accountCategory === "Expense" &&
+            String(item.accountName || "").toLowerCase().includes("payroll")
+        )
+        .reduce(
+          (sum, item) =>
+            sum + Number(item.debit || 0) - Number(item.credit || 0),
+          0
+        )
     );
 
-    const revenue = roundMoney(
-      filteredPaidInvoices.reduce(
-        (sum, inv) => sum + Number(inv.finalTotal || 0),
-        0
-      )
+    const totalExpenses = roundMoney(costOfSales + operatingExpenses);
+    const grossProfit = roundMoney(revenue - costOfSales);
+    const netProfit = roundMoney(revenue - totalExpenses);
+
+    const getChartBalanceByCategory = (category, normalSide = "Debit") => {
+      return roundMoney(
+        chartAccounts
+          .filter((account) => account.accountCategory === category)
+          .reduce((sum, account) => {
+            return sum + Number(account.currentBalance || 0);
+          }, 0)
+      );
+    };
+
+    const totalAssets = getChartBalanceByCategory("Asset", "Debit");
+    const totalLiabilities = getChartBalanceByCategory("Liability", "Credit");
+    const totalEquity = getChartBalanceByCategory("Equity", "Credit");
+
+    const cashOnHand = roundMoney(
+      chartAccounts
+        .filter(
+          (account) =>
+            account.accountCategory === "Asset" &&
+            (
+              String(account.accountName || "").toLowerCase().includes("cash") ||
+              String(account.accountName || "").toLowerCase().includes("bank") ||
+              String(account.accountType || "").toLowerCase().includes("bank")
+            )
+        )
+        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
     );
 
     const accountsReceivable = roundMoney(
-      filteredUnpaidInvoices.reduce(
-        (sum, inv) => sum + Number(inv.finalTotal || 0),
-        0
-      )
+      chartAccounts
+        .filter((account) => account.accountCode === "1100")
+        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
     );
 
-    const operatingExpenses = roundMoney(
-      filteredExpenses.reduce(
-        (sum, exp) => sum + Number(exp.amount || 0),
-        0
-      )
+    const accountsPayable = roundMoney(
+      chartAccounts
+        .filter((account) => account.accountCode === "2000")
+        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
     );
-
-    const payrollExpense = roundMoney(
-      filteredPayroll.reduce(
-        (sum, item) => sum + Number(item.netPay || 0),
-        0
-      )
-    );
-
-    const totalExpenses = roundMoney(operatingExpenses + payrollExpense);
-    const netProfit = roundMoney(revenue - totalExpenses);
-
-    const cashOnHand = roundMoney(
-      accounts.reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
-    );
-
-    const invoiceStats = {
-      paidCount: filteredPaidInvoices.length,
-      unpaidCount: filteredUnpaidInvoices.length,
-      totalCount: filteredPaidInvoices.length + filteredUnpaidInvoices.length,
-    };
 
     const expenseByCategoryMap = {};
-    filteredExpenses.forEach((exp) => {
-      const category = exp.category || "Uncategorized";
-      expenseByCategoryMap[category] =
-        roundMoney(
-          Number(expenseByCategoryMap[category] || 0) + Number(exp.amount || 0)
+
+    filteredLedger
+      .filter(
+        (item) =>
+          item.accountCategory === "Expense" ||
+          item.accountCategory === "Cost of Sales"
+      )
+      .forEach((item) => {
+        const category = item.accountName || "Uncategorized";
+        expenseByCategoryMap[category] = roundMoney(
+          Number(expenseByCategoryMap[category] || 0) +
+            Number(item.debit || 0) -
+            Number(item.credit || 0)
         );
-    });
+      });
 
     const expenseByCategory = Object.entries(expenseByCategoryMap)
       .map(([category, amount]) => ({
@@ -954,31 +984,37 @@ const getFinancialReports = async (req, res) => {
       }
     };
 
-    filteredPaidInvoices.forEach((inv) => {
-      const monthKey = toMonthKey(inv.paidAt || inv.paidDate || inv.createdAt);
+    filteredLedger.forEach((item) => {
+      const monthKey = toMonthKey(item.entryDate || item.createdAt);
       if (!monthKey) return;
-      ensureMonth(monthKey);
-      monthMap[monthKey].revenue = roundMoney(
-        Number(monthMap[monthKey].revenue || 0) + Number(inv.finalTotal || 0)
-      );
-    });
 
-    filteredExpenses.forEach((exp) => {
-      const monthKey = toMonthKey(exp.date || exp.createdAt);
-      if (!monthKey) return;
       ensureMonth(monthKey);
-      monthMap[monthKey].expenses = roundMoney(
-        Number(monthMap[monthKey].expenses || 0) + Number(exp.amount || 0)
-      );
-    });
 
-    filteredPayroll.forEach((item) => {
-      const monthKey = toMonthKey(item.payPeriod || item.createdAt);
-      if (!monthKey) return;
-      ensureMonth(monthKey);
-      monthMap[monthKey].payroll = roundMoney(
-        Number(monthMap[monthKey].payroll || 0) + Number(item.netPay || 0)
-      );
+      const debit = Number(item.debit || 0);
+      const credit = Number(item.credit || 0);
+
+      if (item.accountCategory === "Revenue") {
+        monthMap[monthKey].revenue = roundMoney(
+          monthMap[monthKey].revenue + credit - debit
+        );
+      }
+
+      if (
+        item.accountCategory === "Expense" ||
+        item.accountCategory === "Cost of Sales"
+      ) {
+        const expenseAmount = debit - credit;
+
+        monthMap[monthKey].expenses = roundMoney(
+          monthMap[monthKey].expenses + expenseAmount
+        );
+
+        if (String(item.accountName || "").toLowerCase().includes("payroll")) {
+          monthMap[monthKey].payroll = roundMoney(
+            monthMap[monthKey].payroll + expenseAmount
+          );
+        }
+      }
     });
 
     const monthlyTrend = Object.values(monthMap)
@@ -986,99 +1022,50 @@ const getFinancialReports = async (req, res) => {
       .map((item) => ({
         ...item,
         net: roundMoney(
-          Number(item.revenue || 0) -
-            Number(item.expenses || 0) -
-            Number(item.payroll || 0)
+          Number(item.revenue || 0) - Number(item.expenses || 0)
         ),
       }));
-const statutoryTotals = {
-  nisEmployee: roundMoney(
-    filteredPayroll.reduce((sum, item) => sum + Number(item.nisEmployee || 0), 0)
-  ),
-  nhtEmployee: roundMoney(
-    filteredPayroll.reduce((sum, item) => sum + Number(item.nhtEmployee || 0), 0)
-  ),
-  educationTax: roundMoney(
-    filteredPayroll.reduce((sum, item) => sum + Number(item.educationTax || 0), 0)
-  ),
-  incomeTax: roundMoney(
-    filteredPayroll.reduce((sum, item) => sum + Number(item.incomeTax || 0), 0)
-  ),
-  pensionEmployee: roundMoney(
-    filteredPayroll.reduce((sum, item) => sum + Number(item.pensionEmployee || 0), 0)
-  ),
-  totalDeductions: roundMoney(
-    filteredPayroll.reduce(
-      (sum, item) =>
-        sum +
-        Number(
-          item.totalDeductions !== undefined
-            ? item.totalDeductions
-            : item.deductions || 0
-        ),
-      0
-    )
-  ),
-};
 
-const statutoryByEmployeeMap = {};
+    const payroll = await Payroll.find();
 
-filteredPayroll.forEach((item) => {
-  const employeeKey =
-    `${item.employeeId || "NO-ID"}__${item.employeeName || "Unknown Employee"}`;
+    const filteredPayroll = payroll.filter((item) =>
+      isDateWithinRange(item.payPeriod || item.createdAt, startDate, endDate)
+    );
 
-  if (!statutoryByEmployeeMap[employeeKey]) {
-    statutoryByEmployeeMap[employeeKey] = {
-      employeeId: item.employeeId || "-",
-      employeeName: item.employeeName || "-",
-      role: item.role || "-",
-      nisEmployee: 0,
-      nhtEmployee: 0,
-      educationTax: 0,
-      incomeTax: 0,
-      pensionEmployee: 0,
-      totalDeductions: 0,
-      netPay: 0,
-      grossPay: 0,
+    const statutoryTotals = {
+      nisEmployee: roundMoney(
+        filteredPayroll.reduce((sum, item) => sum + Number(item.nisEmployee || 0), 0)
+      ),
+      nhtEmployee: roundMoney(
+        filteredPayroll.reduce((sum, item) => sum + Number(item.nhtEmployee || 0), 0)
+      ),
+      educationTax: roundMoney(
+        filteredPayroll.reduce((sum, item) => sum + Number(item.educationTax || 0), 0)
+      ),
+      incomeTax: roundMoney(
+        filteredPayroll.reduce((sum, item) => sum + Number(item.incomeTax || 0), 0)
+      ),
+      pensionEmployee: roundMoney(
+        filteredPayroll.reduce((sum, item) => sum + Number(item.pensionEmployee || 0), 0)
+      ),
+      totalDeductions: roundMoney(
+        filteredPayroll.reduce(
+          (sum, item) =>
+            sum +
+            Number(
+              item.totalDeductions !== undefined
+                ? item.totalDeductions
+                : item.deductions || 0
+            ),
+          0
+        )
+      ),
     };
-  }
 
-  statutoryByEmployeeMap[employeeKey].nisEmployee = roundMoney(
-    statutoryByEmployeeMap[employeeKey].nisEmployee + Number(item.nisEmployee || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].nhtEmployee = roundMoney(
-    statutoryByEmployeeMap[employeeKey].nhtEmployee + Number(item.nhtEmployee || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].educationTax = roundMoney(
-    statutoryByEmployeeMap[employeeKey].educationTax + Number(item.educationTax || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].incomeTax = roundMoney(
-    statutoryByEmployeeMap[employeeKey].incomeTax + Number(item.incomeTax || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].pensionEmployee = roundMoney(
-    statutoryByEmployeeMap[employeeKey].pensionEmployee + Number(item.pensionEmployee || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].grossPay = roundMoney(
-    statutoryByEmployeeMap[employeeKey].grossPay + Number(item.grossPay || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].netPay = roundMoney(
-    statutoryByEmployeeMap[employeeKey].netPay + Number(item.netPay || 0)
-  );
-  statutoryByEmployeeMap[employeeKey].totalDeductions = roundMoney(
-    statutoryByEmployeeMap[employeeKey].totalDeductions +
-      Number(
-        item.totalDeductions !== undefined
-          ? item.totalDeductions
-          : item.deductions || 0
-      )
-  );
-});
-
-const statutoryByEmployee = Object.values(statutoryByEmployeeMap).sort((a, b) =>
-  String(a.employeeName || "").localeCompare(String(b.employeeName || ""))
-);
     const profitAndLoss = {
       revenue,
+      costOfSales,
+      grossProfit,
       operatingExpenses,
       payrollExpense,
       totalExpenses,
@@ -1086,53 +1073,139 @@ const statutoryByEmployee = Object.values(statutoryByEmployeeMap).sort((a, b) =>
     };
 
     const cashFlow = {
-      collectedRevenue: revenue,
-      operatingExpensePayments: operatingExpenses,
-      payrollPayments: payrollExpense,
-      totalCashOutflows: totalExpenses,
-      netCashFlow: roundMoney(revenue - totalExpenses),
+      cashInflowFromRevenue: roundMoney(
+        filteredLedger
+          .filter(
+            (item) =>
+              item.accountCategory === "Asset" &&
+              Number(item.debit || 0) > 0
+          )
+          .reduce((sum, item) => sum + Number(item.debit || 0), 0)
+      ),
+      cashOutflowForExpenses: roundMoney(
+        filteredLedger
+          .filter(
+            (item) =>
+              item.accountCategory === "Asset" &&
+              Number(item.credit || 0) > 0
+          )
+          .reduce((sum, item) => sum + Number(item.credit || 0), 0)
+      ),
     };
+
+    cashFlow.netCashFlow = roundMoney(
+      cashFlow.cashInflowFromRevenue - cashFlow.cashOutflowForExpenses
+    );
 
     const balanceSheet = {
       assets: {
         cashOnHand,
         accountsReceivable,
-        totalAssets: roundMoney(cashOnHand + accountsReceivable),
+        totalAssets,
       },
       liabilities: {
-        totalLiabilities: 0,
+        accountsPayable,
+        totalLiabilities,
       },
       equity: {
-        ownerEquity: roundMoney(cashOnHand + accountsReceivable),
+        totalEquity,
+        accountingEquationEquity: roundMoney(totalAssets - totalLiabilities),
+      },
+      check: {
+        assetsMinusLiabilitiesAndEquity: roundMoney(
+          totalAssets - totalLiabilities - totalEquity
+        ),
       },
     };
 
     res.json({
-  success: true,
-  data: {
-    filters: {
-      from,
-      to,
-    },
-    reportMeta: {
-      generatedAt: new Date().toISOString(),
-      reportTitle: "Financial Reports",
-    },
-    invoiceStats,
-    profitAndLoss,
-    cashFlow,
-    balanceSheet,
-    statutoryTotals,
-    statutoryByEmployee,
-    expenseByCategory,
-    monthlyTrend,
-  },
-});
+      success: true,
+      data: {
+        filters: {
+          from,
+          to,
+        },
+        reportMeta: {
+          generatedAt: new Date().toISOString(),
+          reportTitle: "Ledger-Based Financial Reports",
+          sourceOfTruth: "GeneralLedgerTransaction + ChartOfAccount",
+        },
+        profitAndLoss,
+        cashFlow,
+        balanceSheet,
+        statutoryTotals,
+        expenseByCategory,
+        monthlyTrend,
+      },
+    });
   } catch (error) {
     console.error("Error getting financial reports:", error);
     res.status(500).json({
       success: false,
       message: "Failed to retrieve financial reports",
+      error: error.message,
+    });
+  }
+};
+
+const getMonthlyIncomeVsExpenses = async (req, res) => {
+  try {
+    const ledgerTransactions = await GeneralLedgerTransaction.find().sort({
+      entryDate: 1,
+      createdAt: 1,
+    });
+
+    const monthMap = {};
+
+    const ensureMonth = (monthKey) => {
+      if (!monthMap[monthKey]) {
+        monthMap[monthKey] = {
+          month: monthKey,
+          income: 0,
+          expenses: 0,
+        };
+      }
+    };
+
+    ledgerTransactions.forEach((item) => {
+      const monthKey = toMonthKey(item.entryDate || item.createdAt);
+      if (!monthKey) return;
+
+      ensureMonth(monthKey);
+
+      if (item.accountCategory === "Revenue") {
+        monthMap[monthKey].income = roundMoney(
+          monthMap[monthKey].income +
+            Number(item.credit || 0) -
+            Number(item.debit || 0)
+        );
+      }
+
+      if (
+        item.accountCategory === "Expense" ||
+        item.accountCategory === "Cost of Sales"
+      ) {
+        monthMap[monthKey].expenses = roundMoney(
+          monthMap[monthKey].expenses +
+            Number(item.debit || 0) -
+            Number(item.credit || 0)
+        );
+      }
+    });
+
+    const monthlyData = Object.values(monthMap).sort((a, b) =>
+      a.month.localeCompare(b.month)
+    );
+
+    res.json({
+      success: true,
+      data: monthlyData,
+    });
+  } catch (error) {
+    console.error("Error getting monthly income vs expenses:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve monthly chart data",
       error: error.message,
     });
   }
