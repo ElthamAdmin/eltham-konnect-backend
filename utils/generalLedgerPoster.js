@@ -13,7 +13,6 @@ const SYSTEM_ACCOUNTS = {
   INVENTORY: "1200",
 
   ACCOUNTS_PAYABLE: "2000",
-
   PAYE_PAYABLE: "2100",
   NIS_PAYABLE: "2110",
   NHT_PAYABLE: "2120",
@@ -32,6 +31,8 @@ const SYSTEM_ACCOUNTS = {
   PAYROLL_EXPENSE: "6100",
   RENT_EXPENSE: "6200",
   UTILITIES_EXPENSE: "6300",
+  DELIVERY_EXPENSE: "6400",
+  SUPPLIES_EXPENSE: "6500",
 };
 
 const SYSTEM_ACCOUNT_DEFINITIONS = [
@@ -65,6 +66,36 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
     accountCategory: "Liability",
     normalBalance: "Credit",
   },
+  {
+  accountCode: "2100",
+  accountName: "PAYE Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2110",
+  accountName: "NIS Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2120",
+  accountName: "NHT Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2130",
+  accountName: "Education Tax Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2140",
+  accountName: "Pension Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
   {
   accountCode: "2100",
   accountName: "PAYE Payable",
@@ -149,6 +180,18 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
     accountCategory: "Expense",
     normalBalance: "Debit",
   },
+  {
+  accountCode: "6400",
+  accountName: "Delivery Expense",
+  accountCategory: "Expense",
+  normalBalance: "Debit",
+},
+{
+  accountCode: "6500",
+  accountName: "Supplies Expense",
+  accountCategory: "Expense",
+  normalBalance: "Debit",
+},
 ];
 
 const generateEntryNumber = () =>

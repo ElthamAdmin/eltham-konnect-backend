@@ -202,6 +202,25 @@ const getExpenseAccountCode = (category = "") => {
     return SYSTEM_ACCOUNTS.UTILITIES_EXPENSE;
   }
 
+  if (
+    normalized.includes("delivery") ||
+    normalized.includes("fuel") ||
+    normalized.includes("gas") ||
+    normalized.includes("transport") ||
+    normalized.includes("courier")
+  ) {
+    return SYSTEM_ACCOUNTS.DELIVERY_EXPENSE;
+  }
+
+  if (
+    normalized.includes("supply") ||
+    normalized.includes("supplies") ||
+    normalized.includes("stationery") ||
+    normalized.includes("office")
+  ) {
+    return SYSTEM_ACCOUNTS.SUPPLIES_EXPENSE;
+  }
+
   if (normalized.includes("payroll")) {
     return SYSTEM_ACCOUNTS.PAYROLL_EXPENSE;
   }
