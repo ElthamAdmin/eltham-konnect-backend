@@ -1,54 +1,59 @@
 const mongoose = require("mongoose");
 
-const financialAccountSchema = new mongoose.Schema({
-  accountNumber: {
-    type: String,
-    required: true,
-    unique: true
-  },
+const financialAccountSchema = new mongoose.Schema(
+  {
+    accountNumber: {
+      type: String,
+      required: true,
+      unique: true,
+    },
 
-  accountName: {
-    type: String,
-    required: true
-  },
+    accountName: {
+      type: String,
+      required: true,
+    },
 
-  accountType: {
-    type: String,
-    enum: ["Bank", "Cash", "Credit Card"],
-    required: true
-  },
+    accountType: {
+      type: String,
+      enum: ["Bank", "Cash", "Credit Card"],
+      required: true,
+    },
 
-  bankName: {
-    type: String,
-    default: ""
-  },
+    linkedChartAccountCode: {
+      type: String,
+      default: "",
+      index: true,
+    },
 
-  openingBalance: {
-    type: Number,
-    default: 0
-  },
+    bankName: {
+      type: String,
+      default: "",
+    },
 
-  currentBalance: {
-    type: Number,
-    default: 0
-  },
+    openingBalance: {
+      type: Number,
+      default: 0,
+    },
 
-  currency: {
-    type: String,
-    default: "JMD"
-  },
+    currentBalance: {
+      type: Number,
+      default: 0,
+    },
 
-  status: {
-    type: String,
-    enum: ["Active", "Inactive"],
-    default: "Active"
-  },
+    currency: {
+      type: String,
+      default: "JMD",
+    },
 
-  createdAt: {
-    type: Date,
-    default: Date.now
+    status: {
+      type: String,
+      enum: ["Active", "Inactive"],
+      default: "Active",
+    },
+  },
+  {
+    timestamps: true,
   }
-
-});
+);
 
 module.exports = mongoose.model("FinancialAccount", financialAccountSchema);
