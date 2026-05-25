@@ -213,33 +213,34 @@ const createExpense = async (req, res) => {
       });
     }
 
-    let paidFromAccountName = "";
+let paidFromAccountName = "";
+let selectedFinancialAccount = null;
 
     if (paidFromAccountNumber) {
-      const account = await FinancialAccount.findOne({
-        accountNumber: paidFromAccountNumber,
-      });
+      selectedFinancialAccount = await FinancialAccount.findOne({
+  accountNumber: paidFromAccountNumber,
+});
 
-      if (!account) {
+      if (!selectedFinancialAccount) {
         return res.status(404).json({
           success: false,
           message: "Selected financial account not found",
         });
       }
 
-      if (Number(account.currentBalance || 0) < numericAmount) {
+      if (Number(selectedFinancialAccount.currentBalance || 0) < numericAmount) {
         return res.status(400).json({
           success: false,
           message: "Insufficient balance in selected account",
         });
       }
 
-      paidFromAccountName = account.accountName;
+paidFromAccountName = selectedFinancialAccount.accountName;
 
       await AccountTransaction.create({
         transactionNumber: `TRN-${Date.now()}`,
-        accountNumber: account.accountNumber,
-        accountName: account.accountName,
+        accountNumber: selectedFinancialAccount.accountNumber,
+        accountName: selectedFinancialAccount.accountName,
         transactionType: "Expense Payment",
         amount: numericAmount,
         reference: category,
@@ -264,7 +265,7 @@ const createExpense = async (req, res) => {
       },
       {
         accountCode:
-  account.linkedChartAccountCode ||
+  selectedFinancialAccount?.linkedChartAccountCode ||
   SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: numericAmount,
@@ -579,7 +580,7 @@ const createPayroll = async (req, res) => {
   SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: Number(payrollBreakdown.netPay || 0),
-        description: `Payroll paid from ${account.accountName}`,
+        description: `Payroll paid from ${selectedFinancialAccount?.accountName || "Cash on Hand"}`,
       },
     ],
   });
