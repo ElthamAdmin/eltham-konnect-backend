@@ -248,7 +248,77 @@ const closeYearToRetainedEarnings = async (req, res) => {
 module.exports = {
   getProfitAndLoss,
 
-  getBalanceSheet,
+  getBalanceSheet: async (req, res) => {
+    try {
+      const accounts = await ChartOfAccount.find({
+        status: "Active",
+      }).sort({
+        accountCode: 1,
+      });
+
+      const assets = [];
+      const liabilities = [];
+      const equity = [];
+
+      let totalAssets = 0;
+      let totalLiabilities = 0;
+      let totalEquity = 0;
+
+      accounts.forEach((account) => {
+        const item = {
+          accountCode: account.accountCode,
+          accountName: account.accountName,
+          accountType: account.accountType,
+          balance: Number(account.currentBalance || 0),
+        };
+
+        if (account.accountCategory === "Asset") {
+          assets.push(item);
+          totalAssets += item.balance;
+        }
+
+        if (account.accountCategory === "Liability") {
+          liabilities.push(item);
+          totalLiabilities += item.balance;
+        }
+
+        if (account.accountCategory === "Equity") {
+          equity.push(item);
+          totalEquity += item.balance;
+        }
+      });
+
+      const accountingDifference =
+        totalAssets - (totalLiabilities + totalEquity);
+
+      res.json({
+        success: true,
+        data: {
+          reportTitle: "Balance Sheet",
+          generatedAt: new Date().toISOString(),
+          assets,
+          liabilities,
+          equity,
+          totals: {
+            totalAssets,
+            totalLiabilities,
+            totalEquity,
+            accountingDifference,
+            isBalanced:
+              Math.round(accountingDifference * 100) / 100 === 0,
+          },
+        },
+      });
+    } catch (error) {
+      console.error("Balance sheet error:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Could not generate balance sheet",
+        error: error.message,
+      });
+    }
+  },
 
   closeYearToRetainedEarnings,
 };
