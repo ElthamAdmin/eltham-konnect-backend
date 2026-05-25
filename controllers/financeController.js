@@ -595,21 +595,59 @@ if (paidFromAccountNumber) {
     sourceModule: "Payroll",
     createdBy: req.user?.fullName || "System User",
     lines: [
-      {
-        accountCode: "6100",
-        debit: Number(payrollBreakdown.netPay || 0),
-        credit: 0,
-        description: `Payroll expense for ${finalEmployeeName}`,
-      },
-      {
-        accountCode:
-  selectedFinancialAccount?.linkedChartAccountCode ||
-  SYSTEM_ACCOUNTS.CASH_ON_HAND,
-        debit: 0,
-        credit: Number(payrollBreakdown.netPay || 0),
-        description: `Payroll paid from ${selectedFinancialAccount?.accountName || "Cash on Hand"}`,
-      },
-    ],
+  {
+    accountCode: SYSTEM_ACCOUNTS.PAYROLL_EXPENSE,
+    debit: Number(payrollBreakdown.grossPay || 0),
+    credit: 0,
+    description: `Gross payroll expense for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode: SYSTEM_ACCOUNTS.NIS_PAYABLE,
+    debit: 0,
+    credit: Number(payrollBreakdown.nisEmployee || 0),
+    description: `NIS payable for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode: SYSTEM_ACCOUNTS.NHT_PAYABLE,
+    debit: 0,
+    credit: Number(payrollBreakdown.nhtEmployee || 0),
+    description: `NHT payable for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode: SYSTEM_ACCOUNTS.EDUCATION_TAX_PAYABLE,
+    debit: 0,
+    credit: Number(payrollBreakdown.educationTax || 0),
+    description: `Education tax payable for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode: SYSTEM_ACCOUNTS.PAYE_PAYABLE,
+    debit: 0,
+    credit: Number(payrollBreakdown.incomeTax || 0),
+    description: `PAYE payable for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode: SYSTEM_ACCOUNTS.PENSION_PAYABLE,
+    debit: 0,
+    credit: Number(payrollBreakdown.pensionEmployee || 0),
+    description: `Pension payable for ${finalEmployeeName}`,
+  },
+
+  {
+    accountCode:
+      selectedFinancialAccount?.linkedChartAccountCode ||
+      SYSTEM_ACCOUNTS.CASH_ON_HAND,
+    debit: 0,
+    credit: Number(payrollBreakdown.netPay || 0),
+    description: `Payroll paid from ${
+      selectedFinancialAccount?.accountName || "Cash on Hand"
+    }`,
+  },
+],
   });
 } catch (ledgerError) {
   console.error("Payroll journal posting failed:", ledgerError.message);

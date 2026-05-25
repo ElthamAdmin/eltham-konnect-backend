@@ -14,6 +14,12 @@ const SYSTEM_ACCOUNTS = {
 
   ACCOUNTS_PAYABLE: "2000",
 
+  PAYE_PAYABLE: "2100",
+  NIS_PAYABLE: "2110",
+  NHT_PAYABLE: "2120",
+  EDUCATION_TAX_PAYABLE: "2130",
+  PENSION_PAYABLE: "2140",
+
   OWNER_EQUITY: "3000",
   RETAINED_EARNINGS: "3100",
 
@@ -59,6 +65,36 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
     accountCategory: "Liability",
     normalBalance: "Credit",
   },
+  {
+  accountCode: "2100",
+  accountName: "PAYE Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2110",
+  accountName: "NIS Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2120",
+  accountName: "NHT Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2130",
+  accountName: "Education Tax Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
+{
+  accountCode: "2140",
+  accountName: "Pension Payable",
+  accountCategory: "Liability",
+  normalBalance: "Credit",
+},
   {
     accountCode: "3000",
     accountName: "Owner Equity",
