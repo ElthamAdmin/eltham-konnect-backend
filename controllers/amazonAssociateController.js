@@ -1,4 +1,5 @@
 const AmazonAssociateItem = require("../models/AmazonAssociateItem");
+const MarketplaceProduct = require("../models/MarketplaceProduct");
 const cloudinary = require("cloudinary").v2;
 
 cloudinary.config({
@@ -8,6 +9,32 @@ cloudinary.config({
 });
 
 const createItemNumber = () => `ASI-${Date.now()}`;
+
+const syncMarketplaceProductFromAssociateItem = async (item) => {
+  if (!item || item.productType !== "EK Inventory") return;
+
+  await MarketplaceProduct.findOneAndUpdate(
+    { itemNumber: item.itemNumber },
+    {
+      itemNumber: item.itemNumber,
+      title: item.title,
+      description: item.description || "",
+      category: item.category || "General",
+      imageUrl: item.imageUrl || "",
+      costPrice: Number(item.costPrice || 0),
+      sellingPrice: Number(item.sellingPrice || 0),
+      quantityInStock: Number(item.quantityInStock || 0),
+      reorderLevel: Number(item.lowStockAlertLevel || 2),
+      status:
+        Number(item.quantityInStock || 0) <= 0
+          ? "Out of Stock"
+          : item.isActive
+          ? "Active"
+          : "Inactive",
+    },
+    { upsert: true, new: true }
+  );
+};
 
 const normalizeString = (value) => String(value || "").trim();
 
@@ -145,6 +172,8 @@ const createAssociateItem = async (req, res) => {
       isActive: isActive === false || isActive === "false" ? false : true,
     });
 
+        await syncMarketplaceProductFromAssociateItem(item);
+
     res.status(201).json({
       success: true,
       message: "Storefront item created successfully",
@@ -219,6 +248,8 @@ const updateAssociateItem = async (req, res) => {
     }
 
     await item.save();
+
+        await syncMarketplaceProductFromAssociateItem(item);
 
     res.json({
       success: true,
