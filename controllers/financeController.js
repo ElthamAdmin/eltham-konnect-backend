@@ -1211,63 +1211,6 @@ const getMonthlyIncomeVsExpenses = async (req, res) => {
   }
 };
 
-const getMonthlyIncomeVsExpenses = async (req, res) => {
-  try {
-    const invoices = await Invoice.find();
-    const expenses = await Expense.find();
-    const payroll = await Payroll.find();
-
-    const monthMap = {};
-
-    const ensureMonth = (monthKey) => {
-      if (!monthMap[monthKey]) {
-        monthMap[monthKey] = {
-          month: monthKey,
-          income: 0,
-          expenses: 0,
-        };
-      }
-    };
-
-    invoices
-      .filter((inv) => String(inv.status || "").trim().toLowerCase() === "paid")
-      .forEach((inv) => {
-        const date = inv.paidDate || inv.paidAt || inv.createdAt;
-        const monthKey = String(date).slice(0, 7);
-        ensureMonth(monthKey);
-        monthMap[monthKey].income += Number(inv.finalTotal || 0);
-      });
-
-    expenses.forEach((exp) => {
-      const monthKey = String(exp.date).slice(0, 7);
-      ensureMonth(monthKey);
-      monthMap[monthKey].expenses += Number(exp.amount || 0);
-    });
-
-    payroll.forEach((item) => {
-      const monthKey = String(item.payPeriod).slice(0, 7);
-      ensureMonth(monthKey);
-      monthMap[monthKey].expenses += Number(item.netPay || 0);
-    });
-
-    const monthlyData = Object.values(monthMap).sort((a, b) =>
-      a.month.localeCompare(b.month)
-    );
-
-    res.json({
-      success: true,
-      data: monthlyData,
-    });
-  } catch (error) {
-    console.error("Error getting monthly income vs expenses:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve monthly chart data",
-      error: error.message,
-    });
-  }
-};
-
 module.exports = {
   getExpenses,
   createExpense,
