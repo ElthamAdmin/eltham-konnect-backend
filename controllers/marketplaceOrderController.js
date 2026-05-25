@@ -1,5 +1,6 @@
 const MarketplaceOrder = require("../models/MarketplaceOrder");
 const MarketplaceCart = require("../models/MarketplaceCart");
+const MarketplaceProduct = require("../models/MarketplaceProduct");
 
 const getCustomerKey = (req) =>
   req.user?.ekonId ||
@@ -9,6 +10,50 @@ const getCustomerKey = (req) =>
   req.user?.email;
 
 const createOrderNumber = () => `MKT-${Date.now()}`;
+
+const deductInventoryForOrder = async (order) => {
+  if (order.inventoryDeducted) {
+    return order;
+  }
+
+  let totalCOGS = 0;
+
+  for (const item of order.items) {
+    const product = await MarketplaceProduct.findOne({
+      itemNumber: item.itemNumber,
+    });
+
+    if (!product) {
+      throw new Error(`Product not found: ${item.itemNumber}`);
+    }
+
+    const quantityOrdered = Number(item.quantity || 0);
+
+    if (Number(product.quantityInStock || 0) < quantityOrdered) {
+      throw new Error(
+        `Insufficient stock for ${product.title}. Available: ${product.quantityInStock}, Ordered: ${quantityOrdered}`
+      );
+    }
+
+    product.quantityInStock =
+      Number(product.quantityInStock || 0) - quantityOrdered;
+
+    if (product.quantityInStock <= 0) {
+      product.status = "Out of Stock";
+    }
+
+    await product.save();
+
+    totalCOGS += Number(product.costPrice || 0) * quantityOrdered;
+  }
+
+  order.inventoryDeducted = true;
+  order.inventoryDeductedAt = new Date();
+  order.costOfGoodsSold = totalCOGS;
+  order.grossProfit = Number(order.subtotal || 0) - totalCOGS;
+
+  return order;
+};
 
 const submitMarketplaceOrder = async (req, res) => {
   try {
@@ -131,7 +176,11 @@ const updateMarketplaceOrderStatus = async (req, res) => {
       });
     }
 
-    order.status = status;
+    if (status === "Paid" && !order.inventoryDeducted) {
+  await deductInventoryForOrder(order);
+}
+
+order.status = status;
 
     order.statusHistory.push({
       status,
