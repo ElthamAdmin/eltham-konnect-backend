@@ -97,36 +97,6 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   normalBalance: "Credit",
 },
   {
-  accountCode: "2100",
-  accountName: "PAYE Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2110",
-  accountName: "NIS Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2120",
-  accountName: "NHT Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2130",
-  accountName: "Education Tax Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2140",
-  accountName: "Pension Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-  {
     accountCode: "3000",
     accountName: "Owner Equity",
     accountCategory: "Equity",
