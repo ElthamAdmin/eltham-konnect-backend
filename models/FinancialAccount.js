@@ -45,6 +45,26 @@ const financialAccountSchema = new mongoose.Schema(
       default: "JMD",
     },
 
+    exchangeRate: {
+  type: Number,
+  default: 1,
+},
+
+baseCurrency: {
+  type: String,
+  default: "JMD",
+},
+
+baseCurrencyOpeningBalance: {
+  type: Number,
+  default: 0,
+},
+
+baseCurrencyBalance: {
+  type: Number,
+  default: 0,
+},
+
     status: {
       type: String,
       enum: ["Active", "Inactive"],

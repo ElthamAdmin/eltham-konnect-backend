@@ -9,6 +9,17 @@ const {
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
+  const numericAmount = roundMoney(amount);
+  const normalizedCurrency = String(currency || "JMD").toUpperCase();
+
+  if (normalizedCurrency === "JMD") {
+    return numericAmount;
+  }
+
+  return roundMoney(numericAmount * Number(exchangeRate || 1));
+};
+
 const getAccountCategory = (accountType) => {
   if (accountType === "Credit Card") return "Liability";
   return "Asset";
@@ -93,7 +104,14 @@ const postOpeningBalance = async ({
 
 const createAccount = async (req, res) => {
   try {
-    const { accountName, accountType, bankName, openingBalance } = req.body;
+    const {
+  accountName,
+  accountType,
+  bankName,
+  openingBalance,
+  currency,
+  exchangeRate,
+} = req.body;
 
     if (!accountName || !accountType) {
       return res.status(400).json({
@@ -104,14 +122,25 @@ const createAccount = async (req, res) => {
 
     await ensureSystemAccounts();
 
-    const numericOpeningBalance = roundMoney(openingBalance);
-    const accountNumber = `ACC-${Date.now()}`;
+    const accountCurrency = String(currency || "JMD").toUpperCase();
+const accountExchangeRate =
+  accountCurrency === "JMD" ? 1 : Number(exchangeRate || 1);
+
+const numericOpeningBalance = roundMoney(openingBalance);
+
+const baseCurrencyOpeningBalance = calculateBaseCurrencyAmount({
+  amount: numericOpeningBalance,
+  currency: accountCurrency,
+  exchangeRate: accountExchangeRate,
+});
+
+const accountNumber = `ACC-${Date.now()}`;
 
     await createLinkedChartAccount({
       accountNumber,
       accountName,
       accountType,
-      openingBalance: numericOpeningBalance,
+      openingBalance: baseCurrencyOpeningBalance,
     });
 
     const account = await FinancialAccount.create({
@@ -121,13 +150,18 @@ const createAccount = async (req, res) => {
       linkedChartAccountCode: accountNumber,
       bankName,
       openingBalance: numericOpeningBalance,
-      currentBalance: numericOpeningBalance,
+currentBalance: numericOpeningBalance,
+currency: accountCurrency,
+exchangeRate: accountExchangeRate,
+baseCurrency: "JMD",
+baseCurrencyOpeningBalance,
+baseCurrencyBalance: baseCurrencyOpeningBalance,
     });
 
     await postOpeningBalance({
       account,
-      openingBalance: numericOpeningBalance,
-      createdBy: req.user?.fullName || "System User",
+      openingBalance: baseCurrencyOpeningBalance,
+createdBy: req.user?.fullName || "System User",
     });
 
     res.json({
@@ -169,9 +203,13 @@ const getAccounts = async (req, res) => {
 
       return {
         ...plain,
-        currentBalance:
-          linkedChartAccount?.currentBalance ?? plain.currentBalance ?? 0,
-        linkedChartAccount,
+        currentBalance: plain.currentBalance ?? 0,
+baseCurrencyBalance:
+  linkedChartAccount?.currentBalance ??
+  plain.baseCurrencyBalance ??
+  plain.currentBalance ??
+  0,
+linkedChartAccount,
       };
     });
 
@@ -191,7 +229,15 @@ const getAccounts = async (req, res) => {
 const updateAccount = async (req, res) => {
   try {
     const { accountNumber } = req.params;
-    const { accountName, accountType, bankName, status } = req.body;
+    const {
+  accountName,
+  accountType,
+  bankName,
+  status,
+  currency,
+  exchangeRate,
+  currentBalance,
+} = req.body;
 
     const account = await FinancialAccount.findOne({ accountNumber });
 
@@ -206,6 +252,15 @@ const updateAccount = async (req, res) => {
     if (accountType !== undefined) account.accountType = accountType;
     if (bankName !== undefined) account.bankName = bankName;
     if (status !== undefined) account.status = status;
+    if (currency !== undefined) account.currency = String(currency || "JMD").toUpperCase();
+if (exchangeRate !== undefined) account.exchangeRate = Number(exchangeRate || 1);
+if (currentBalance !== undefined) account.currentBalance = roundMoney(currentBalance);
+
+account.baseCurrencyBalance = calculateBaseCurrencyAmount({
+  amount: account.currentBalance,
+  currency: account.currency,
+  exchangeRate: account.exchangeRate,
+});
 
     if (!account.linkedChartAccountCode) {
       account.linkedChartAccountCode = account.accountNumber;
