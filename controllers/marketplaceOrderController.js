@@ -124,6 +124,50 @@ const postMarketplaceAccountingForOrder = async (order, req) => {
   return order;
 };
 
+const postMarketplacePaymentForOrder = async (order, req) => {
+  if (order.paymentPosted) {
+    return order;
+  }
+
+  const paymentAmount = Number(order.subtotal || 0);
+
+  if (paymentAmount <= 0) {
+    throw new Error("Marketplace payment amount must be greater than zero.");
+  }
+
+  await ensureSystemAccounts();
+
+  const journalEntry = await postJournalEntry({
+    entryDate: new Date().toISOString().slice(0, 10),
+    memo: `Marketplace payment received for ${order.orderNumber}`,
+    reference: `${order.orderNumber}-PAYMENT`,
+    sourceModule: "Marketplace",
+    createdBy:
+      req.user?.fullName || req.user?.name || req.user?.email || "System User",
+    lines: [
+      {
+        accountCode: SYSTEM_ACCOUNTS.CASH_ON_HAND,
+        debit: paymentAmount,
+        credit: 0,
+        description: `Marketplace payment received for ${order.orderNumber}`,
+      },
+      {
+        accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+        debit: 0,
+        credit: paymentAmount,
+        description: `Marketplace receivable cleared for ${order.orderNumber}`,
+      },
+    ],
+  });
+
+  order.paymentPosted = true;
+  order.paymentPostedAt = new Date();
+  order.paymentJournalEntryNumber = journalEntry?.entryNumber || "";
+  order.paymentMethod = req.body?.paymentMethod || "Cash";
+
+  return order;
+};
+
 const submitMarketplaceOrder = async (req, res) => {
   try {
     const customerKey = getCustomerKey(req);
@@ -253,6 +297,9 @@ const updateMarketplaceOrderStatus = async (req, res) => {
 
         if (!order.accountingPosted) {
           await postMarketplaceAccountingForOrder(order, req);
+        }
+                if (!order.paymentPosted) {
+          await postMarketplacePaymentForOrder(order, req);
         }
       } catch (postingError) {
         console.error("Marketplace paid posting error:", postingError);
