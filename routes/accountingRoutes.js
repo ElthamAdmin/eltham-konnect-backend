@@ -6,6 +6,7 @@ const { protect } = require("../middleware/authMiddleware");
 const {
   getProfitAndLoss,
   getBalanceSheet,
+  closeYearToRetainedEarnings,
 } = require("../controllers/accountingController");
 
 const {
@@ -18,6 +19,12 @@ router.post(
   "/close-period",
   protect,
   closeAccountingPeriod
+);
+
+router.post(
+  "/close-year",
+  protect,
+  closeYearToRetainedEarnings
 );
 
 module.exports = router;

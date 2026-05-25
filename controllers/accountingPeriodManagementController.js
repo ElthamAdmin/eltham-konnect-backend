@@ -113,6 +113,14 @@ const lockAccountingPeriod = async (req, res) => {
 
     const period = await AccountingPeriod.findOne({ periodNumber });
 
+    if (period?.status === "Open") {
+  return res.status(400).json({
+    success: false,
+    message:
+      "Accounting period must be closed before locking.",
+  });
+}
+
     if (!period) {
       return res.status(404).json({
         success: false,

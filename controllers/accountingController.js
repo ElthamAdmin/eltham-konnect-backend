@@ -143,84 +143,112 @@ const getProfitAndLoss = async (req, res) => {
 
 const ChartOfAccount = require("../models/ChartOfAccount");
 
+const {
+  postJournalEntry,
+  SYSTEM_ACCOUNTS,
+  ensureSystemAccounts,
+} = require("../utils/generalLedgerPoster");
+
+const closeYearToRetainedEarnings = async (req, res) => {
+  try {
+    await ensureSystemAccounts();
+
+    const revenueAccounts = await ChartOfAccount.find({
+      accountCategory: "Revenue",
+    });
+
+    const expenseAccounts = await ChartOfAccount.find({
+      $or: [
+        { accountCategory: "Expense" },
+        { accountCategory: "Cost of Sales" },
+      ],
+    });
+
+    let totalRevenue = 0;
+    let totalExpenses = 0;
+
+    revenueAccounts.forEach((account) => {
+      totalRevenue += Number(account.currentBalance || 0);
+    });
+
+    expenseAccounts.forEach((account) => {
+      totalExpenses += Number(account.currentBalance || 0);
+    });
+
+    const netProfit = totalRevenue - totalExpenses;
+
+    if (netProfit === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No net profit/loss available to close.",
+      });
+    }
+
+    const lines =
+      netProfit > 0
+        ? [
+            {
+              accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
+              debit: 0,
+              credit: netProfit,
+              description: "Year-end retained earnings closing",
+            },
+            {
+              accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+              debit: netProfit,
+              credit: 0,
+              description: "Close current earnings into equity",
+            },
+          ]
+        : [
+            {
+              accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
+              debit: Math.abs(netProfit),
+              credit: 0,
+              description: "Year-end retained earnings loss closing",
+            },
+            {
+              accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+              debit: 0,
+              credit: Math.abs(netProfit),
+              description: "Close current loss into equity",
+            },
+          ];
+
+    const entry = await postJournalEntry({
+      entryDate: new Date().toISOString().slice(0, 10),
+      memo: "Year-end closing to retained earnings",
+      reference: `YEAR-END-${Date.now()}`,
+      sourceModule: "Year End Closing",
+      createdBy:
+        req.user?.name ||
+        req.user?.fullName ||
+        req.user?.email ||
+        "System User",
+      lines,
+    });
+
+    res.json({
+      success: true,
+      message: "Year-end closing completed successfully",
+      netProfit,
+      journalEntry: entry,
+    });
+  } catch (error) {
+    console.error("Year-end closing error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not complete year-end closing",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getProfitAndLoss,
 
-  getBalanceSheet: async (req, res) => {
-    try {
-      const accounts = await ChartOfAccount.find({
-        status: "Active",
-      }).sort({
-        accountCode: 1,
-      });
+  getBalanceSheet,
 
-      const assets = [];
-      const liabilities = [];
-      const equity = [];
-
-      let totalAssets = 0;
-      let totalLiabilities = 0;
-      let totalEquity = 0;
-
-      accounts.forEach((account) => {
-        const item = {
-          accountCode: account.accountCode,
-          accountName: account.accountName,
-          accountType: account.accountType,
-          balance: Number(account.currentBalance || 0),
-        };
-
-        if (account.accountCategory === "Asset") {
-          assets.push(item);
-          totalAssets += item.balance;
-        }
-
-        if (account.accountCategory === "Liability") {
-          liabilities.push(item);
-          totalLiabilities += item.balance;
-        }
-
-        if (account.accountCategory === "Equity") {
-          equity.push(item);
-          totalEquity += item.balance;
-        }
-      });
-
-      const accountingDifference =
-        totalAssets - (totalLiabilities + totalEquity);
-
-      res.json({
-        success: true,
-
-        data: {
-          reportTitle: "Balance Sheet",
-
-          generatedAt: new Date().toISOString(),
-
-          assets,
-
-          liabilities,
-
-          equity,
-
-          totals: {
-            totalAssets,
-            totalLiabilities,
-            totalEquity,
-            accountingDifference,
-            isBalanced:
-              Math.round(accountingDifference * 100) / 100 === 0,
-          },
-        },
-      });
-    } catch (error) {
-      console.error("Balance sheet error:", error);
-
-      res.status(500).json({
-        success: false,
-        message: "Could not generate balance sheet",
-        error: error.message,
-      });
-    }
-  },
+  closeYearToRetainedEarnings,
 };

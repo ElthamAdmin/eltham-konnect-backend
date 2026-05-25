@@ -8,6 +8,7 @@ const {
   exportTrialBalance,
   exportGeneralLedger,
   exportProfitAndLoss,
+  exportBalanceSheet,
 } = require("../controllers/financialExportController");
 
 router.get(
@@ -26,6 +27,12 @@ router.get(
   "/profit-loss",
   protect,
   exportProfitAndLoss
+);
+
+router.get(
+  "/balance-sheet",
+  protect,
+  exportBalanceSheet
 );
 
 module.exports = router;

@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const JournalEntry = require("../models/JournalEntry");
 const ChartOfAccount = require("../models/ChartOfAccount");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
+const AccountingPeriod = require("../models/AccountingPeriod");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -177,6 +178,35 @@ const generateEntryNumber = () =>
 const generateLedgerNumber = () =>
   `GL-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
+const validateAccountingPeriodOpen = async (entryDate) => {
+  const postingDate = new Date(entryDate);
+
+  if (Number.isNaN(postingDate.getTime())) {
+    throw new Error("Invalid journal entry date.");
+  }
+
+  const fiscalYear = postingDate.getFullYear();
+  const periodMonth = postingDate.getMonth() + 1;
+
+  const accountingPeriod = await AccountingPeriod.findOne({
+    fiscalYear,
+    periodMonth,
+  });
+
+  if (!accountingPeriod) {
+    return;
+  }
+
+  if (
+    accountingPeriod.status === "Closed" ||
+    accountingPeriod.status === "Locked"
+  ) {
+    throw new Error(
+      `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
+    );
+  }
+};
+
 const ensureSystemAccounts = async () => {
   for (const account of SYSTEM_ACCOUNT_DEFINITIONS) {
     await ChartOfAccount.findOneAndUpdate(
@@ -261,6 +291,8 @@ const postJournalEntry = async ({
   lines = [],
 }) => {
   const { totalDebit, totalCredit } = validateJournalLines(lines);
+
+  await validateAccountingPeriodOpen(entryDate);
 
   const session = await mongoose.startSession();
 

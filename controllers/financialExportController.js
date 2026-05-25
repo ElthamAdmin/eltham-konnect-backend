@@ -210,8 +210,55 @@ const exportProfitAndLoss = async (req, res) => {
   }
 };
 
+const exportBalanceSheet = async (req, res) => {
+  try {
+    const accounts = await ChartOfAccount.find();
+
+    const rows = accounts
+      .filter((acc) =>
+        ["Asset", "Liability", "Equity"].includes(
+          acc.accountCategory
+        )
+      )
+      .map((account) => [
+        account.accountCategory,
+        account.accountCode,
+        account.accountName,
+        account.currentBalance || 0,
+      ]);
+
+    const csv = buildCSV(
+      [
+        "Category",
+        "Account Code",
+        "Account Name",
+        "Balance",
+      ],
+      rows
+    );
+
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=balance-sheet-${Date.now()}.csv`
+    );
+
+    res.setHeader("Content-Type", "text/csv");
+
+    res.send(csv);
+  } catch (error) {
+    console.error("Balance sheet export error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not export balance sheet",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   exportTrialBalance,
   exportGeneralLedger,
   exportProfitAndLoss,
+  exportBalanceSheet,
 };
