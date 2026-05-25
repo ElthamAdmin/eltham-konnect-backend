@@ -245,17 +245,28 @@ const updateMarketplaceOrderStatus = async (req, res) => {
       });
     }
 
-    if (status === "Paid") {
-  if (!order.inventoryDeducted) {
-    await deductInventoryForOrder(order);
-  }
+        if (status === "Paid") {
+      try {
+        if (!order.inventoryDeducted) {
+          await deductInventoryForOrder(order);
+        }
 
-  if (!order.accountingPosted) {
-    await postMarketplaceAccountingForOrder(order, req);
-  }
-}
+        if (!order.accountingPosted) {
+          await postMarketplaceAccountingForOrder(order, req);
+        }
+      } catch (postingError) {
+        console.error("Marketplace paid posting error:", postingError);
 
-order.status = status;
+        return res.status(400).json({
+          success: false,
+          message:
+            postingError.message ||
+            "Marketplace order could not be marked paid because inventory or accounting posting failed.",
+        });
+      }
+    }
+
+    order.status = status;
 
     order.statusHistory.push({
       status,
