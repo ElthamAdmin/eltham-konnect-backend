@@ -12,6 +12,7 @@ const { writeAuditLog } = require("../utils/auditLogger");
 const {
   postJournalEntry,
   SYSTEM_ACCOUNTS,
+  ensureSystemAccounts,
 } = require("../utils/generalLedgerPoster");
 const ChartOfAccount = require("../models/ChartOfAccount");
 
@@ -228,6 +229,8 @@ const revenueAccount =
     accountCode: "4000",
   });
 
+  await ensureSystemAccounts();
+
 if (
   accountsReceivableAccount &&
   revenueAccount
@@ -434,6 +437,8 @@ const revenueAccount =
   await ChartOfAccount.findOne({
     accountCode: "4000",
   });
+
+  await ensureSystemAccounts();
 
 if (
   accountsReceivableAccount &&
@@ -807,15 +812,19 @@ const markInvoicePaid = async (req, res) => {
     await invoice.save();
 
     await AccountTransaction.create({
-      transactionNumber: `TRN-${Date.now()}`,
-      accountNumber: account.accountNumber,
-      accountName: account.accountName,
-      transactionType: "Invoice Payment",
-      amount: Number(invoice.finalTotal || 0),
-      reference: invoice.invoiceNumber,
-      notes: `Invoice payment received for ${invoice.customerName}`,
-      transactionDate: now,
-    });
+  transactionNumber: `TRN-${Date.now()}`,
+  accountNumber: account.accountNumber,
+  accountName: account.accountName,
+  linkedChartAccountCode:
+    account.linkedChartAccountCode || "",
+  journalEntryNumber: invoice.invoiceNumber,
+  ledgerReference: invoice.invoiceNumber,
+  transactionType: "Invoice Payment",
+  amount: Number(invoice.finalTotal || 0),
+  reference: invoice.invoiceNumber,
+  notes: `Invoice payment received for ${invoice.customerName}`,
+  transactionDate: now,
+});
 
     const accountsReceivableAccount =
   await ChartOfAccount.findOne({
@@ -828,6 +837,8 @@ const cashAccount =
       account.linkedChartAccountCode ||
       SYSTEM_ACCOUNTS.CASH_ON_HAND,
   });
+
+  await ensureSystemAccounts();
 
 if (
   accountsReceivableAccount &&
