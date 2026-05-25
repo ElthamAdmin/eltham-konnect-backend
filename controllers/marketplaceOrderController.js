@@ -2,6 +2,12 @@ const MarketplaceOrder = require("../models/MarketplaceOrder");
 const MarketplaceCart = require("../models/MarketplaceCart");
 const MarketplaceProduct = require("../models/MarketplaceProduct");
 
+const {
+  postJournalEntry,
+  ensureSystemAccounts,
+  SYSTEM_ACCOUNTS,
+} = require("../utils/generalLedgerPoster");
+
 const getCustomerKey = (req) =>
   req.user?.ekonId ||
   req.user?.customerEkonId ||
@@ -51,6 +57,69 @@ const deductInventoryForOrder = async (order) => {
   order.inventoryDeductedAt = new Date();
   order.costOfGoodsSold = totalCOGS;
   order.grossProfit = Number(order.subtotal || 0) - totalCOGS;
+
+  return order;
+};
+
+const postMarketplaceAccountingForOrder = async (order, req) => {
+  if (order.accountingPosted) {
+    return order;
+  }
+
+  const saleAmount = Number(order.subtotal || 0);
+  const cogsAmount = Number(order.costOfGoodsSold || 0);
+
+  if (saleAmount <= 0) {
+    throw new Error("Marketplace sale amount must be greater than zero.");
+  }
+
+  await ensureSystemAccounts();
+
+  const lines = [
+    {
+      accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+      debit: saleAmount,
+      credit: 0,
+      description: `Marketplace sale receivable for ${order.orderNumber}`,
+    },
+    {
+      accountCode: SYSTEM_ACCOUNTS.MARKETPLACE_REVENUE,
+      debit: 0,
+      credit: saleAmount,
+      description: `Marketplace revenue for ${order.orderNumber}`,
+    },
+  ];
+
+  if (cogsAmount > 0) {
+    lines.push(
+      {
+        accountCode: SYSTEM_ACCOUNTS.COST_OF_SALES,
+        debit: cogsAmount,
+        credit: 0,
+        description: `Marketplace cost of sales for ${order.orderNumber}`,
+      },
+      {
+        accountCode: SYSTEM_ACCOUNTS.INVENTORY,
+        debit: 0,
+        credit: cogsAmount,
+        description: `Inventory reduction for ${order.orderNumber}`,
+      }
+    );
+  }
+
+  const journalEntry = await postJournalEntry({
+    entryDate: new Date().toISOString().slice(0, 10),
+    memo: `Marketplace order accounting posted for ${order.orderNumber}`,
+    reference: order.orderNumber,
+    sourceModule: "Marketplace",
+    createdBy:
+      req.user?.fullName || req.user?.name || req.user?.email || "System User",
+    lines,
+  });
+
+  order.accountingPosted = true;
+  order.accountingPostedAt = new Date();
+  order.journalEntryNumber = journalEntry?.entryNumber || "";
 
   return order;
 };
@@ -176,8 +245,14 @@ const updateMarketplaceOrderStatus = async (req, res) => {
       });
     }
 
-    if (status === "Paid" && !order.inventoryDeducted) {
-  await deductInventoryForOrder(order);
+    if (status === "Paid") {
+  if (!order.inventoryDeducted) {
+    await deductInventoryForOrder(order);
+  }
+
+  if (!order.accountingPosted) {
+    await postMarketplaceAccountingForOrder(order, req);
+  }
 }
 
 order.status = status;
