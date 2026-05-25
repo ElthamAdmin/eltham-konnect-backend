@@ -1,4 +1,28 @@
 const MarketplaceProduct = require("../models/MarketplaceProduct");
+const AmazonAssociateItem = require("../models/AmazonAssociateItem");
+
+const syncAssociateItemFromMarketplaceProduct = async (product) => {
+  const associateItem = await AmazonAssociateItem.findOne({
+    itemNumber: product.itemNumber,
+  });
+
+  if (!associateItem) return;
+
+  associateItem.title = product.title;
+  associateItem.description = product.description || "";
+  associateItem.category = product.category || "General";
+  associateItem.imageUrl = product.imageUrl || "";
+  associateItem.costPrice = Number(product.costPrice || 0);
+  associateItem.sellingPrice = Number(product.sellingPrice || 0);
+  associateItem.quantityInStock = Number(product.quantityInStock || 0);
+  associateItem.lowStockAlertLevel = Number(product.reorderLevel || 2);
+
+  if (Number(product.quantityInStock || 0) > 0) {
+    associateItem.isActive = true;
+  }
+
+  await associateItem.save();
+};
 
 const createMarketplaceProduct = async (req, res) => {
   try {
@@ -110,11 +134,15 @@ const updateMarketplaceProduct = async (req, res) => {
       }
     });
 
-    if (Number(product.quantityInStock || 0) <= 0) {
+        if (Number(product.quantityInStock || 0) <= 0) {
       product.status = "Out of Stock";
+    } else if (product.status === "Out of Stock") {
+      product.status = "Active";
     }
 
     await product.save();
+
+        await syncAssociateItemFromMarketplaceProduct(product);
 
     res.json({
       success: true,

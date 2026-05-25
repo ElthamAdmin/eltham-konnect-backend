@@ -36,6 +36,18 @@ const syncMarketplaceProductFromAssociateItem = async (item) => {
   );
 };
 
+const removeMarketplaceProductSync = async (itemNumber) => {
+  if (!itemNumber) return;
+
+  await MarketplaceProduct.findOneAndUpdate(
+    { itemNumber },
+    {
+      status: "Inactive",
+      quantityInStock: 0,
+    }
+  );
+};
+
 const normalizeString = (value) => String(value || "").trim();
 
 const uploadToCloudinary = (fileBuffer) => {
@@ -388,6 +400,7 @@ const deleteAssociateItem = async (req, res) => {
 
     await deleteFromCloudinary(item.imagePublicId);
     await AmazonAssociateItem.deleteOne({ itemNumber });
+        await removeMarketplaceProductSync(itemNumber);
 
     res.json({
       success: true,

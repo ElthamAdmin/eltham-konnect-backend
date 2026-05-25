@@ -1,6 +1,7 @@
 const MarketplaceOrder = require("../models/MarketplaceOrder");
 const MarketplaceCart = require("../models/MarketplaceCart");
 const MarketplaceProduct = require("../models/MarketplaceProduct");
+const AmazonAssociateItem = require("../models/AmazonAssociateItem");
 
 const {
   postJournalEntry,
@@ -168,6 +169,39 @@ const postMarketplacePaymentForOrder = async (order, req) => {
   return order;
 };
 
+const syncAssociateInventoryAfterSale = async (order) => {
+  for (const item of order.items) {
+    const associateItem = await AmazonAssociateItem.findOne({
+      itemNumber: item.itemNumber,
+    });
+
+    if (!associateItem) continue;
+
+    const quantitySold = Number(item.quantity || 0);
+    const lineRevenue = Number(item.lineTotal || 0);
+
+    const estimatedCost =
+      Number(associateItem.costPrice || 0) * quantitySold;
+
+    associateItem.quantityInStock = Math.max(
+      0,
+      Number(associateItem.quantityInStock || 0) - quantitySold
+    );
+
+    associateItem.unitsSold =
+      Number(associateItem.unitsSold || 0) + quantitySold;
+
+    associateItem.totalRevenue =
+      Number(associateItem.totalRevenue || 0) + lineRevenue;
+
+    associateItem.totalProfit =
+      Number(associateItem.totalProfit || 0) +
+      (lineRevenue - estimatedCost);
+
+    await associateItem.save();
+  }
+};
+
 const submitMarketplaceOrder = async (req, res) => {
   try {
     const customerKey = getCustomerKey(req);
@@ -301,6 +335,7 @@ const updateMarketplaceOrderStatus = async (req, res) => {
                 if (!order.paymentPosted) {
           await postMarketplacePaymentForOrder(order, req);
         }
+                await syncAssociateInventoryAfterSale(order);
       } catch (postingError) {
         console.error("Marketplace paid posting error:", postingError);
 
