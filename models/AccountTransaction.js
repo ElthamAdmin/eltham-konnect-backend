@@ -1,56 +1,79 @@
 const mongoose = require("mongoose");
 
-const accountTransactionSchema = new mongoose.Schema({
+const accountTransactionSchema = new mongoose.Schema(
+  {
+    transactionNumber: {
+      type: String,
+      required: true,
+      unique: true,
+    },
 
-  transactionNumber: {
-    type: String,
-    required: true
+    accountNumber: {
+      type: String,
+      required: true,
+    },
+
+    accountName: {
+      type: String,
+      required: true,
+    },
+
+    linkedChartAccountCode: {
+      type: String,
+      default: "",
+    },
+
+    journalEntryNumber: {
+      type: String,
+      default: "",
+    },
+
+    ledgerReference: {
+      type: String,
+      default: "",
+    },
+
+    transactionType: {
+      type: String,
+      enum: [
+        "Deposit",
+        "Withdrawal",
+        "Transfer In",
+        "Transfer Out",
+        "Invoice Payment",
+        "Expense Payment",
+        "Credit Card Payment",
+        "Payroll Payment",
+      ],
+      required: true,
+    },
+
+    amount: {
+      type: Number,
+      required: true,
+    },
+
+    reference: {
+      type: String,
+      default: "",
+    },
+
+    notes: {
+      type: String,
+      default: "",
+    },
+
+    transactionDate: {
+      type: Date,
+      default: Date.now,
+    },
   },
-
-  accountNumber: {
-    type: String,
-    required: true
-  },
-
-  accountName: {
-    type: String,
-    required: true
-  },
-
-  transactionType: {
-    type: String,
-    enum: [
-      "Deposit",
-      "Withdrawal",
-      "Transfer In",
-      "Transfer Out",
-      "Invoice Payment",
-      "Expense Payment",
-      "Credit Card Payment"
-    ],
-    required: true
-  },
-
-  amount: {
-    type: Number,
-    required: true
-  },
-
-  reference: {
-    type: String,
-    default: ""
-  },
-
-  notes: {
-    type: String,
-    default: ""
-  },
-
-  transactionDate: {
-    type: Date,
-    default: Date.now
+  {
+    timestamps: true,
   }
+);
 
-});
-
-module.exports = mongoose.model("AccountTransaction", accountTransactionSchema);
+module.exports = mongoose.model(
+  "AccountTransaction",
+  accountTransactionSchema
+);
