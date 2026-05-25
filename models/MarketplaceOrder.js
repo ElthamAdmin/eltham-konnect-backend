@@ -39,6 +39,35 @@ const MarketplaceOrderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    accountingPosted: {
+  type: Boolean,
+  default: false,
+},
+accountingPostedAt: {
+  type: Date,
+  default: null,
+},
+journalEntryNumber: {
+  type: String,
+  default: "",
+  trim: true,
+},
+inventoryDeducted: {
+  type: Boolean,
+  default: false,
+},
+inventoryDeductedAt: {
+  type: Date,
+  default: null,
+},
+costOfGoodsSold: {
+  type: Number,
+  default: 0,
+},
+grossProfit: {
+  type: Number,
+  default: 0,
+},
     status: {
   type: String,
   enum: [
