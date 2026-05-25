@@ -7,7 +7,10 @@ const AccountTransaction = require("../models/AccountTransaction");
 const ChartOfAccount = require("../models/ChartOfAccount");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
-const { postJournalEntry } = require("../utils/generalLedgerPoster");
+const {
+  postJournalEntry,
+  SYSTEM_ACCOUNTS,
+} = require("../utils/generalLedgerPoster");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -231,9 +234,6 @@ const createExpense = async (req, res) => {
         });
       }
 
-      account.currentBalance = Number(account.currentBalance || 0) - numericAmount;
-      await account.save();
-
       paidFromAccountName = account.accountName;
 
       await AccountTransaction.create({
@@ -263,7 +263,9 @@ const createExpense = async (req, res) => {
         description: `${category}: ${description}`,
       },
       {
-        accountCode: "1000",
+        accountCode:
+  account.linkedChartAccountCode ||
+  SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: numericAmount,
         description: `Expense paid from ${account.accountName}`,
@@ -543,10 +545,6 @@ const createPayroll = async (req, res) => {
         });
       }
 
-      account.currentBalance =
-        Number(account.currentBalance || 0) - Number(payrollBreakdown.netPay || 0);
-      await account.save();
-
       paidFromAccountName = account.accountName;
 
       await AccountTransaction.create({
@@ -576,7 +574,9 @@ const createPayroll = async (req, res) => {
         description: `Payroll expense for ${finalEmployeeName}`,
       },
       {
-        accountCode: "1000",
+        accountCode:
+  account.linkedChartAccountCode ||
+  SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: Number(payrollBreakdown.netPay || 0),
         description: `Payroll paid from ${account.accountName}`,
