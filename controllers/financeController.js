@@ -186,6 +186,29 @@ const expenses = expenseRecords.map((expense) => ({
   }
 };
 
+const getExpenseAccountCode = (category = "") => {
+  const normalized = String(category).trim().toLowerCase();
+
+  if (normalized.includes("rent")) {
+    return SYSTEM_ACCOUNTS.RENT_EXPENSE;
+  }
+
+  if (
+    normalized.includes("utility") ||
+    normalized.includes("light") ||
+    normalized.includes("water") ||
+    normalized.includes("internet")
+  ) {
+    return SYSTEM_ACCOUNTS.UTILITIES_EXPENSE;
+  }
+
+  if (normalized.includes("payroll")) {
+    return SYSTEM_ACCOUNTS.PAYROLL_EXPENSE;
+  }
+
+  return SYSTEM_ACCOUNTS.OPERATING_EXPENSE;
+};
+
 const createExpense = async (req, res) => {
   try {
     const {
@@ -258,7 +281,7 @@ paidFromAccountName = selectedFinancialAccount.accountName;
     createdBy: req.user?.fullName || "System User",
     lines: [
       {
-        accountCode: "6000",
+        accountCode: getExpenseAccountCode(category),
         debit: numericAmount,
         credit: 0,
         description: `${category}: ${description}`,
@@ -269,7 +292,7 @@ paidFromAccountName = selectedFinancialAccount.accountName;
   SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: numericAmount,
-        description: `Expense paid from ${account.accountName}`,
+        description: `Expense paid from ${selectedFinancialAccount?.accountName || "Cash on Hand"}`,
       },
     ],
   });
@@ -526,39 +549,43 @@ const createPayroll = async (req, res) => {
     }
 
     let paidFromAccountName = "";
+let selectedFinancialAccount = null;
 
-    if (paidFromAccountNumber) {
-      const account = await FinancialAccount.findOne({
-        accountNumber: paidFromAccountNumber,
-      });
+if (paidFromAccountNumber) {
+  selectedFinancialAccount = await FinancialAccount.findOne({
+    accountNumber: paidFromAccountNumber,
+  });
 
-      if (!account) {
-        return res.status(404).json({
-          success: false,
-          message: "Selected payroll payment account not found",
-        });
-      }
+  if (!selectedFinancialAccount) {
+    return res.status(404).json({
+      success: false,
+      message: "Selected payroll payment account not found",
+    });
+  }
 
-      if (Number(account.currentBalance || 0) < Number(payrollBreakdown.netPay || 0)) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient balance in selected payroll payment account",
-        });
-      }
+  if (
+    Number(selectedFinancialAccount.currentBalance || 0) <
+    Number(payrollBreakdown.netPay || 0)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Insufficient balance in selected payroll payment account",
+    });
+  }
 
-      paidFromAccountName = account.accountName;
+  paidFromAccountName = selectedFinancialAccount.accountName;
 
-      await AccountTransaction.create({
-        transactionNumber: `TRN-${Date.now()}`,
-        accountNumber: account.accountNumber,
-        accountName: account.accountName,
-        transactionType: "Withdrawal",
-        amount: Number(payrollBreakdown.netPay || 0),
-        reference: `Payroll ${payPeriod}`,
-        notes: `Payroll payment for ${finalEmployeeName}`,
-        transactionDate: new Date(),
-      });
-    }
+  await AccountTransaction.create({
+    transactionNumber: `TRN-${Date.now()}`,
+    accountNumber: selectedFinancialAccount.accountNumber,
+    accountName: selectedFinancialAccount.accountName,
+    transactionType: "Withdrawal",
+    amount: Number(payrollBreakdown.netPay || 0),
+    reference: `Payroll ${payPeriod}`,
+    notes: `Payroll payment for ${finalEmployeeName}`,
+    transactionDate: new Date(),
+  });
+}
 
     try {
   await postJournalEntry({
@@ -576,7 +603,7 @@ const createPayroll = async (req, res) => {
       },
       {
         accountCode:
-  account.linkedChartAccountCode ||
+  selectedFinancialAccount?.linkedChartAccountCode ||
   SYSTEM_ACCOUNTS.CASH_ON_HAND,
         debit: 0,
         credit: Number(payrollBreakdown.netPay || 0),
