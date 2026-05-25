@@ -52,6 +52,24 @@ journalEntryNumber: {
   default: "",
   trim: true,
 },
+paymentPosted: {
+  type: Boolean,
+  default: false,
+},
+paymentPostedAt: {
+  type: Date,
+  default: null,
+},
+paymentJournalEntryNumber: {
+  type: String,
+  default: "",
+  trim: true,
+},
+paymentMethod: {
+  type: String,
+  default: "",
+  trim: true,
+},
 inventoryDeducted: {
   type: Boolean,
   default: false,
