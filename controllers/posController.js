@@ -299,18 +299,6 @@ if (!paidIntoAccountNumber) {
   });
 }
 
-const receivingAccount = await FinancialAccount.findOne({
-  accountNumber: paidIntoAccountNumber,
-  status: "Active",
-});
-
-if (!receivingAccount) {
-  return res.status(404).json({
-    success: false,
-    message: "Selected receiving account was not found or is inactive.",
-  });
-}
-
     if (!invoiceType || !invoiceNumber) {
       return res.status(400).json({
         success: false,
