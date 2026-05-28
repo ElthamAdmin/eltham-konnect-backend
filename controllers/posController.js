@@ -292,13 +292,6 @@ if (!receivingAccount) {
   });
 }
 
-if (!paidIntoAccountNumber) {
-  return res.status(400).json({
-    success: false,
-    message: "Please select the financial account that received this payment.",
-  });
-}
-
     if (!invoiceType || !invoiceNumber) {
       return res.status(400).json({
         success: false,
@@ -482,34 +475,6 @@ const financeTransaction = await AccountTransaction.create({
   amountTendered: tendered,
   changeGiven,
   reference,
-  notes:
-    notes ||
-    `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
-  transactionDate: new Date(),
-});
-
-    receivingAccount.currentBalance = roundMoney(
-  Number(receivingAccount.currentBalance || 0) + finalTotal
-);
-
-receivingAccount.baseCurrencyBalance = roundMoney(
-  Number(receivingAccount.baseCurrencyBalance || 0) +
-    finalTotal * Number(receivingAccount.exchangeRate || 1)
-);
-
-await receivingAccount.save();
-
-const financeTransaction = await AccountTransaction.create({
-  transactionNumber: `TRN-POS-${Date.now()}`,
-  accountNumber: receivingAccount.accountNumber,
-  accountName: receivingAccount.accountName,
-  linkedChartAccountCode: receivingAccount.linkedChartAccountCode || "",
-  transactionType: "Invoice Payment",
-  amount: finalTotal,
-  paymentMethod,
-  amountTendered: tendered,
-  changeGiven,
-  reference: `${invoiceType} invoice ${invoiceNumber}`,
   notes:
     notes ||
     `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
