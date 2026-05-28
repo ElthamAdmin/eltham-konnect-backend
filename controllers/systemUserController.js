@@ -4,6 +4,11 @@ const SystemUser = require("../models/SystemUser");
 const ALL_MODULE_PERMISSIONS = [
   "dashboard",
   "pos",
+  "pos_manager_override",
+"pos_discount",
+"pos_void_refund",
+"pos_shift_reports",
+"pos_receipts",
   "customers",
   "manifests",
   "packages",

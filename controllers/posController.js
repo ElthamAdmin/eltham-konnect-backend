@@ -2,6 +2,8 @@ const POSCashDrawer = require("../models/POSCashDrawer");
 const POSTransaction = require("../models/POSTransaction");
 const Invoice = require("../models/Invoice");
 const MarketplaceInvoice = require("../models/MarketplaceInvoice");
+const POSActionLog = require("../models/POSActionLog");
+const POSShiftHandover = require("../models/POSShiftHandover");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -11,7 +13,7 @@ const getUserId = (req) => req.user?.userId || req.user?._id || "";
 const getUserName = (req) =>
   req.user?.fullName || req.user?.name || req.user?.email || "System User";
 
-const getUserBranch = (req) => req.user?.branch || "Eltham Park";
+const getUserBranch = (req) => req.user?.branch || "Eltham Park Mainstore";
 
 const updateDrawerTotals = async ({ drawer, paymentMethod, amount }) => {
   const saleAmount = roundMoney(amount);
@@ -371,6 +373,149 @@ const getPOSTransactions = async (req, res) => {
   }
 };
 
+const getPOSAnalytics = async (req, res) => {
+  try {
+    const branch = getUserBranch(req);
+
+    const transactions = await POSTransaction.find({ branch });
+    const drawers = await POSCashDrawer.find({ branch });
+
+    const totals = transactions.reduce(
+      (summary, item) => {
+        summary.totalSales += Number(item.amountPaid || 0);
+        summary.transactionCount += 1;
+        summary.byMethod[item.paymentMethod] =
+          (summary.byMethod[item.paymentMethod] || 0) +
+          Number(item.amountPaid || 0);
+        summary.byCashier[item.cashierName] =
+          (summary.byCashier[item.cashierName] || 0) +
+          Number(item.amountPaid || 0);
+        return summary;
+      },
+      {
+        branch,
+        totalSales: 0,
+        transactionCount: 0,
+        drawerCount: drawers.length,
+        byMethod: {},
+        byCashier: {},
+      }
+    );
+
+    res.json({ success: true, data: totals });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not load POS analytics",
+      error: error.message,
+    });
+  }
+};
+
+const createShiftHandover = async (req, res) => {
+  try {
+    const drawer = await POSCashDrawer.findOne({
+      openedByUserId: getUserId(req),
+      branch: getUserBranch(req),
+      status: "Open",
+    });
+
+    if (!drawer) {
+      return res.status(400).json({
+        success: false,
+        message: "No open drawer found for shift handover.",
+      });
+    }
+
+    const countedCash = roundMoney(req.body.countedCash);
+
+    const handover = await POSShiftHandover.create({
+      drawerNumber: drawer.drawerNumber,
+      branch: drawer.branch,
+      fromCashierUserId: getUserId(req),
+      fromCashierName: getUserName(req),
+      toCashierName: req.body.toCashierName || "",
+      expectedCash: drawer.expectedCash,
+      countedCash,
+      variance: roundMoney(countedCash - Number(drawer.expectedCash || 0)),
+      notes: req.body.notes || "",
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Shift handover recorded successfully",
+      data: handover,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not record shift handover",
+      error: error.message,
+    });
+  }
+};
+
+const createPOSActionLog = async (req, res) => {
+  try {
+    const log = await POSActionLog.create({
+      actionType: req.body.actionType,
+      invoiceNumber: req.body.invoiceNumber || "",
+      invoiceType: req.body.invoiceType || "",
+      reason: req.body.reason || "",
+      amount: roundMoney(req.body.amount),
+      branch: getUserBranch(req),
+      cashierUserId: getUserId(req),
+      cashierName: getUserName(req),
+      approvedByUserId: getUserId(req),
+      approvedByName: getUserName(req),
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `${req.body.actionType} logged successfully`,
+      data: log,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not log POS action",
+      error: error.message,
+    });
+  }
+};
+
+const getReceiptData = async (req, res) => {
+  try {
+    const transaction = await POSTransaction.findOne({
+      transactionNumber: req.params.transactionNumber,
+      branch: getUserBranch(req),
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: "Receipt transaction not found.",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        businessName: "Eltham Konnect",
+        branch: transaction.branch,
+        transaction,
+        printedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not load receipt data",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getOpenDrawer,
   openDrawer,
@@ -380,4 +525,8 @@ module.exports = {
   closeDrawer,
   getDrawerHistory,
   getPOSTransactions,
+  getPOSAnalytics,
+createShiftHandover,
+createPOSActionLog,
+getReceiptData,
 };
