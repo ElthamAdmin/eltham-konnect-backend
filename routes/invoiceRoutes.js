@@ -12,13 +12,15 @@ const {
   reconcilePaidInvoicePackages,
 } = require("../controllers/invoiceController");
 
-router.get("/", getInvoices);
-router.post("/", createInvoice);
-router.post("/generate-multiple", generateMultipleInvoice);
-router.put("/:invoiceNumber/payment-link", updateInvoicePaymentLink);
-router.put("/:invoiceNumber/apply-points", applyInvoicePointsAdjustment);
-router.put("/:invoiceNumber/charges", updateInvoiceChargesAdjustment);
-router.put("/pay/:invoiceNumber", markInvoicePaid);
-router.put("/reconcile/paid-packages", reconcilePaidInvoicePackages);
+const { protect } = require("../middleware/authMiddleware");
+
+router.get("/", protect, getInvoices);
+router.post("/", protect, createInvoice);
+router.post("/generate-multiple", protect, generateMultipleInvoice);
+router.put("/:invoiceNumber/payment-link", protect, updateInvoicePaymentLink);
+router.put("/:invoiceNumber/apply-points", protect, applyInvoicePointsAdjustment);
+router.put("/:invoiceNumber/charges", protect, updateInvoiceChargesAdjustment);
+router.put("/pay/:invoiceNumber", protect, markInvoicePaid);
+router.put("/reconcile/paid-packages", protect, reconcilePaidInvoicePackages);
 
 module.exports = router;

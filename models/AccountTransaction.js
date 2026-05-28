@@ -53,6 +53,21 @@ const accountTransactionSchema = new mongoose.Schema(
       required: true,
     },
 
+    paymentMethod: {
+  type: String,
+  default: "",
+},
+
+amountTendered: {
+  type: Number,
+  default: 0,
+},
+
+changeGiven: {
+  type: Number,
+  default: 0,
+},
+
     reference: {
       type: String,
       default: "",

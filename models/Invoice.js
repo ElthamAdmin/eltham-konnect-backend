@@ -50,6 +50,16 @@ const InvoiceSchema = new mongoose.Schema({
     default: 0,
   },
 
+  deliveryFee: {
+  type: Number,
+  default: 0,
+},
+
+deliveryType: {
+  type: String,
+  default: "",
+},
+
   otherAdjustment: {
     type: Number,
     default: 0,
@@ -89,6 +99,36 @@ const InvoiceSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+
+  paymentMethod: {
+  type: String,
+  default: "",
+},
+
+amountTendered: {
+  type: Number,
+  default: 0,
+},
+
+changeGiven: {
+  type: Number,
+  default: 0,
+},
+
+paidIntoAccountNumber: {
+  type: String,
+  default: "",
+},
+
+paidIntoAccountName: {
+  type: String,
+  default: "",
+},
+
+cashierName: {
+  type: String,
+  default: "",
+},
 
   createdAt: {
     type: String,

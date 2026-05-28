@@ -15,6 +15,92 @@ const {
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
+  const numericAmount = roundMoney(amount);
+  const normalizedCurrency = String(currency || "JMD").toUpperCase();
+
+  if (normalizedCurrency === "JMD") {
+    return numericAmount;
+  }
+
+  return roundMoney(numericAmount * Number(exchangeRate || 1));
+};
+
+const updateFinancialAccountBalance = async ({
+  account,
+  amount,
+  direction,
+}) => {
+  if (!account) return null;
+
+  const numericAmount = roundMoney(amount);
+
+  if (direction === "increase") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) + numericAmount
+    );
+  }
+
+  if (direction === "decrease") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) - numericAmount
+    );
+  }
+
+  account.baseCurrencyBalance = calculateBaseCurrencyAmount({
+    amount: account.currentBalance,
+    currency: account.currency,
+    exchangeRate: account.exchangeRate,
+  });
+
+  await account.save();
+
+  return account;
+};
+
+const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
+  const numericAmount = roundMoney(amount);
+  const normalizedCurrency = String(currency || "JMD").toUpperCase();
+
+  if (normalizedCurrency === "JMD") {
+    return numericAmount;
+  }
+
+  return roundMoney(numericAmount * Number(exchangeRate || 1));
+};
+
+const updateFinancialAccountBalance = async ({
+  account,
+  amount,
+  direction,
+}) => {
+  if (!account) return null;
+
+  const numericAmount = roundMoney(amount);
+
+  if (direction === "increase") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) + numericAmount
+    );
+  }
+
+  if (direction === "decrease") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) - numericAmount
+    );
+  }
+
+  account.baseCurrencyBalance = calculateBaseCurrencyAmount({
+    amount: account.currentBalance,
+    currency: account.currency,
+    exchangeRate: account.exchangeRate,
+  });
+
+  await account.save();
+
+  return account;
+};
+
 // Jamaica payroll constants
 const JAMAICA_NIS_EMPLOYEE_RATE = 0.025;
 const JAMAICA_NHT_EMPLOYEE_RATE = 0.02;
@@ -189,6 +275,29 @@ const expenses = expenseRecords.map((expense) => ({
 const getExpenseAccountCode = (category = "") => {
   const normalized = String(category).trim().toLowerCase();
 
+  const costOfSalesCategories = [
+    "ltw package invoice",
+    "kp package invoice",
+    "ox package invoice",
+    "ltw pickup fee",
+    "kp pickup fee",
+    "ox pickup fee",
+    "customs / clearance expense",
+    "customs",
+    "clearance",
+    "delivery expense",
+    "packaging supplies",
+    "package wrapping",
+  ];
+
+  if (
+    costOfSalesCategories.some((item) =>
+      normalized.includes(item)
+    )
+  ) {
+    return SYSTEM_ACCOUNTS.COST_OF_SALES;
+  }
+
   if (normalized.includes("rent")) {
     return SYSTEM_ACCOUNTS.RENT_EXPENSE;
   }
@@ -203,16 +312,6 @@ const getExpenseAccountCode = (category = "") => {
   }
 
   if (
-    normalized.includes("delivery") ||
-    normalized.includes("fuel") ||
-    normalized.includes("gas") ||
-    normalized.includes("transport") ||
-    normalized.includes("courier")
-  ) {
-    return SYSTEM_ACCOUNTS.DELIVERY_EXPENSE;
-  }
-
-  if (
     normalized.includes("supply") ||
     normalized.includes("supplies") ||
     normalized.includes("stationery") ||
@@ -221,7 +320,11 @@ const getExpenseAccountCode = (category = "") => {
     return SYSTEM_ACCOUNTS.SUPPLIES_EXPENSE;
   }
 
-  if (normalized.includes("payroll")) {
+  if (
+    normalized.includes("payroll") ||
+    normalized.includes("wages") ||
+    normalized.includes("salary")
+  ) {
     return SYSTEM_ACCOUNTS.PAYROLL_EXPENSE;
   }
 
@@ -289,6 +392,12 @@ paidFromAccountName = selectedFinancialAccount.accountName;
         notes: description,
         transactionDate: new Date(date),
       });
+
+      await updateFinancialAccountBalance({
+  account: selectedFinancialAccount,
+  amount: numericAmount,
+  direction: "decrease",
+});
     }
 
     try {
@@ -604,6 +713,12 @@ if (paidFromAccountNumber) {
     notes: `Payroll payment for ${finalEmployeeName}`,
     transactionDate: new Date(),
   });
+
+  await updateFinancialAccountBalance({
+  account: selectedFinancialAccount,
+  amount: Number(payrollBreakdown.netPay || 0),
+  direction: "decrease",
+});
 }
 
     try {

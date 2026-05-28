@@ -26,6 +26,7 @@ const SYSTEM_ACCOUNTS = {
 
   SHIPPING_REVENUE: "4000",
   MARKETPLACE_REVENUE: "4010",
+  DELIVERY_REVENUE: "4020",
 
   COST_OF_SALES: "5000",
 
@@ -128,6 +129,12 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
     accountCategory: "Revenue",
     normalBalance: "Credit",
   },
+  {
+  accountCode: "4020",
+  accountName: "Delivery Revenue",
+  accountCategory: "Revenue",
+  normalBalance: "Credit",
+},
   {
     accountCode: "5000",
     accountName: "Cost of Sales",
