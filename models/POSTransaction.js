@@ -25,8 +25,8 @@ const posTransactionSchema = new mongoose.Schema(
     cashierName: { type: String, default: "" },
     branch: {
   type: String,
-  enum: ["Eltham Park", "Brown's Town Square"],
-  default: "Eltham Park",
+  default: "Eltham Park Mainstore",
+  trim: true,
   index: true,
 },
     drawerNumber: { type: String, default: "" },
