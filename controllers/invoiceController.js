@@ -30,10 +30,67 @@ const getJamaicaDateString = (date = new Date()) => {
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const calculateBaseCurrencyAmount = ({
+  amount,
+  currency,
+  exchangeRate,
+}) => {
+  const numericAmount = roundMoney(amount);
+
+  const normalizedCurrency = String(
+    currency || "JMD"
+  ).toUpperCase();
+
+  if (normalizedCurrency === "JMD") {
+    return numericAmount;
+  }
+
+  return roundMoney(
+    numericAmount * Number(exchangeRate || 1)
+  );
+};
+
+const updateFinancialAccountBalance = async ({
+  account,
+  amount,
+  direction,
+}) => {
+  if (!account) return null;
+
+  const numericAmount = roundMoney(amount);
+
+  if (direction === "increase") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) +
+        numericAmount
+    );
+  }
+
+  if (direction === "decrease") {
+    account.currentBalance = roundMoney(
+      Number(account.currentBalance || 0) -
+        numericAmount
+    );
+  }
+
+  account.baseCurrencyBalance =
+    calculateBaseCurrencyAmount({
+      amount: account.currentBalance,
+      currency: account.currency,
+      exchangeRate: account.exchangeRate,
+    });
+
+  await account.save();
+
+  return account;
+};
+
 const getInvoiceChargesFromBody = (body = {}) => ({
   customsDuty: roundMoney(body.customsDuty),
   gct: roundMoney(body.gct),
   processingFee: roundMoney(body.processingFee),
+  deliveryFee: roundMoney(body.deliveryFee),
+  deliveryType: String(body.deliveryType || "").trim(),
   otherAdjustment: roundMoney(body.otherAdjustment),
   adjustmentNote: String(body.adjustmentNote || "").trim(),
 });
@@ -43,6 +100,7 @@ const calculateInvoiceFinalTotal = ({
   customsDuty = 0,
   gct = 0,
   processingFee = 0,
+  deliveryFee = 0,
   otherAdjustment = 0,
   pointsRedeemed = 0,
 }) => {
@@ -53,6 +111,7 @@ const calculateInvoiceFinalTotal = ({
         Number(customsDuty || 0) +
         Number(gct || 0) +
         Number(processingFee || 0) +
+        Number(deliveryFee || 0) +
         Number(otherAdjustment || 0) -
         Number(pointsRedeemed || 0)
     )
@@ -189,6 +248,8 @@ const finalTotal = calculateInvoiceFinalTotal({
       customsDuty: invoiceCharges.customsDuty,
       gct: invoiceCharges.gct,
       processingFee: invoiceCharges.processingFee,
+      deliveryFee: invoiceCharges.deliveryFee,
+      deliveryType: invoiceCharges.deliveryType,
       otherAdjustment: invoiceCharges.otherAdjustment,
       adjustmentNote: invoiceCharges.adjustmentNote,
       pointsRedeemed: redeemAmount,
@@ -401,7 +462,14 @@ const finalTotal = calculateInvoiceFinalTotal({
       customerName: customer.name,
       packageCount: ratedPackages.length,
       packages: ratedPackages,
-      subtotal,
+subtotal,
+customsDuty: invoiceCharges.customsDuty,
+gct: invoiceCharges.gct,
+processingFee: invoiceCharges.processingFee,
+deliveryFee: invoiceCharges.deliveryFee,
+deliveryType: invoiceCharges.deliveryType,
+otherAdjustment: invoiceCharges.otherAdjustment,
+adjustmentNote: invoiceCharges.adjustmentNote,
       pointsRedeemed: redeemAmount,
       finalTotal,
       status: "Unpaid",
@@ -632,6 +700,7 @@ const applyInvoicePointsAdjustment = async (req, res) => {
   customsDuty: invoice.customsDuty,
   gct: invoice.gct,
   processingFee: invoice.processingFee,
+  deliveryFee: invoice.deliveryFee,
   otherAdjustment: invoice.otherAdjustment,
   pointsRedeemed: invoice.pointsRedeemed,
 });
@@ -709,17 +778,20 @@ const updateInvoiceChargesAdjustment = async (req, res) => {
     invoice.customsDuty = invoiceCharges.customsDuty;
     invoice.gct = invoiceCharges.gct;
     invoice.processingFee = invoiceCharges.processingFee;
+    invoice.deliveryFee = invoiceCharges.deliveryFee;
+    invoice.deliveryType = invoiceCharges.deliveryType;
     invoice.otherAdjustment = invoiceCharges.otherAdjustment;
     invoice.adjustmentNote = invoiceCharges.adjustmentNote;
 
     invoice.finalTotal = calculateInvoiceFinalTotal({
-      subtotal: invoice.subtotal,
-      customsDuty: invoice.customsDuty,
-      gct: invoice.gct,
-      processingFee: invoice.processingFee,
-      otherAdjustment: invoice.otherAdjustment,
-      pointsRedeemed: invoice.pointsRedeemed,
-    });
+  subtotal: invoice.subtotal,
+  customsDuty: invoice.customsDuty,
+  gct: invoice.gct,
+  processingFee: invoice.processingFee,
+  deliveryFee: invoice.deliveryFee,
+  otherAdjustment: invoice.otherAdjustment,
+  pointsRedeemed: invoice.pointsRedeemed,
+});
 
     await invoice.save();
 
@@ -768,7 +840,11 @@ const updateInvoiceChargesAdjustment = async (req, res) => {
 const markInvoicePaid = async (req, res) => {
   try {
     const { invoiceNumber } = req.params;
-    const { receivingAccountNumber } = req.body;
+    const {
+  receivingAccountNumber,
+  paymentMethod = "Cash",
+  amountTendered,
+} = req.body;
 
     if (!receivingAccountNumber) {
       return res.status(400).json({
@@ -804,11 +880,36 @@ const markInvoicePaid = async (req, res) => {
       });
     }
 
+    const invoiceTotal = roundMoney(invoice.finalTotal || 0);
+
+const tenderedAmountValue =
+  amountTendered !== undefined && amountTendered !== ""
+    ? roundMoney(amountTendered)
+    : invoiceTotal;
+
+if (tenderedAmountValue < invoiceTotal) {
+  return res.status(400).json({
+    success: false,
+    message: "Amount tendered cannot be less than invoice total.",
+  });
+}
+
+const changeGiven = roundMoney(
+  tenderedAmountValue - invoiceTotal
+);
+
     const now = new Date();
 
     invoice.status = "Paid";
     invoice.paidDate = getJamaicaDateString(now);
     invoice.paidAt = now;
+    invoice.paymentMethod = paymentMethod;
+    invoice.amountTendered = tenderedAmountValue;
+    invoice.changeGiven = changeGiven;
+    invoice.paidIntoAccountNumber = account.accountNumber;
+    invoice.paidIntoAccountName = account.accountName;
+    invoice.cashierName =
+  req.user?.fullName || req.user?.name || req.user?.email || "System User";
     await invoice.save();
 
     await AccountTransaction.create({
@@ -820,10 +921,19 @@ const markInvoicePaid = async (req, res) => {
   journalEntryNumber: invoice.invoiceNumber,
   ledgerReference: invoice.invoiceNumber,
   transactionType: "Invoice Payment",
-  amount: Number(invoice.finalTotal || 0),
+  amount: invoiceTotal,
+paymentMethod,
+amountTendered: tenderedAmountValue,
+changeGiven,
   reference: invoice.invoiceNumber,
   notes: `Invoice payment received for ${invoice.customerName}`,
   transactionDate: now,
+});
+
+await updateFinancialAccountBalance({
+  account,
+  amount: invoiceTotal,
+  direction: "increase",
 });
 
     const accountsReceivableAccount =
