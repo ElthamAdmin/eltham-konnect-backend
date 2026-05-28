@@ -58,49 +58,6 @@ const updateFinancialAccountBalance = async ({
   return account;
 };
 
-const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
-  const numericAmount = roundMoney(amount);
-  const normalizedCurrency = String(currency || "JMD").toUpperCase();
-
-  if (normalizedCurrency === "JMD") {
-    return numericAmount;
-  }
-
-  return roundMoney(numericAmount * Number(exchangeRate || 1));
-};
-
-const updateFinancialAccountBalance = async ({
-  account,
-  amount,
-  direction,
-}) => {
-  if (!account) return null;
-
-  const numericAmount = roundMoney(amount);
-
-  if (direction === "increase") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) + numericAmount
-    );
-  }
-
-  if (direction === "decrease") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) - numericAmount
-    );
-  }
-
-  account.baseCurrencyBalance = calculateBaseCurrencyAmount({
-    amount: account.currentBalance,
-    currency: account.currency,
-    exchangeRate: account.exchangeRate,
-  });
-
-  await account.save();
-
-  return account;
-};
-
 // Jamaica payroll constants
 const JAMAICA_NIS_EMPLOYEE_RATE = 0.025;
 const JAMAICA_NHT_EMPLOYEE_RATE = 0.02;
