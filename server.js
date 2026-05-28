@@ -140,7 +140,13 @@ app.use(attachUserIfPresent);
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
+    index: false,
+    fallthrough: false,
+    extensions: ["jpg", "jpeg", "png", "webp", "pdf"],
+
     setHeaders: (res, filePath) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
       if (filePath.endsWith(".pdf")) {
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", "inline");
@@ -148,10 +154,18 @@ app.use(
 
       if (filePath.match(/\.(jpg|jpeg|png|webp)$/i)) {
         res.setHeader("Content-Disposition", "inline");
+        res.setHeader("Cache-Control", "public, max-age=31536000");
       }
     },
   })
 );
+
+app.use("/uploads", (req, res) => {
+  return res.status(404).json({
+    success: false,
+    message: "Uploaded file not found",
+  });
+});
 
 app.get("/uploads/:folder/:filename", (req, res) => {
   const { folder, filename } = req.params;
