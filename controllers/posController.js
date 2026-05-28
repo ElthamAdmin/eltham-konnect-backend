@@ -11,6 +11,8 @@ const getUserId = (req) => req.user?.userId || req.user?._id || "";
 const getUserName = (req) =>
   req.user?.fullName || req.user?.name || req.user?.email || "System User";
 
+const getUserBranch = (req) => req.user?.branch || "Eltham Park";
+
 const updateDrawerTotals = async ({ drawer, paymentMethod, amount }) => {
   const saleAmount = roundMoney(amount);
 
@@ -38,7 +40,8 @@ const getOpenDrawer = async (req, res) => {
   try {
     const drawer = await POSCashDrawer.findOne({
       openedByUserId: getUserId(req),
-      status: "Open",
+branch: getUserBranch(req),
+status: "Open",
     }).sort({ openedAt: -1 });
 
     res.json({ success: true, data: drawer });
@@ -57,7 +60,8 @@ const openDrawer = async (req, res) => {
 
     const existingOpenDrawer = await POSCashDrawer.findOne({
       openedByUserId: userId,
-      status: "Open",
+branch: getUserBranch(req),
+status: "Open",
     });
 
     if (existingOpenDrawer) {
@@ -73,6 +77,7 @@ const openDrawer = async (req, res) => {
       drawerNumber: `DRAWER-${Date.now()}`,
       openedByUserId: userId,
       openedByName: getUserName(req),
+      branch: getUserBranch(req),
       openingFloat,
       expectedCash: openingFloat,
       status: "Open",
@@ -100,7 +105,8 @@ const recordDrawerSale = async (req, res) => {
 
     const drawer = await POSCashDrawer.findOne({
       openedByUserId: getUserId(req),
-      status: "Open",
+branch: getUserBranch(req),
+status: "Open",
     });
 
     if (!drawer) {
@@ -190,7 +196,8 @@ const cashOutInvoice = async (req, res) => {
 
     const drawer = await POSCashDrawer.findOne({
       openedByUserId: getUserId(req),
-      status: "Open",
+branch: getUserBranch(req),
+status: "Open",
     });
 
     if (!drawer) {
@@ -264,6 +271,7 @@ const cashOutInvoice = async (req, res) => {
       paidIntoAccountName: paidIntoAccountName || "",
       cashierUserId: getUserId(req),
       cashierName: getUserName(req),
+      branch: getUserBranch(req),
       drawerNumber: drawer.drawerNumber,
       notes: notes || "",
     });
@@ -292,7 +300,8 @@ const closeDrawer = async (req, res) => {
 
     const drawer = await POSCashDrawer.findOne({
       openedByUserId: getUserId(req),
-      status: "Open",
+branch: getUserBranch(req),
+status: "Open",
     });
 
     if (!drawer) {
@@ -328,7 +337,12 @@ const closeDrawer = async (req, res) => {
 
 const getDrawerHistory = async (req, res) => {
   try {
-    const drawers = await POSCashDrawer.find().sort({ openedAt: -1 }).limit(100);
+    const drawers = await POSCashDrawer.find({
+      branch: getUserBranch(req),
+    })
+      .sort({ openedAt: -1 })
+      .limit(100);
+
     res.json({ success: true, data: drawers });
   } catch (error) {
     res.status(500).json({
@@ -341,7 +355,9 @@ const getDrawerHistory = async (req, res) => {
 
 const getPOSTransactions = async (req, res) => {
   try {
-    const transactions = await POSTransaction.find()
+    const transactions = await POSTransaction.find({
+      branch: getUserBranch(req),
+    })
       .sort({ createdAt: -1 })
       .limit(100);
 

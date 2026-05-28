@@ -17,6 +17,13 @@ const posCashDrawerSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    
+    branch: {
+  type: String,
+  enum: ["Eltham Park", "Brown's Town Square"],
+  default: "Eltham Park",
+  index: true,
+},
 
     openingFloat: {
       type: Number,
