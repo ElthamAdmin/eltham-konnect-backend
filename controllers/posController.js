@@ -4,6 +4,8 @@ const Invoice = require("../models/Invoice");
 const MarketplaceInvoice = require("../models/MarketplaceInvoice");
 const POSActionLog = require("../models/POSActionLog");
 const POSShiftHandover = require("../models/POSShiftHandover");
+const FinancialAccount = require("../models/FinancialAccount");
+const AccountTransaction = require("../models/AccountTransaction");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -189,6 +191,25 @@ const cashOutInvoice = async (req, res) => {
       notes,
     } = req.body;
 
+    if (!paidIntoAccountNumber) {
+  return res.status(400).json({
+    success: false,
+    message: "Please select the financial account that received this payment.",
+  });
+}
+
+const receivingAccount = await FinancialAccount.findOne({
+  accountNumber: paidIntoAccountNumber,
+  status: "Active",
+});
+
+if (!receivingAccount) {
+  return res.status(404).json({
+    success: false,
+    message: "Selected financial account was not found or is inactive.",
+  });
+}
+
     if (!invoiceType || !invoiceNumber) {
       return res.status(400).json({
         success: false,
@@ -259,6 +280,34 @@ status: "Open",
       amount: finalTotal,
     });
 
+    receivingAccount.currentBalance = roundMoney(
+  Number(receivingAccount.currentBalance || 0) + finalTotal
+);
+
+receivingAccount.baseCurrencyBalance = roundMoney(
+  Number(receivingAccount.baseCurrencyBalance || 0) +
+    finalTotal * Number(receivingAccount.exchangeRate || 1)
+);
+
+await receivingAccount.save();
+
+const financeTransaction = await AccountTransaction.create({
+  transactionNumber: `TRN-POS-${Date.now()}`,
+  accountNumber: receivingAccount.accountNumber,
+  accountName: receivingAccount.accountName,
+  linkedChartAccountCode: receivingAccount.linkedChartAccountCode || "",
+  transactionType: "Invoice Payment",
+  amount: finalTotal,
+  paymentMethod,
+  amountTendered: tendered,
+  changeGiven,
+  reference: `${invoiceType} invoice ${invoiceNumber}`,
+  notes:
+    notes ||
+    `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
+  transactionDate: new Date(),
+});
+
     const transaction = await POSTransaction.create({
       transactionNumber: `POS-${Date.now()}`,
       invoiceType,
@@ -282,10 +331,12 @@ status: "Open",
       success: true,
       message: `${invoiceType} invoice cashed out successfully.`,
       data: {
-        invoice,
-        drawer,
-        transaction,
-      },
+  invoice,
+  drawer,
+  transaction,
+  financeTransaction,
+  receivingAccount,
+},
     });
   } catch (error) {
     res.status(500).json({
