@@ -172,6 +172,189 @@ const buildFiveYearRoadmap = (plannerItems, intelligenceValues = {}) => {
   });
 };
 
+const buildExecutiveActionEngine = ({
+  plannerItems,
+  unpaidInvoices,
+  estimatedProfit,
+  profitMargin,
+  complianceReadiness,
+  criticalOpenItems,
+  budgetVariance,
+  totalRevenue,
+  fiveYearRoadmap,
+}) => {
+  const priorityQueue = [];
+
+  if (unpaidInvoices.length > 0) {
+    priorityQueue.push({
+      title: `Follow up ${unpaidInvoices.length} unpaid invoice(s)`,
+      category: "Collections",
+      impact: unpaidInvoices.length >= 5 ? "High" : "Medium",
+      status: "Action Needed",
+      reason:
+        "Unpaid invoices reduce cash flow and can delay payroll, freight payments, rent, giveaways, hiring, and expansion.",
+    });
+  }
+
+  const openCriticalItems = plannerItems
+    .filter(
+      (item) =>
+        item.priority === "Critical" &&
+        !["Completed", "Cancelled"].includes(item.status)
+    )
+    .slice(0, 3);
+
+  openCriticalItems.forEach((item) => {
+    priorityQueue.push({
+      title: item.title,
+      category: item.category,
+      impact: "High",
+      status: item.status,
+      reason:
+        item.advisorNote ||
+        "This is a critical business item and should be resolved before major business moves.",
+    });
+  });
+
+  const currentYear = new Date().getFullYear();
+  const currentYearPlan = fiveYearRoadmap.find(
+    (item) => Number(item.year) === Number(currentYear)
+  );
+
+  if (
+    currentYearPlan?.revenue?.target > 0 &&
+    currentYearPlan.revenue.progress < 100
+  ) {
+    const revenueGap =
+      Number(currentYearPlan.revenue.target || 0) -
+      Number(currentYearPlan.revenue.current || 0);
+
+    priorityQueue.push({
+      title: `Close revenue gap of JMD ${Math.max(
+        0,
+        revenueGap
+      ).toLocaleString()}`,
+      category: "Revenue Growth",
+      impact: revenueGap > 100000 ? "High" : "Medium",
+      status: "In Progress",
+      reason:
+        "The current year revenue goal is not yet complete. Focus on invoice collection, customer growth, package volume, and repeat customer activity.",
+    });
+  }
+
+  if (budgetVariance < 0) {
+    priorityQueue.push({
+      title: "Review negative budget variance",
+      category: "Budget Control",
+      impact: "High",
+      status: "Action Needed",
+      reason:
+        "Actual performance is worse than planned. Review expenses, budget categories, and upcoming obligations before increasing spending.",
+    });
+  }
+
+  if (complianceReadiness < 70) {
+    priorityQueue.push({
+      title: "Improve compliance readiness",
+      category: "Compliance",
+      impact: "High",
+      status: "Action Needed",
+      reason:
+        "Compliance readiness is below the safe level. Prioritize LLC, payroll, employment records, statutory obligations, and staff documentation.",
+    });
+  }
+
+  if (estimatedProfit <= 0) {
+    priorityQueue.push({
+      title: "Restore business profitability",
+      category: "Profitability",
+      impact: "Critical",
+      status: "Urgent",
+      reason:
+        "Profit is zero or negative. Delay hiring, giveaways, and expansion until revenue improves or expenses are reduced.",
+    });
+  }
+
+  const financialStability =
+    estimatedProfit > 0
+      ? Math.min(100, Math.max(30, profitMargin * 2))
+      : 20;
+
+  const growthReadiness =
+    estimatedProfit > 0 && profitMargin >= 15 && criticalOpenItems === 0
+      ? 90
+      : estimatedProfit > 0 && profitMargin >= 8
+      ? 65
+      : 35;
+
+  const complianceStrength = complianceReadiness;
+
+  const customerGrowth =
+    totalRevenue > 0
+      ? Math.min(100, Math.round(totalRevenue / 6000))
+      : 25;
+
+  const operationalHealth =
+    unpaidInvoices.length <= 3 && criticalOpenItems === 0
+      ? 90
+      : unpaidInvoices.length <= 5
+      ? 70
+      : 45;
+
+  const giveawayRecommendation =
+    estimatedProfit > 0 && unpaidInvoices.length <= 5 && criticalOpenItems === 0
+      ? {
+          type: "Referral Campaign",
+          budget: Math.round(estimatedProfit * 0.05),
+          recommendation: "Safe with limits",
+          reason:
+            "Profit is positive and collections risk is manageable. A referral campaign gives value while encouraging customer growth.",
+          expectedOutcome:
+            "Encourage repeat business and attract new customers without putting pressure on operating cash.",
+        }
+      : {
+          type: "No giveaway recommended",
+          budget: 0,
+          recommendation: "Delay giveaway",
+          reason:
+            "There are open risks such as critical tasks, unpaid invoices, weak profit, or budget pressure.",
+          expectedOutcome:
+            "Protect cash flow until the business position is stronger.",
+        };
+
+  const hiringRecommendation =
+    estimatedProfit > 0 && profitMargin >= 10 && complianceReadiness >= 70
+      ? {
+          position: "Customer Service / Operations Assistant",
+          estimatedMonthlyCost: 15000,
+          recommendation: "Consider hiring carefully",
+          timeline: "After cash reserve and payroll obligations are reviewed",
+          reason:
+            "The business is profitable enough to start planning support staff, but payroll and compliance must remain controlled.",
+        }
+      : {
+          position: "No new hire recommended",
+          estimatedMonthlyCost: 0,
+          recommendation: "Delay hiring",
+          timeline: "After profitability, compliance, and cash reserve improve",
+          reason:
+            "Hiring now may increase fixed costs before the business is ready.",
+        };
+
+  return {
+    priorityQueue: priorityQueue.slice(0, 5),
+    executiveScores: {
+      financialStability: Math.round(financialStability),
+      growthReadiness: Math.round(growthReadiness),
+      complianceStrength: Math.round(complianceStrength),
+      customerGrowth: Math.round(customerGrowth),
+      operationalHealth: Math.round(operationalHealth),
+    },
+    giveawayRecommendation,
+    hiringRecommendation,
+  };
+};
+
 const getBusinessPlannerIntelligence = async (req, res) => {
   try {
     const [customers, packages, invoices, expenses, tickets, plannerItems, budgets] =
@@ -311,9 +494,22 @@ const getBusinessPlannerIntelligence = async (req, res) => {
   packages: packages.length,
 });
 
+const executiveEngine = buildExecutiveActionEngine({
+  plannerItems,
+  unpaidInvoices,
+  estimatedProfit,
+  profitMargin,
+  complianceReadiness,
+  criticalOpenItems,
+  budgetVariance,
+  totalRevenue,
+  fiveYearRoadmap,
+});
+
     res.json({
       success: true,
       data: {
+        executiveEngine,
         fiveYearRoadmap,
         healthScore,
         profitMargin,
