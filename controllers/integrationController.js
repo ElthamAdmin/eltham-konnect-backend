@@ -734,6 +734,10 @@ const getKpValue = (item, keys = []) => {
   return "";
 };
 
+const isValidEkonId = (value = "") => {
+  return /^EKON/i.test(String(value || "").trim());
+};
+
 const getKpCustomers = async (req, res) => {
   try {
     const partner = req.integrationPartner;
@@ -894,9 +898,63 @@ if (!partner) {
 
         const customerName = `${firstName} ${lastName}`.trim();
 
-        const weight = Number(
-          getKpValue(kpPackage, ["weight", "Weight", "actualWeight", "ActualWeight"]) || 0
-        );
+const weight = Number(
+  getKpValue(kpPackage, ["weight", "Weight", "actualWeight", "ActualWeight"]) || 0
+);
+
+if (!isValidEkonId(customerEkonId)) {
+  const existingIgnored = await UnmatchedPackage.findOne({
+    trackingNumber,
+    status: "Ignored",
+  });
+
+  if (!existingIgnored) {
+    await createUnmatchedPackage({
+      trackingNumber,
+      customerEkonId,
+      customerName,
+      courier: "KP Logistics",
+      weight,
+      warehouseLocation: "KP Warehouse",
+      dateReceived:
+        getKpValue(kpPackage, ["entryDateTime", "EntryDateTime", "entryDate", "EntryDate"]) ||
+        now,
+      externalPackageId:
+        getKpValue(kpPackage, ["packageID", "PackageID", "packageId", "PackageId"]) || "",
+      externalWarehouseId:
+        getKpValue(kpPackage, ["courierID", "CourierID", "courierId", "CourierId"]) || "KP",
+      externalStatus: "REJECTED_NON_EKOS_CUSTOMER",
+      integrationSource: partner.partnerName || "KP Logistics",
+      issueReason: `Rejected KP package because UserCode ${customerEkonId || "N/A"} is not a valid EKOS customer ID.`,
+      rawPayload: kpPackage,
+    }).then(async (unmatched) => {
+      unmatched.status = "Ignored";
+      await unmatched.save();
+    });
+  }
+
+  await createIntegrationLog({
+    source: partner.partnerName || "KP Logistics",
+    eventType: "PACKAGE_ARRIVAL",
+    status: "Failed",
+    trackingNumber,
+    customerEkonId,
+    message: "KP package rejected because UserCode is not a valid EKOS customer ID.",
+    payload: kpPackage,
+    errorDetails: `Invalid KP UserCode: ${customerEkonId || "N/A"}`,
+  });
+
+  failedCount += 1;
+
+  results.push({
+    trackingNumber,
+    status: "Rejected",
+    customerEkonId,
+    message: "Invalid EKOS customer ID from KP/Tasoko.",
+  });
+
+  continue;
+}
 
         const now = new Date();
 

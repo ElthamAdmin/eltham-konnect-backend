@@ -35,9 +35,6 @@ router.post(
   integrationAuth,
   updateKpManifest
 );
-router.put("/kp/packages/update", integrationAuth, receiveKpPackages);
-router.delete("/kp/packages/delete", integrationAuth, receiveKpPackages);
-router.put("/kp/manifests/update", integrationAuth, receiveKpPackages);
 
 router.get(
   "/ltw/sync-packages",
