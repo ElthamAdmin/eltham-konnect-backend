@@ -4,10 +4,12 @@ const {
   createBusinessPlannerItem,
   updateBusinessPlannerItem,
   deleteBusinessPlannerItem,
+  getBusinessPlannerIntelligence,
 } = require("../controllers/businessPlannerController");
 
 const router = express.Router();
 
+router.get("/intelligence", getBusinessPlannerIntelligence);
 router.get("/", getBusinessPlannerItems);
 router.post("/", createBusinessPlannerItem);
 router.put("/:id", updateBusinessPlannerItem);

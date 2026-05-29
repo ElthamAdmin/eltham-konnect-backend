@@ -1,4 +1,10 @@
 const BusinessPlanner = require("../models/BusinessPlanner");
+const Customer = require("../models/Customer");
+const Package = require("../models/Package");
+const Invoice = require("../models/Invoice");
+const Expense = require("../models/Expense");
+const SupportTicket = require("../models/SupportTicket");
+const Budget = require("../models/Budget");
 
 const buildAdvisorNote = (item) => {
   if (item.category === "Giveaway / Promotion") {
@@ -71,6 +77,170 @@ const getSummary = (items) => {
     complianceReadiness,
     activeGiveaways,
   };
+};
+
+const getBusinessPlannerIntelligence = async (req, res) => {
+  try {
+    const [customers, packages, invoices, expenses, tickets, plannerItems, budgets] =
+      await Promise.all([
+        Customer.find(),
+        Package.find(),
+        Invoice.find(),
+        Expense.find(),
+        SupportTicket.find(),
+        BusinessPlanner.find(),
+        Budget.find(),
+      ]);
+
+    const paidInvoices = invoices.filter((inv) => inv.status === "Paid");
+    const unpaidInvoices = invoices.filter((inv) => inv.status !== "Paid");
+
+    const totalRevenue = paidInvoices.reduce(
+      (sum, inv) => sum + Number(inv.finalTotal || 0),
+      0
+    );
+
+    const totalExpenses = expenses.reduce(
+      (sum, exp) => sum + Number(exp.amount || 0),
+      0
+    );
+
+    const estimatedProfit = totalRevenue - totalExpenses;
+
+    const profitMargin =
+      totalRevenue > 0 ? Math.round((estimatedProfit / totalRevenue) * 100) : 0;
+
+    const complianceItems = plannerItems.filter((item) =>
+      ["Compliance", "LLC Transition"].includes(item.category)
+    );
+
+    const completedCompliance = complianceItems.filter(
+      (item) => item.status === "Completed"
+    ).length;
+
+    const complianceReadiness =
+      complianceItems.length === 0
+        ? 0
+        : Math.round((completedCompliance / complianceItems.length) * 100);
+
+    const criticalOpenItems = plannerItems.filter(
+      (item) =>
+        item.priority === "Critical" &&
+        !["Completed", "Cancelled"].includes(item.status)
+    ).length;
+
+    const resolvedTickets = tickets.filter((ticket) =>
+      ["Resolved", "Closed"].includes(ticket.status)
+    ).length;
+
+    const supportResolutionRate =
+      tickets.length > 0 ? Math.round((resolvedTickets / tickets.length) * 100) : 100;
+
+    const budgetVariance = budgets.reduce(
+      (sum, budget) => sum + Number(budget.variance || 0),
+      0
+    );
+
+    let healthScore = 0;
+
+    if (estimatedProfit > 0) healthScore += 25;
+    if (profitMargin >= 15) healthScore += 15;
+    else if (profitMargin >= 8) healthScore += 8;
+
+    if (complianceReadiness >= 80) healthScore += 20;
+    else if (complianceReadiness >= 50) healthScore += 10;
+
+    if (unpaidInvoices.length <= 3) healthScore += 10;
+    else if (unpaidInvoices.length <= 8) healthScore += 5;
+
+    if (packages.length >= 50) healthScore += 10;
+    else if (packages.length >= 20) healthScore += 5;
+
+    if (customers.length >= 50) healthScore += 10;
+    else if (customers.length >= 20) healthScore += 5;
+
+    if (supportResolutionRate >= 80) healthScore += 10;
+    else if (supportResolutionRate >= 50) healthScore += 5;
+
+    healthScore = Math.min(100, healthScore);
+
+    const giveawayBudget =
+      estimatedProfit > 0 && unpaidInvoices.length <= 5 && criticalOpenItems === 0
+        ? Math.round(estimatedProfit * 0.05)
+        : 0;
+
+    const giveawayStatus =
+      giveawayBudget > 0 ? "Safe with limits" : "Not recommended now";
+
+    const hiringStatus =
+      estimatedProfit > 0 && profitMargin >= 10 && complianceReadiness >= 70
+        ? "Consider hiring carefully"
+        : "Delay hiring";
+
+    const expansionStatus =
+      estimatedProfit > 0 &&
+      profitMargin >= 15 &&
+      complianceReadiness >= 80 &&
+      criticalOpenItems === 0
+        ? "Expansion planning allowed"
+        : "Do not expand yet";
+
+    const alerts = [];
+
+    if (estimatedProfit <= 0) {
+      alerts.push("Profit is currently zero or negative. Focus on revenue and expense control before hiring, giveaways, or expansion.");
+    }
+
+    if (unpaidInvoices.length > 5) {
+      alerts.push("Unpaid invoices are high. Follow up on collections before offering giveaways.");
+    }
+
+    if (complianceReadiness < 70) {
+      alerts.push("Compliance readiness is below 70%. Prioritize LLC, employment, payroll, and statutory compliance tasks.");
+    }
+
+    if (criticalOpenItems > 0) {
+      alerts.push(`${criticalOpenItems} critical planner item(s) are still open. Resolve these before major business moves.`);
+    }
+
+    if (budgetVariance < 0) {
+      alerts.push("Budget variance is negative. Review spending and compare actual expenses against planned amounts.");
+    }
+
+    if (alerts.length === 0) {
+      alerts.push("Business position looks stable. Continue monitoring profitability, compliance, cash flow, and customer service.");
+    }
+
+    res.json({
+      success: true,
+      data: {
+        healthScore,
+        profitMargin,
+        totalRevenue,
+        totalExpenses,
+        estimatedProfit,
+        unpaidInvoices: unpaidInvoices.length,
+        customers: customers.length,
+        packages: packages.length,
+        complianceReadiness,
+        criticalOpenItems,
+        supportResolutionRate,
+        budgetVariance,
+        giveawayBudget,
+        giveawayStatus,
+        hiringStatus,
+        expansionStatus,
+        alerts,
+      },
+    });
+  } catch (error) {
+    console.error("Business planner intelligence error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load business intelligence.",
+      error: error.message,
+    });
+  }
 };
 
 const getBusinessPlannerItems = async (req, res) => {
@@ -190,4 +360,5 @@ module.exports = {
   createBusinessPlannerItem,
   updateBusinessPlannerItem,
   deleteBusinessPlannerItem,
+  getBusinessPlannerIntelligence,
 };
