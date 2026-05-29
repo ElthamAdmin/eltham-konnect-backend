@@ -75,6 +75,7 @@ const marketplaceCartRoutes = require("./routes/marketplaceCartRoutes");
 const marketplaceOrderRoutes = require("./routes/marketplaceOrderRoutes");
 const marketplaceInvoiceRoutes = require("./routes/marketplaceInvoiceRoutes");
 const marketplaceProductRoutes = require("./routes/marketplaceProductRoutes");
+const businessPlannerRoutes = require("./routes/businessPlannerRoutes");
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -247,6 +248,7 @@ app.use("/api/marketplace-cart", marketplaceCartRoutes);
 app.use("/api/marketplace-orders", marketplaceOrderRoutes);
 app.use("/api/marketplace-invoices", marketplaceInvoiceRoutes);
 app.use("/api/marketplace-products", marketplaceProductRoutes);
+app.use("/api/business-planner", businessPlannerRoutes);
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
