@@ -355,6 +355,156 @@ const buildExecutiveActionEngine = ({
   };
 };
 
+const buildExecutiveReports = ({
+  totalRevenue,
+  totalExpenses,
+  estimatedProfit,
+  profitMargin,
+  unpaidInvoices,
+  customers,
+  packages,
+  complianceReadiness,
+  budgetVariance,
+  healthScore,
+  giveawayStatus,
+  giveawayBudget,
+  hiringStatus,
+  expansionStatus,
+  executiveEngine,
+  fiveYearRoadmap,
+}) => {
+  const currentYear = new Date().getFullYear();
+  const currentYearRoadmap = (fiveYearRoadmap || []).find(
+    (item) => Number(item.year) === Number(currentYear)
+  );
+
+  const biggestRisk =
+    unpaidInvoices.length > 5
+      ? `${unpaidInvoices.length} unpaid invoices are creating cash flow risk.`
+      : budgetVariance < 0
+      ? "Negative budget variance needs review."
+      : estimatedProfit <= 0
+      ? "Profit is currently weak or negative."
+      : "No major critical risk detected, but continue monitoring cash flow and collections.";
+
+  const ceoReport = {
+    title: "CEO Weekly Report",
+    period: "Current EKOS Snapshot",
+    summary:
+      estimatedProfit > 0
+        ? "Eltham Konnect is currently profitable based on recorded paid invoices and expenses."
+        : "Eltham Konnect needs immediate attention on profitability and expense control.",
+    revenue: totalRevenue,
+    expenses: totalExpenses,
+    profit: estimatedProfit,
+    profitMargin,
+    healthScore,
+    customers,
+    packages,
+    unpaidInvoices: unpaidInvoices.length,
+    budgetVariance,
+    biggestRisk,
+    recommendedFocus:
+      executiveEngine?.priorityQueue?.[0]?.title ||
+      "Continue monitoring revenue, expenses, customer service, and compliance.",
+  };
+
+  const boardReport = {
+    title: "Board Summary Report",
+    financialPosition:
+      estimatedProfit > 0
+        ? "Profitable based on current EKOS records."
+        : "Profitability needs attention.",
+    compliancePosition:
+      complianceReadiness >= 80
+        ? "Compliance position appears strong."
+        : "Compliance roadmap needs attention.",
+    growthPosition:
+      currentYearRoadmap?.roadmapProgress >= 70
+        ? "Current year roadmap progress is strong."
+        : "Current year roadmap progress needs more action.",
+    operationalPosition:
+      unpaidInvoices.length <= 3
+        ? "Operational collections position is manageable."
+        : "Collections require follow-up.",
+    recommendedDecision:
+      expansionStatus === "Expansion planning allowed"
+        ? "Continue expansion planning carefully, but protect cash reserves."
+        : "Delay expansion until financial and operational risks improve.",
+  };
+
+  const expansionReport = {
+    title: "Expansion Readiness Report",
+    recommendation: expansionStatus,
+    ready:
+      expansionStatus === "Expansion planning allowed" &&
+      estimatedProfit > 0 &&
+      complianceReadiness >= 80,
+    reasons: [
+      estimatedProfit > 0
+        ? "Profit is positive."
+        : "Profit is not strong enough for expansion.",
+      complianceReadiness >= 80
+        ? "Compliance readiness is strong."
+        : "Compliance readiness should improve before expansion.",
+      unpaidInvoices.length <= 3
+        ? "Unpaid invoice risk is low."
+        : "Unpaid invoice risk should be reduced before expansion.",
+      budgetVariance >= 0
+        ? "Budget variance is favorable or neutral."
+        : "Budget variance is negative and needs review.",
+    ],
+  };
+
+  const hiringReport = {
+    title: "Hiring Readiness Report",
+    recommendation: hiringStatus,
+    suggestedRole:
+      executiveEngine?.hiringRecommendation?.position ||
+      "Customer Service / Operations Assistant",
+    estimatedMonthlyCost:
+      executiveEngine?.hiringRecommendation?.estimatedMonthlyCost || 0,
+    reasons: [
+      estimatedProfit > 0
+        ? "Profit is positive."
+        : "Profit is not strong enough to support additional fixed payroll.",
+      profitMargin >= 10
+        ? "Profit margin supports careful hiring review."
+        : "Profit margin is below the safe hiring threshold.",
+      complianceReadiness >= 70
+        ? "Compliance readiness supports hiring preparation."
+        : "Compliance readiness should improve before adding staff.",
+    ],
+  };
+
+  const giveawayReport = {
+    title: "Giveaway Risk Report",
+    recommendation: giveawayStatus,
+    safeBudget: giveawayBudget,
+    suggestedType:
+      executiveEngine?.giveawayRecommendation?.type || "No giveaway recommended",
+    reasons: [
+      estimatedProfit > 0
+        ? "Profit is positive."
+        : "Profit is not strong enough for giveaways.",
+      unpaidInvoices.length <= 5
+        ? "Unpaid invoices are within the current maximum threshold."
+        : "Unpaid invoices are too high for giveaways.",
+      giveawayBudget > 0
+        ? "A limited giveaway budget is available."
+        : "No giveaway budget is currently recommended.",
+    ],
+  };
+
+  return {
+    ceoReport,
+    boardReport,
+    expansionReport,
+    hiringReport,
+    giveawayReport,
+  };
+};
+
 const getBusinessPlannerIntelligence = async (req, res) => {
   try {
     const [customers, packages, invoices, expenses, tickets, plannerItems, budgets] =
@@ -506,9 +656,29 @@ const executiveEngine = buildExecutiveActionEngine({
   fiveYearRoadmap,
 });
 
+const executiveReports = buildExecutiveReports({
+  totalRevenue,
+  totalExpenses,
+  estimatedProfit,
+  profitMargin,
+  unpaidInvoices,
+  customers: customers.length,
+  packages: packages.length,
+  complianceReadiness,
+  budgetVariance,
+  healthScore,
+  giveawayStatus,
+  giveawayBudget,
+  hiringStatus,
+  expansionStatus,
+  executiveEngine,
+  fiveYearRoadmap,
+});
+
     res.json({
       success: true,
       data: {
+        executiveReports,
         executiveEngine,
         fiveYearRoadmap,
         healthScore,
