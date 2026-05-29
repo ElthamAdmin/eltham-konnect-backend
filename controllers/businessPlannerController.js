@@ -35,6 +35,21 @@ const buildAdvisorNote = (item) => {
     return "Break this goal into yearly milestones, monthly actions, and measurable targets.";
   }
 
+  if (
+  [
+    "Revenue Goal",
+    "Profit Goal",
+    "Customer Goal",
+    "Package Goal",
+    "Hiring Goal",
+    "Compliance Goal",
+    "Expansion Goal",
+    "Marketing Goal",
+  ].includes(item.category)
+) {
+  return "This is a strategic roadmap goal. Track the target value, current progress, due date, and status so EKOS can measure yearly growth progress.";
+}
+
   return "Track this item carefully and update its status as progress is made.";
 };
 
@@ -77,6 +92,84 @@ const getSummary = (items) => {
     complianceReadiness,
     activeGiveaways,
   };
+};
+
+const buildFiveYearRoadmap = (plannerItems, intelligenceValues = {}) => {
+  const years = [2026, 2027, 2028, 2029, 2030];
+
+  const roadmapCategories = [
+    "5-Year Goal",
+    "Revenue Goal",
+    "Profit Goal",
+    "Customer Goal",
+    "Package Goal",
+    "Hiring Goal",
+    "Compliance Goal",
+    "Expansion Goal",
+    "Marketing Goal",
+  ];
+
+  return years.map((year) => {
+    const yearItems = plannerItems.filter(
+      (item) =>
+        Number(item.targetYear) === year &&
+        roadmapCategories.includes(item.category)
+    );
+
+    const completedGoals = yearItems.filter(
+      (item) => item.status === "Completed"
+    ).length;
+
+    const roadmapProgress =
+      yearItems.length === 0
+        ? 0
+        : Math.round((completedGoals / yearItems.length) * 100);
+
+    const revenueGoal = yearItems.find((item) => item.category === "Revenue Goal");
+    const profitGoal = yearItems.find((item) => item.category === "Profit Goal");
+    const customerGoal = yearItems.find((item) => item.category === "Customer Goal");
+    const packageGoal = yearItems.find((item) => item.category === "Package Goal");
+
+    const progressFromTarget = (goalItem, liveValue) => {
+      const target = Number(goalItem?.targetValue || 0);
+      const current = Number(liveValue || goalItem?.currentValue || 0);
+
+      if (!goalItem || target <= 0) return 0;
+
+      return Math.min(100, Math.round((current / target) * 100));
+    };
+
+    return {
+      year,
+      totalGoals: yearItems.length,
+      completedGoals,
+      roadmapProgress,
+
+      revenue: {
+        target: Number(revenueGoal?.targetValue || 0),
+        current: Number(intelligenceValues.totalRevenue || revenueGoal?.currentValue || 0),
+        progress: progressFromTarget(revenueGoal, intelligenceValues.totalRevenue),
+      },
+
+      profit: {
+        target: Number(profitGoal?.targetValue || 0),
+        current: Number(intelligenceValues.estimatedProfit || profitGoal?.currentValue || 0),
+        progress: progressFromTarget(profitGoal, intelligenceValues.estimatedProfit),
+      },
+
+      customers: {
+        target: Number(customerGoal?.targetValue || 0),
+        current: Number(intelligenceValues.customers || customerGoal?.currentValue || 0),
+        progress: progressFromTarget(customerGoal, intelligenceValues.customers),
+      },
+
+      packages: {
+        target: Number(packageGoal?.targetValue || 0),
+        current: Number(intelligenceValues.packages || packageGoal?.currentValue || 0),
+        progress: progressFromTarget(packageGoal, intelligenceValues.packages),
+      },
+    };
+  });
 };
 
 const getBusinessPlannerIntelligence = async (req, res) => {
@@ -211,9 +304,17 @@ const getBusinessPlannerIntelligence = async (req, res) => {
       alerts.push("Business position looks stable. Continue monitoring profitability, compliance, cash flow, and customer service.");
     }
 
+    const fiveYearRoadmap = buildFiveYearRoadmap(plannerItems, {
+  totalRevenue,
+  estimatedProfit,
+  customers: customers.length,
+  packages: packages.length,
+});
+
     res.json({
       success: true,
       data: {
+        fiveYearRoadmap,
         healthScore,
         profitMargin,
         totalRevenue,

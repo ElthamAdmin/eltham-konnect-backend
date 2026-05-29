@@ -9,20 +9,28 @@ const BusinessPlannerSchema = new mongoose.Schema(
     },
 
     category: {
-      type: String,
-      enum: [
-        "5-Year Goal",
-        "To-Do Task",
-        "Hiring Plan",
-        "Compliance",
-        "LLC Transition",
-        "Giveaway / Promotion",
-        "Business Decision",
-        "Financial Strategy",
-        "Operations",
-      ],
-      default: "To-Do Task",
-    },
+  type: String,
+  enum: [
+    "5-Year Goal",
+    "Revenue Goal",
+    "Profit Goal",
+    "Customer Goal",
+    "Package Goal",
+    "Hiring Goal",
+    "Compliance Goal",
+    "Expansion Goal",
+    "Marketing Goal",
+    "To-Do Task",
+    "Hiring Plan",
+    "Compliance",
+    "LLC Transition",
+    "Giveaway / Promotion",
+    "Business Decision",
+    "Financial Strategy",
+    "Operations",
+  ],
+  default: "To-Do Task",
+},
 
     priority: {
       type: String,
@@ -52,15 +60,31 @@ const BusinessPlannerSchema = new mongoose.Schema(
     },
 
     estimatedCost: {
-      type: Number,
-      default: 0,
-    },
+  type: Number,
+  default: 0,
+},
 
-    expectedBenefit: {
-      type: String,
-      default: "",
-      trim: true,
-    },
+targetValue: {
+  type: Number,
+  default: 0,
+},
+
+currentValue: {
+  type: Number,
+  default: 0,
+},
+
+unit: {
+  type: String,
+  enum: ["JMD", "Count", "Percent", "Text"],
+  default: "Text",
+},
+
+expectedBenefit: {
+  type: String,
+  default: "",
+  trim: true,
+},
 
     notes: {
       type: String,
