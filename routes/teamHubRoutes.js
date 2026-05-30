@@ -20,6 +20,7 @@ const {
   createChannel,
   getMessages,
   sendMessage,
+  sendReply,
   getOrCreateConversation,
 } = require("../controllers/teamHubController");
 
@@ -32,6 +33,7 @@ router.post("/channels", protect, createChannel);
 // MESSAGES
 router.get("/messages/:channelId", protect, getMessages);
 router.post("/messages", protect, upload.array("attachments", 10), sendMessage);
+router.post("/messages/reply", protect, upload.array("attachments", 10), sendReply);
 
 // DIRECT CHAT
 router.post("/conversation", protect, getOrCreateConversation);
