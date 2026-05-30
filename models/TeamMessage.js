@@ -30,6 +30,14 @@ const TeamMessageSchema = new mongoose.Schema(
     attachments: [AttachmentSchema],
     mentions: [{ type: String }],
     readBy: [{ type: String }],
+    isPinned: { type: Boolean, default: false },
+isAnnouncement: { type: Boolean, default: false },
+announcementTitle: { type: String, default: "" },
+priority: {
+  type: String,
+  enum: ["Normal", "Important", "Urgent"],
+  default: "Normal",
+},
     reactions: [
       {
         emoji: { type: String, default: "" },

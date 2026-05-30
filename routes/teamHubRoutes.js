@@ -24,6 +24,11 @@ const {
   getChannelDocuments,
   uploadChannelDocument,
   getChannelMembers,
+  addChannelMember,
+  removeChannelMember,
+  pinMessage,
+  unpinMessage,
+  sendAnnouncement,
   getOrCreateConversation,
 } = require("../controllers/teamHubController");
 
@@ -37,12 +42,17 @@ router.post("/channels", protect, createChannel);
 router.get("/messages/:channelId", protect, getMessages);
 router.post("/messages", protect, upload.array("attachments", 10), sendMessage);
 router.post("/messages/reply", protect, upload.array("attachments", 10), sendReply);
+router.put("/messages/:messageId/pin", protect, pinMessage);
+router.put("/messages/:messageId/unpin", protect, unpinMessage);
+router.post("/announcements", protect, upload.array("attachments", 10), sendAnnouncement);
 // CHANNEL FILES
 router.get("/documents/:channelId", protect, getChannelDocuments);
 router.post("/documents", protect, upload.single("file"), uploadChannelDocument);
 
 // CHANNEL MEMBERS
 router.get("/channels/:channelId/members", protect, getChannelMembers);
+router.post("/channels/:channelId/members", protect, addChannelMember);
+router.delete("/channels/:channelId/members/:userId", protect, removeChannelMember);
 
 // DIRECT CHAT
 router.post("/conversation", protect, getOrCreateConversation);

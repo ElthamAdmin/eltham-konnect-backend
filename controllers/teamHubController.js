@@ -4,6 +4,7 @@ const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
 const SystemUser = require("../models/SystemUser");
 const TeamHubDocument = require("../models/TeamHubDocument");
+const TeamHubNotification = require("../models/TeamHubNotification");
 
 // ================= CHANNELS =================
 
@@ -20,6 +21,8 @@ exports.createChannel = async (req, res) => {
     name,
     description,
     createdBy: req.user.userId,
+    owners: [req.user.userId],
+    members: [req.user.userId],
   });
 
   res.json({ success: true, data: channel });
@@ -35,6 +38,42 @@ const buildAttachments = (files = []) =>
     mimeType: file.mimetype,
     size: file.size,
   }));
+
+  const extractMentions = async (text = "") => {
+  const matches = String(text).match(/@([a-zA-Z0-9._ -]+)/g) || [];
+  const names = matches.map((item) => item.replace("@", "").trim());
+
+  if (!names.length) return [];
+
+  const users = await SystemUser.find({
+    fullName: { $in: names.map((name) => new RegExp(`^${name}$`, "i")) },
+  }).select("userId fullName");
+
+  return users.map((user) => user.userId);
+};
+
+const createMentionNotifications = async ({
+  mentionedUserIds = [],
+  channelId,
+  messageId,
+  senderId,
+  body,
+}) => {
+  const targets = mentionedUserIds.filter((userId) => userId !== senderId);
+
+  if (!targets.length) return;
+
+  await TeamHubNotification.insertMany(
+    targets.map((userId) => ({
+      userId,
+      channelId,
+      messageId,
+      type: "Mention",
+      title: "You were mentioned in Team Hub",
+      body,
+    }))
+  );
+};
 
 const attachSenderProfiles = async (messages = []) => {
   const senderIds = [
@@ -108,13 +147,24 @@ exports.sendMessage = async (req, res) => {
     });
   }
 
-  const newMessage = await TeamMessage.create({
-    channelId,
-    senderId: req.user.userId,
-    message,
-    attachments,
-    parentMessageId: null,
-  });
+  const mentionedUserIds = await extractMentions(message);
+
+const newMessage = await TeamMessage.create({
+  channelId,
+  senderId: req.user.userId,
+  message,
+  attachments,
+  parentMessageId: null,
+  mentions: mentionedUserIds,
+});
+
+await createMentionNotifications({
+  mentionedUserIds,
+  channelId,
+  messageId: newMessage._id,
+  senderId: req.user.userId,
+  body: message,
+});
 
   const [enrichedMessage] = await attachSenderProfiles([newMessage]);
 
@@ -156,13 +206,24 @@ exports.sendReply = async (req, res) => {
     });
   }
 
-  const reply = await TeamMessage.create({
-    channelId,
-    parentMessageId,
-    senderId: req.user.userId,
-    message,
-    attachments,
-  });
+  const mentionedUserIds = await extractMentions(message);
+
+const reply = await TeamMessage.create({
+  channelId,
+  parentMessageId,
+  senderId: req.user.userId,
+  message,
+  attachments,
+  mentions: mentionedUserIds,
+});
+
+await createMentionNotifications({
+  mentionedUserIds,
+  channelId,
+  messageId: reply._id,
+  senderId: req.user.userId,
+  body: message,
+});
 
   const [enrichedReply] = await attachSenderProfiles([reply]);
 
@@ -240,6 +301,125 @@ exports.getChannelMembers = async (req, res) => {
     .sort({ fullName: 1 });
 
   res.json({ success: true, data: members });
+};
+
+// ================= PHASE 4 TEAM HUB CONTROLS =================
+
+exports.addChannelMember = async (req, res) => {
+  const { channelId } = req.params;
+  const { userId } = req.body;
+
+  const channel = await TeamChannel.findById(channelId);
+
+  if (!channel) {
+    return res.status(404).json({ success: false, message: "Channel not found." });
+  }
+
+  if (!channel.members.includes(userId)) {
+    channel.members.push(userId);
+  }
+
+  await channel.save();
+
+  await TeamHubNotification.create({
+    userId,
+    channelId,
+    type: "AddedToChannel",
+    title: "You were added to a Team Hub channel",
+    body: `You were added to #${channel.name}`,
+  });
+
+  res.json({ success: true, data: channel });
+};
+
+exports.removeChannelMember = async (req, res) => {
+  const { channelId, userId } = req.params;
+
+  const channel = await TeamChannel.findById(channelId);
+
+  if (!channel) {
+    return res.status(404).json({ success: false, message: "Channel not found." });
+  }
+
+  channel.members = channel.members.filter((memberId) => memberId !== userId);
+  channel.owners = channel.owners.filter((ownerId) => ownerId !== userId);
+
+  await channel.save();
+
+  res.json({ success: true, data: channel });
+};
+
+exports.pinMessage = async (req, res) => {
+  const { messageId } = req.params;
+
+  const message = await TeamMessage.findByIdAndUpdate(
+    messageId,
+    { isPinned: true },
+    { new: true }
+  );
+
+  res.json({ success: true, data: message });
+};
+
+exports.unpinMessage = async (req, res) => {
+  const { messageId } = req.params;
+
+  const message = await TeamMessage.findByIdAndUpdate(
+    messageId,
+    { isPinned: false },
+    { new: true }
+  );
+
+  res.json({ success: true, data: message });
+};
+
+exports.sendAnnouncement = async (req, res) => {
+  const { channelId, announcementTitle, message, priority } = req.body;
+
+  if (!channelId || !announcementTitle || !message) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel, title, and message are required.",
+    });
+  }
+
+  const attachments = buildAttachments(req.files || []);
+
+  const announcement = await TeamMessage.create({
+    channelId,
+    senderId: req.user.userId,
+    message,
+    attachments,
+    parentMessageId: null,
+    isAnnouncement: true,
+    announcementTitle,
+    priority: priority || "Important",
+  });
+
+  const channel = await TeamChannel.findById(channelId);
+  const notifyUserIds = [
+    ...new Set([channel?.createdBy, ...(channel?.members || [])].filter(Boolean)),
+  ].filter((userId) => userId !== req.user.userId);
+
+  if (notifyUserIds.length) {
+    await TeamHubNotification.insertMany(
+      notifyUserIds.map((userId) => ({
+        userId,
+        channelId,
+        messageId: announcement._id,
+        type: "Announcement",
+        title: announcementTitle,
+        body: message,
+      }))
+    );
+  }
+
+  const [enrichedAnnouncement] = await attachSenderProfiles([announcement]);
+
+  res.status(201).json({
+    success: true,
+    data: { ...enrichedAnnouncement, replies: [], replyCount: 0 },
+  });
 };
 
 // ================= DIRECT CHAT =================
