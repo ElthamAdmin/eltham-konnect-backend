@@ -2,7 +2,7 @@ const path = require("path");
 const TeamChannel = require("../models/TeamChannel");
 const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
-const SystemUser = require("../models/User");
+const SystemUser = require("../models/SystemUser");
 
 // ================= CHANNELS =================
 
