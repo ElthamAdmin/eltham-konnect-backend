@@ -2,6 +2,7 @@ const path = require("path");
 const TeamChannel = require("../models/TeamChannel");
 const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
+const SystemUser = require("../models/User");
 
 // ================= CHANNELS =================
 
@@ -34,6 +35,34 @@ const buildAttachments = (files = []) =>
     size: file.size,
   }));
 
+const attachSenderProfiles = async (messages = []) => {
+  const senderIds = [
+    ...new Set(messages.map((msg) => msg.senderId).filter(Boolean)),
+  ];
+
+  const users = await SystemUser.find({ userId: { $in: senderIds } }).select(
+    "userId fullName role branch dutyStatus employeeSnapshot"
+  );
+
+  const userMap = {};
+  users.forEach((user) => {
+    userMap[user.userId] = {
+      userId: user.userId,
+      fullName: user.fullName,
+      role: user.role,
+      branch: user.branch,
+      dutyStatus: user.dutyStatus,
+      jobTitle: user.employeeSnapshot?.jobTitle || "",
+      department: user.employeeSnapshot?.department || "",
+    };
+  });
+
+  return messages.map((msg) => ({
+    ...msg.toObject(),
+    senderProfile: userMap[msg.senderId] || null,
+  }));
+};
+
 exports.getMessages = async (req, res) => {
   const { channelId } = req.params;
 
@@ -41,21 +70,20 @@ exports.getMessages = async (req, res) => {
     createdAt: 1,
   });
 
-  const parentMessages = allMessages.filter((msg) => !msg.parentMessageId);
-  const replies = allMessages.filter((msg) => msg.parentMessageId);
+  const enrichedMessages = await attachSenderProfiles(allMessages);
 
-  const messagesWithReplies = parentMessages.map((msg) => {
-    const obj = msg.toObject();
+  const parentMessages = enrichedMessages.filter((msg) => !msg.parentMessageId);
+  const replies = enrichedMessages.filter((msg) => msg.parentMessageId);
 
-    obj.replies = replies
-      .filter(
-        (reply) =>
-          String(reply.parentMessageId) === String(msg._id)
-      )
-      .map((reply) => reply.toObject());
-
-    return obj;
-  });
+  const messagesWithReplies = parentMessages.map((msg) => ({
+    ...msg,
+    replies: replies.filter(
+      (reply) => String(reply.parentMessageId) === String(msg._id)
+    ),
+    replyCount: replies.filter(
+      (reply) => String(reply.parentMessageId) === String(msg._id)
+    ).length,
+  }));
 
   res.json({ success: true, data: messagesWithReplies });
 };
@@ -87,7 +115,12 @@ exports.sendMessage = async (req, res) => {
     parentMessageId: null,
   });
 
-  res.json({ success: true, data: { ...newMessage.toObject(), replies: [] } });
+  const [enrichedMessage] = await attachSenderProfiles([newMessage]);
+
+res.json({
+  success: true,
+  data: { ...enrichedMessage, replies: [], replyCount: 0 },
+});
 };
 
 exports.sendReply = async (req, res) => {
@@ -130,7 +163,9 @@ exports.sendReply = async (req, res) => {
     attachments,
   });
 
-  res.json({ success: true, data: reply });
+  const [enrichedReply] = await attachSenderProfiles([reply]);
+
+res.json({ success: true, data: enrichedReply });
 };
 
 // ================= DIRECT CHAT =================
