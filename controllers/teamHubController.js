@@ -3,6 +3,7 @@ const TeamChannel = require("../models/TeamChannel");
 const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
 const SystemUser = require("../models/SystemUser");
+const TeamHubDocument = require("../models/TeamHubDocument");
 
 // ================= CHANNELS =================
 
@@ -166,6 +167,79 @@ exports.sendReply = async (req, res) => {
   const [enrichedReply] = await attachSenderProfiles([reply]);
 
 res.json({ success: true, data: enrichedReply });
+};
+
+// ================= CHANNEL FILES =================
+
+exports.getChannelDocuments = async (req, res) => {
+  const { channelId } = req.params;
+
+  const documents = await TeamHubDocument.find({
+    channelId,
+    status: "Active",
+  }).sort({ createdAt: -1 });
+
+  res.json({ success: true, data: documents });
+};
+
+exports.uploadChannelDocument = async (req, res) => {
+  const { channelId, title, folder } = req.body;
+  const file = req.file;
+
+  if (!channelId) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel is required.",
+    });
+  }
+
+  if (!file) {
+    return res.status(400).json({
+      success: false,
+      message: "File is required.",
+    });
+  }
+
+  const document = await TeamHubDocument.create({
+    channelId,
+    title: title || file.originalname,
+    folder: folder || "General",
+    originalName: file.originalname,
+    fileName: file.filename,
+    fileUrl: `/uploads/team-hub/${file.filename}`,
+    mimeType: file.mimetype,
+    size: file.size,
+    uploadedBy: req.user.userId,
+  });
+
+  res.status(201).json({ success: true, data: document });
+};
+
+// ================= CHANNEL MEMBERS =================
+
+exports.getChannelMembers = async (req, res) => {
+  const { channelId } = req.params;
+
+  const channel = await TeamChannel.findById(channelId);
+
+  if (!channel) {
+    return res.status(404).json({
+      success: false,
+      message: "Channel not found.",
+    });
+  }
+
+  const memberIds = [
+    ...new Set([channel.createdBy, ...(channel.members || [])].filter(Boolean)),
+  ];
+
+  const members = await SystemUser.find({
+    userId: { $in: memberIds },
+  })
+    .select("userId fullName email phone role branch dutyStatus employeeSnapshot status")
+    .sort({ fullName: 1 });
+
+  res.json({ success: true, data: members });
 };
 
 // ================= DIRECT CHAT =================

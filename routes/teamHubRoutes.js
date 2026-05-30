@@ -21,6 +21,9 @@ const {
   getMessages,
   sendMessage,
   sendReply,
+  getChannelDocuments,
+  uploadChannelDocument,
+  getChannelMembers,
   getOrCreateConversation,
 } = require("../controllers/teamHubController");
 
@@ -34,6 +37,12 @@ router.post("/channels", protect, createChannel);
 router.get("/messages/:channelId", protect, getMessages);
 router.post("/messages", protect, upload.array("attachments", 10), sendMessage);
 router.post("/messages/reply", protect, upload.array("attachments", 10), sendReply);
+// CHANNEL FILES
+router.get("/documents/:channelId", protect, getChannelDocuments);
+router.post("/documents", protect, upload.single("file"), uploadChannelDocument);
+
+// CHANNEL MEMBERS
+router.get("/channels/:channelId/members", protect, getChannelMembers);
 
 // DIRECT CHAT
 router.post("/conversation", protect, getOrCreateConversation);
