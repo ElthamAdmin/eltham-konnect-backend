@@ -213,8 +213,14 @@ const loginUser = async (req, res) => {
       });
     }
 
-    user.lastLoginAt = new Date();
-    await user.save();
+    const now = new Date();
+
+user.lastLoginAt = now;
+user.onlineStatus = "Online";
+user.lastSeenAt = now;
+user.lastPresencePingAt = now;
+
+await user.save();
 
     const tokenPayload = {
       userId: user.userId,
@@ -747,6 +753,88 @@ const getAttendanceHistoryAdmin = async (req, res) => {
   }
 };
 
+const updatePresence = async (req, res) => {
+  try {
+    const { onlineStatus } = req.body;
+    const validStatuses = ["Online", "Away", "Busy", "Offline"];
+
+    if (!validStatuses.includes(onlineStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid presence status",
+      });
+    }
+
+    const now = new Date();
+
+    const user = await SystemUser.findOneAndUpdate(
+      { userId: req.user.userId },
+      {
+        onlineStatus,
+        lastSeenAt: now,
+        lastPresencePingAt: now,
+      },
+      { new: true }
+    ).select("-passwordHash");
+
+    res.json({ success: true, data: user });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not update presence",
+      error: error.message,
+    });
+  }
+};
+
+const presencePing = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const user = await SystemUser.findOneAndUpdate(
+      { userId: req.user.userId },
+      {
+        onlineStatus: "Online",
+        lastSeenAt: now,
+        lastPresencePingAt: now,
+      },
+      { new: true }
+    ).select("-passwordHash");
+
+    res.json({ success: true, data: user });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Could not update presence ping",
+      error: error.message,
+    });
+  }
+};
+
+const logoutUser = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const user = await SystemUser.findOneAndUpdate(
+      { userId: req.user.userId },
+      {
+        onlineStatus: "Offline",
+        lastSeenAt: now,
+        lastLogoutAt: now,
+      },
+      { new: true }
+    ).select("-passwordHash");
+
+    res.json({ success: true, data: user });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Logout presence update failed",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   loginUser,
   clockIn,
@@ -757,4 +845,7 @@ module.exports = {
   getMyAttendanceToday,
   getTodayAttendanceAdmin,
   getAttendanceHistoryAdmin,
+  updatePresence,
+presencePing,
+logoutUser,
 };

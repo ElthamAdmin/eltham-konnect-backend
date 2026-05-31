@@ -84,6 +84,22 @@ const SystemUserSchema = new mongoose.Schema(
       default: "Off Duty",
     },
 
+    onlineStatus: {
+  type: String,
+  enum: ["Online", "Away", "Busy", "Offline"],
+  default: "Offline",
+},
+
+lastSeenAt: {
+  type: Date,
+  default: null,
+},
+
+lastPresencePingAt: {
+  type: Date,
+  default: null,
+},
+
     lastLoginAt: {
       type: Date,
       default: null,

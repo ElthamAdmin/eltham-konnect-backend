@@ -11,6 +11,9 @@ const {
   getMyAttendanceToday,
   getTodayAttendanceAdmin,
   getAttendanceHistoryAdmin,
+  updatePresence,
+presencePing,
+logoutUser,
 } = require("../controllers/authController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -24,5 +27,8 @@ router.post("/force-clock-out/:userId", protect, forceClockOutStaff);
 router.get("/me/attendance-today", protect, getMyAttendanceToday);
 router.get("/attendance-today", protect, getTodayAttendanceAdmin);
 router.get("/attendance-history", protect, getAttendanceHistoryAdmin);
+router.post("/presence", protect, updatePresence);
+router.post("/presence-ping", protect, presencePing);
+router.post("/logout", protect, logoutUser);
 
 module.exports = router;
