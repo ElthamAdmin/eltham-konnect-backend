@@ -2,6 +2,7 @@ const POSCashDrawer = require("../models/POSCashDrawer");
 const POSTransaction = require("../models/POSTransaction");
 const Invoice = require("../models/Invoice");
 const MarketplaceInvoice = require("../models/MarketplaceInvoice");
+const Package = require("../models/Package");
 const POSActionLog = require("../models/POSActionLog");
 const POSShiftHandover = require("../models/POSShiftHandover");
 const FinancialAccount = require("../models/FinancialAccount");
@@ -356,11 +357,32 @@ status: "Open",
 
     await invoice.save();
 
-    await updateDrawerTotals({
-      drawer,
-      paymentMethod,
-      amount: finalTotal,
-    });
+if (invoiceType === "Shipping") {
+  const trackingNumbers = (invoice.packages || [])
+    .map((pkg) => pkg.trackingNumber)
+    .filter(Boolean);
+
+  if (trackingNumbers.length > 0) {
+    await Package.updateMany(
+      { trackingNumber: { $in: trackingNumbers } },
+      {
+        $set: {
+          status: "Delivered",
+          readyForPickup: false,
+          readyForPickupDate: null,
+          invoiceStatus: "Paid",
+          statusUpdatedAt: new Date(),
+        },
+      }
+    );
+  }
+}
+
+await updateDrawerTotals({
+  drawer,
+  paymentMethod,
+  amount: finalTotal,
+});
 
     receivingAccount.currentBalance = roundMoney(
   Number(receivingAccount.currentBalance || 0) + finalTotal
