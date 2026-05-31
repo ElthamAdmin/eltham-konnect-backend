@@ -37,6 +37,7 @@ const {
 getDirectMessages,
 sendDirectMessage,
 markDirectMessageRead,
+toggleMessageReaction,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -51,6 +52,7 @@ router.post("/messages", protect, upload.array("attachments", 10), sendMessage);
 router.post("/messages/reply", protect, upload.array("attachments", 10), sendReply);
 router.put("/messages/:messageId/pin", protect, pinMessage);
 router.put("/messages/:messageId/unpin", protect, unpinMessage);
+router.put("/messages/:messageId/reactions", protect, toggleMessageReaction);
 router.post("/announcements", protect, upload.array("attachments", 10), sendAnnouncement);
 
 // NOTIFICATIONS

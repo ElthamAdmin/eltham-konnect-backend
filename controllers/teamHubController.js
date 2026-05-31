@@ -448,6 +448,52 @@ exports.sendAnnouncement = async (req, res) => {
   });
 };
 
+// ================= MESSAGE REACTIONS =================
+
+exports.toggleMessageReaction = async (req, res) => {
+  const { messageId } = req.params;
+  const { emoji } = req.body;
+  const userId = req.user.userId;
+
+  if (!emoji) {
+    return res.status(400).json({
+      success: false,
+      message: "Emoji is required.",
+    });
+  }
+
+  const message = await TeamMessage.findById(messageId);
+
+  if (!message) {
+    return res.status(404).json({
+      success: false,
+      message: "Message not found.",
+    });
+  }
+
+  const existingReaction = (message.reactions || []).find(
+    (reaction) => reaction.userId === userId && reaction.emoji === emoji
+  );
+
+  if (existingReaction) {
+    message.reactions = message.reactions.filter(
+      (reaction) => !(reaction.userId === userId && reaction.emoji === emoji)
+    );
+  } else {
+    message.reactions = [
+      ...(message.reactions || []).filter((reaction) => reaction.userId !== userId),
+      { emoji, userId },
+    ];
+  }
+
+  await message.save();
+
+  res.json({
+    success: true,
+    data: message,
+  });
+};
+
 // ================= TEAM HUB NOTIFICATIONS =================
 
 exports.getMyNotifications = async (req, res) => {
