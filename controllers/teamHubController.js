@@ -6,6 +6,7 @@ const DirectMessage = require("../models/DirectMessage");
 const SystemUser = require("../models/SystemUser");
 const TeamHubDocument = require("../models/TeamHubDocument");
 const TeamHubNotification = require("../models/TeamHubNotification");
+const TeamHubFolder = require("../models/TeamHubFolder");
 const TeamHubCalendarEvent = require("../models/TeamHubCalendarEvent");
 const TeamHubTask = require("../models/TeamHubTask");
 
@@ -539,6 +540,133 @@ exports.deleteChannelTask = async (req, res) => {
     success: true,
     message: "Task deleted successfully.",
   });
+};
+
+// ================= CHANNEL FOLDERS =================
+
+exports.getChannelFolders = async (req, res) => {
+  const { channelId } = req.params;
+
+  const folders = await TeamHubFolder.find({
+    channelId,
+    status: "Active",
+  }).sort({ folderPath: 1 });
+
+  res.json({ success: true, data: folders });
+};
+
+exports.createChannelFolder = async (req, res) => {
+  const { channelId, name, parentFolderPath } = req.body;
+
+  if (!channelId || !name) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel and folder name are required.",
+    });
+  }
+
+  const cleanedName = String(name).trim();
+  const cleanedParent = String(parentFolderPath || "").trim();
+
+  const folderPath = cleanedParent
+    ? `${cleanedParent}/${cleanedName}`
+    : cleanedName;
+
+  const folder = await TeamHubFolder.create({
+    channelId,
+    name: cleanedName,
+    folderPath,
+    parentFolderPath: cleanedParent,
+    createdByUserId: req.user.userId,
+    createdByName: req.user.fullName || req.user.email || "System User",
+  });
+
+  res.status(201).json({ success: true, data: folder });
+};
+
+exports.renameChannelFolder = async (req, res) => {
+  const { folderId } = req.params;
+  const { name } = req.body;
+
+  if (!name) {
+    return res.status(400).json({
+      success: false,
+      message: "New folder name is required.",
+    });
+  }
+
+  const folder = await TeamHubFolder.findById(folderId);
+
+  if (!folder || folder.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Folder not found.",
+    });
+  }
+
+  const oldPath = folder.folderPath;
+  const cleanedName = String(name).trim();
+
+  const newPath = folder.parentFolderPath
+    ? `${folder.parentFolderPath}/${cleanedName}`
+    : cleanedName;
+
+  folder.name = cleanedName;
+  folder.folderPath = newPath;
+  await folder.save();
+
+  await TeamHubDocument.updateMany(
+    {
+      channelId: folder.channelId,
+      folderPath: oldPath,
+    },
+    {
+      folder: cleanedName,
+      folderPath: newPath,
+      parentFolder: folder.parentFolderPath,
+    }
+  );
+
+  res.json({ success: true, data: folder });
+};
+
+exports.moveChannelFolder = async (req, res) => {
+  const { folderId } = req.params;
+  const { parentFolderPath } = req.body;
+
+  const folder = await TeamHubFolder.findById(folderId);
+
+  if (!folder || folder.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Folder not found.",
+    });
+  }
+
+  const oldPath = folder.folderPath;
+  const cleanedParent = String(parentFolderPath || "").trim();
+
+  const newPath = cleanedParent
+    ? `${cleanedParent}/${folder.name}`
+    : folder.name;
+
+  folder.parentFolderPath = cleanedParent;
+  folder.folderPath = newPath;
+  await folder.save();
+
+  await TeamHubDocument.updateMany(
+    {
+      channelId: folder.channelId,
+      folderPath: oldPath,
+    },
+    {
+      folder: folder.name,
+      folderPath: newPath,
+      parentFolder: cleanedParent,
+    }
+  );
+
+  res.json({ success: true, data: folder });
 };
 
 // ================= CHANNEL FILES =================

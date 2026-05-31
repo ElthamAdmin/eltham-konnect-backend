@@ -50,6 +50,10 @@ getChannelCalendarEvents,
 createChannelCalendarEvent,
 updateChannelCalendarEvent,
 deleteChannelCalendarEvent,
+getChannelFolders,
+createChannelFolder,
+renameChannelFolder,
+moveChannelFolder,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -83,6 +87,12 @@ router.get("/tasks/:channelId", protect, getChannelTasks);
 router.post("/tasks", protect, createChannelTask);
 router.put("/tasks/:taskId", protect, updateChannelTask);
 router.delete("/tasks/:taskId", protect, deleteChannelTask);
+
+// CHANNEL FOLDERS
+router.get("/folders/:channelId", protect, getChannelFolders);
+router.post("/folders", protect, createChannelFolder);
+router.put("/folders/:folderId/rename", protect, renameChannelFolder);
+router.put("/folders/:folderId/move", protect, moveChannelFolder);
 
 // CHANNEL FILES
 router.get("/documents/:channelId", protect, getChannelDocuments);
