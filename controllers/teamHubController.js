@@ -424,6 +424,49 @@ exports.sendAnnouncement = async (req, res) => {
   });
 };
 
+// ================= TEAM HUB NOTIFICATIONS =================
+
+exports.getMyNotifications = async (req, res) => {
+  const notifications = await TeamHubNotification.find({
+    userId: req.user.userId,
+  }).sort({ createdAt: -1 });
+
+  const unreadCount = notifications.filter((item) => !item.isRead).length;
+
+  res.json({
+    success: true,
+    data: notifications,
+    unreadCount,
+  });
+};
+
+exports.markNotificationRead = async (req, res) => {
+  const { notificationId } = req.params;
+
+  const notification = await TeamHubNotification.findOneAndUpdate(
+    {
+      _id: notificationId,
+      userId: req.user.userId,
+    },
+    { isRead: true },
+    { new: true }
+  );
+
+  res.json({ success: true, data: notification });
+};
+
+exports.markAllNotificationsRead = async (req, res) => {
+  await TeamHubNotification.updateMany(
+    { userId: req.user.userId, isRead: false },
+    { isRead: true }
+  );
+
+  res.json({
+    success: true,
+    message: "All Team Hub notifications marked as read.",
+  });
+};
+
 // ================= DIRECT CHAT =================
 
 exports.getOrCreateConversation = async (req, res) => {

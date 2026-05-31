@@ -29,6 +29,9 @@ const {
   pinMessage,
   unpinMessage,
   sendAnnouncement,
+  getMyNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
   getOrCreateConversation,
 } = require("../controllers/teamHubController");
 
@@ -45,6 +48,12 @@ router.post("/messages/reply", protect, upload.array("attachments", 10), sendRep
 router.put("/messages/:messageId/pin", protect, pinMessage);
 router.put("/messages/:messageId/unpin", protect, unpinMessage);
 router.post("/announcements", protect, upload.array("attachments", 10), sendAnnouncement);
+
+// NOTIFICATIONS
+router.get("/notifications/me", protect, getMyNotifications);
+router.put("/notifications/:notificationId/read", protect, markNotificationRead);
+router.put("/notifications/read-all", protect, markAllNotificationsRead);
+
 // CHANNEL FILES
 router.get("/documents/:channelId", protect, getChannelDocuments);
 router.post("/documents", protect, upload.single("file"), uploadChannelDocument);
