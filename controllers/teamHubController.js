@@ -6,6 +6,7 @@ const DirectMessage = require("../models/DirectMessage");
 const SystemUser = require("../models/SystemUser");
 const TeamHubDocument = require("../models/TeamHubDocument");
 const TeamHubNotification = require("../models/TeamHubNotification");
+const TeamHubTask = require("../models/TeamHubTask");
 
 // ================= CHANNELS =================
 
@@ -254,6 +255,142 @@ await createMentionNotifications({
   const [enrichedReply] = await attachSenderProfiles([reply]);
 
 res.json({ success: true, data: enrichedReply });
+};
+
+// ================= CHANNEL TASKS =================
+
+exports.getChannelTasks = async (req, res) => {
+  const { channelId } = req.params;
+
+  const tasks = await TeamHubTask.find({ channelId }).sort({
+    status: 1,
+    dueDate: 1,
+    createdAt: -1,
+  });
+
+  res.json({ success: true, data: tasks });
+};
+
+exports.createChannelTask = async (req, res) => {
+  const {
+    channelId,
+    title,
+    description,
+    assignedToUserId,
+    priority,
+    dueDate,
+  } = req.body;
+
+  if (!channelId || !title) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel and task title are required.",
+    });
+  }
+
+  let assignedToName = "";
+
+  if (assignedToUserId) {
+    const assignedUser = await SystemUser.findOne({ userId: assignedToUserId });
+    assignedToName = assignedUser?.fullName || "";
+  }
+
+  const task = await TeamHubTask.create({
+    taskNumber: `TASK-${Date.now()}`,
+    channelId,
+    title,
+    description: description || "",
+    assignedToUserId: assignedToUserId || "",
+    assignedToName,
+    priority: priority || "Medium",
+    dueDate: dueDate || "",
+    createdByUserId: req.user.userId,
+    createdByName: req.user.fullName || req.user.email || "System User",
+  });
+
+  if (assignedToUserId) {
+    await TeamHubNotification.create({
+      userId: assignedToUserId,
+      channelId,
+      type: "AddedToChannel",
+      title: "New Team Hub task assigned",
+      body: `${task.title} was assigned to you.`,
+    });
+  }
+
+  res.status(201).json({ success: true, data: task });
+};
+
+exports.updateChannelTask = async (req, res) => {
+  const { taskId } = req.params;
+  const { status, progress, priority, dueDate, assignedToUserId } = req.body;
+
+  const task = await TeamHubTask.findById(taskId);
+
+  if (!task) {
+    return res.status(404).json({
+      success: false,
+      message: "Task not found.",
+    });
+  }
+
+  if (priority) task.priority = priority;
+  if (dueDate !== undefined) task.dueDate = dueDate;
+
+  if (progress !== undefined) {
+    task.progress = Math.max(0, Math.min(100, Number(progress || 0)));
+  }
+
+  if (assignedToUserId !== undefined) {
+    task.assignedToUserId = assignedToUserId || "";
+    task.assignedToName = "";
+
+    if (assignedToUserId) {
+      const assignedUser = await SystemUser.findOne({ userId: assignedToUserId });
+      task.assignedToName = assignedUser?.fullName || "";
+    }
+  }
+
+  if (status) {
+    task.status = status;
+
+    if (status === "Completed") {
+      task.progress = 100;
+      task.completedAt = new Date();
+      task.completedByUserId = req.user.userId;
+      task.completedByName = req.user.fullName || req.user.email || "System User";
+    }
+
+    if (status !== "Completed") {
+      task.completedAt = null;
+      task.completedByUserId = "";
+      task.completedByName = "";
+    }
+  }
+
+  await task.save();
+
+  res.json({ success: true, data: task });
+};
+
+exports.deleteChannelTask = async (req, res) => {
+  const { taskId } = req.params;
+
+  const task = await TeamHubTask.findById(taskId);
+
+  if (!task) {
+    return res.status(404).json({
+      success: false,
+      message: "Task not found.",
+    });
+  }
+
+  await TeamHubTask.findByIdAndDelete(taskId);
+
+  res.json({
+    success: true,
+    message: "Task deleted successfully.",
+  });
 };
 
 // ================= CHANNEL FILES =================

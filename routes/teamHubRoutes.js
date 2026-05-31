@@ -37,6 +37,10 @@ const {
 getDirectMessages,
 sendDirectMessage,
 markDirectMessageRead,
+getChannelTasks,
+createChannelTask,
+updateChannelTask,
+deleteChannelTask,
 toggleMessageReaction,
 } = require("../controllers/teamHubController");
 
@@ -59,6 +63,12 @@ router.post("/announcements", protect, upload.array("attachments", 10), sendAnno
 router.get("/notifications/me", protect, getMyNotifications);
 router.put("/notifications/:notificationId/read", protect, markNotificationRead);
 router.put("/notifications/read-all", protect, markAllNotificationsRead);
+
+// CHANNEL TASKS
+router.get("/tasks/:channelId", protect, getChannelTasks);
+router.post("/tasks", protect, createChannelTask);
+router.put("/tasks/:taskId", protect, updateChannelTask);
+router.delete("/tasks/:taskId", protect, deleteChannelTask);
 
 // CHANNEL FILES
 router.get("/documents/:channelId", protect, getChannelDocuments);
