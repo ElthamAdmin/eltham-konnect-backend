@@ -39,17 +39,40 @@ const buildAttachments = (files = []) =>
     size: file.size,
   }));
 
-  const extractMentions = async (text = "") => {
-  const matches = String(text).match(/@([a-zA-Z0-9._ -]+)/g) || [];
-  const names = matches.map((item) => item.replace("@", "").trim());
+  const escapeRegex = (value = "") =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-  if (!names.length) return [];
+const extractMentions = async (text = "") => {
+  const content = String(text || "");
 
-  const users = await SystemUser.find({
-    fullName: { $in: names.map((name) => new RegExp(`^${name}$`, "i")) },
-  }).select("userId fullName");
+  const users = await SystemUser.find({ status: "Active" }).select(
+    "userId fullName"
+  );
 
-  return users.map((user) => user.userId);
+  const mentionedUserIds = [];
+
+  users.forEach((user) => {
+    const fullName = String(user.fullName || "").trim();
+    if (!fullName) return;
+
+    const firstName = fullName.split(" ")[0];
+
+    const fullNameRegex = new RegExp(
+      `@${escapeRegex(fullName)}(?=\\s|\\.|,|!|\\?|$)`,
+      "i"
+    );
+
+    const firstNameRegex = new RegExp(
+      `@${escapeRegex(firstName)}(?=\\s|\\.|,|!|\\?|$)`,
+      "i"
+    );
+
+    if (fullNameRegex.test(content) || firstNameRegex.test(content)) {
+      mentionedUserIds.push(user.userId);
+    }
+  });
+
+  return [...new Set(mentionedUserIds)];
 };
 
 const createMentionNotifications = async ({
