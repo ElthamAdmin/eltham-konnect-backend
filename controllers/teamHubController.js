@@ -107,8 +107,10 @@ exports.getMessages = async (req, res) => {
   const { channelId } = req.params;
 
   const allMessages = await TeamMessage.find({ channelId }).sort({
-    createdAt: 1,
-  });
+  isPinned: -1,
+  isAnnouncement: -1,
+  createdAt: -1,
+});
 
   const enrichedMessages = await attachSenderProfiles(allMessages);
 
