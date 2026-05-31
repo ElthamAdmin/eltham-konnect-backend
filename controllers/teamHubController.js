@@ -6,6 +6,7 @@ const DirectMessage = require("../models/DirectMessage");
 const SystemUser = require("../models/SystemUser");
 const TeamHubDocument = require("../models/TeamHubDocument");
 const TeamHubNotification = require("../models/TeamHubNotification");
+const TeamHubCalendarEvent = require("../models/TeamHubCalendarEvent");
 const TeamHubTask = require("../models/TeamHubTask");
 
 // ================= CHANNELS =================
@@ -255,6 +256,153 @@ await createMentionNotifications({
   const [enrichedReply] = await attachSenderProfiles([reply]);
 
 res.json({ success: true, data: enrichedReply });
+};
+
+// ================= CHANNEL CALENDAR =================
+
+exports.getChannelCalendarEvents = async (req, res) => {
+  const { channelId } = req.params;
+
+  const events = await TeamHubCalendarEvent.find({ channelId }).sort({
+    startDate: 1,
+    startTime: 1,
+    createdAt: -1,
+  });
+
+  res.json({ success: true, data: events });
+};
+
+exports.createChannelCalendarEvent = async (req, res) => {
+  const {
+    channelId,
+    title,
+    description,
+    eventType,
+    startDate,
+    startTime,
+    endDate,
+    endTime,
+    location,
+    attendees,
+  } = req.body;
+
+  if (!channelId || !title || !startDate) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel, title, and start date are required.",
+    });
+  }
+
+  const selectedAttendees = Array.isArray(attendees) ? attendees : [];
+
+  const users = await SystemUser.find({
+    userId: { $in: selectedAttendees },
+  }).select("userId fullName");
+
+  const event = await TeamHubCalendarEvent.create({
+    eventNumber: `CAL-${Date.now()}`,
+    channelId,
+    title,
+    description: description || "",
+    eventType: eventType || "Event",
+    startDate,
+    startTime: startTime || "",
+    endDate: endDate || startDate,
+    endTime: endTime || "",
+    location: location || "",
+    attendees: users.map((staff) => ({
+      userId: staff.userId,
+      fullName: staff.fullName,
+    })),
+    createdByUserId: req.user.userId,
+    createdByName: req.user.fullName || req.user.email || "System User",
+  });
+
+  if (users.length > 0) {
+    await TeamHubNotification.insertMany(
+      users
+        .filter((staff) => staff.userId !== req.user.userId)
+        .map((staff) => ({
+          userId: staff.userId,
+          channelId,
+          type: "AddedToChannel",
+          title: "New Team Hub calendar event",
+          body: `${event.title} was added to your channel calendar.`,
+        }))
+    );
+  }
+
+  res.status(201).json({ success: true, data: event });
+};
+
+exports.updateChannelCalendarEvent = async (req, res) => {
+  const { eventId } = req.params;
+  const {
+    title,
+    description,
+    eventType,
+    startDate,
+    startTime,
+    endDate,
+    endTime,
+    location,
+    attendees,
+    status,
+  } = req.body;
+
+  const event = await TeamHubCalendarEvent.findById(eventId);
+
+  if (!event) {
+    return res.status(404).json({
+      success: false,
+      message: "Calendar event not found.",
+    });
+  }
+
+  if (title !== undefined) event.title = title;
+  if (description !== undefined) event.description = description;
+  if (eventType !== undefined) event.eventType = eventType;
+  if (startDate !== undefined) event.startDate = startDate;
+  if (startTime !== undefined) event.startTime = startTime;
+  if (endDate !== undefined) event.endDate = endDate;
+  if (endTime !== undefined) event.endTime = endTime;
+  if (location !== undefined) event.location = location;
+  if (status !== undefined) event.status = status;
+
+  if (Array.isArray(attendees)) {
+    const users = await SystemUser.find({
+      userId: { $in: attendees },
+    }).select("userId fullName");
+
+    event.attendees = users.map((staff) => ({
+      userId: staff.userId,
+      fullName: staff.fullName,
+    }));
+  }
+
+  await event.save();
+
+  res.json({ success: true, data: event });
+};
+
+exports.deleteChannelCalendarEvent = async (req, res) => {
+  const { eventId } = req.params;
+
+  const event = await TeamHubCalendarEvent.findById(eventId);
+
+  if (!event) {
+    return res.status(404).json({
+      success: false,
+      message: "Calendar event not found.",
+    });
+  }
+
+  await TeamHubCalendarEvent.findByIdAndDelete(eventId);
+
+  res.json({
+    success: true,
+    message: "Calendar event deleted successfully.",
+  });
 };
 
 // ================= CHANNEL TASKS =================

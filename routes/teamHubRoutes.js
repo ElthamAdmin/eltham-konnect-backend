@@ -42,6 +42,10 @@ createChannelTask,
 updateChannelTask,
 deleteChannelTask,
 toggleMessageReaction,
+getChannelCalendarEvents,
+createChannelCalendarEvent,
+updateChannelCalendarEvent,
+deleteChannelCalendarEvent,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -63,6 +67,12 @@ router.post("/announcements", protect, upload.array("attachments", 10), sendAnno
 router.get("/notifications/me", protect, getMyNotifications);
 router.put("/notifications/:notificationId/read", protect, markNotificationRead);
 router.put("/notifications/read-all", protect, markAllNotificationsRead);
+
+// CHANNEL CALENDAR
+router.get("/calendar/:channelId", protect, getChannelCalendarEvents);
+router.post("/calendar", protect, createChannelCalendarEvent);
+router.put("/calendar/:eventId", protect, updateChannelCalendarEvent);
+router.delete("/calendar/:eventId", protect, deleteChannelCalendarEvent);
 
 // CHANNEL TASKS
 router.get("/tasks/:channelId", protect, getChannelTasks);
