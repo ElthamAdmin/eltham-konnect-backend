@@ -54,6 +54,9 @@ getChannelFolders,
 createChannelFolder,
 renameChannelFolder,
 moveChannelFolder,
+getChannelMeetings,
+startMeeting,
+endMeeting,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -75,6 +78,26 @@ router.post("/announcements", protect, upload.array("attachments", 10), sendAnno
 router.get("/notifications/me", protect, getMyNotifications);
 router.put("/notifications/:notificationId/read", protect, markNotificationRead);
 router.put("/notifications/read-all", protect, markAllNotificationsRead);
+
+// CHANNEL MEETINGS
+
+router.get(
+  "/meetings/:channelId",
+  protect,
+  getChannelMeetings
+);
+
+router.post(
+  "/meetings",
+  protect,
+  startMeeting
+);
+
+router.put(
+  "/meetings/:meetingId/end",
+  protect,
+  endMeeting
+);
 
 // CHANNEL CALENDAR
 router.get("/calendar/:channelId", protect, getChannelCalendarEvents);

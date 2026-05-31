@@ -9,6 +9,7 @@ const TeamHubNotification = require("../models/TeamHubNotification");
 const TeamHubFolder = require("../models/TeamHubFolder");
 const TeamHubCalendarEvent = require("../models/TeamHubCalendarEvent");
 const TeamHubTask = require("../models/TeamHubTask");
+const TeamHubMeeting = require("../models/TeamHubMeeting");
 
 // ================= CHANNELS =================
 
@@ -1354,4 +1355,72 @@ exports.markDirectMessageRead = async (req, res) => {
   );
 
   res.json({ success: true, data: message });
+};
+
+// ================= VIDEO MEETINGS =================
+
+exports.getChannelMeetings = async (req, res) => {
+  const { channelId } = req.params;
+
+  const meetings = await TeamHubMeeting.find({
+    channelId,
+  }).sort({ createdAt: -1 });
+
+  res.json({
+    success: true,
+    data: meetings,
+  });
+};
+
+exports.startMeeting = async (req, res) => {
+  const { channelId, title } = req.body;
+
+  if (!channelId || !title) {
+    return res.status(400).json({
+      success: false,
+      message: "Channel and title required.",
+    });
+  }
+
+  const roomId = `EKOS-${Date.now()}`;
+
+  const meeting = await TeamHubMeeting.create({
+    meetingNumber: `MEET-${Date.now()}`,
+    channelId,
+    title,
+    meetingRoom: roomId,
+    meetingUrl: `https://meet.jit.si/${roomId}`,
+    startedByUserId: req.user.userId,
+    startedByName:
+      req.user.fullName ||
+      req.user.email ||
+      "System User",
+  });
+
+  res.status(201).json({
+    success: true,
+    data: meeting,
+  });
+};
+
+exports.endMeeting = async (req, res) => {
+  const { meetingId } = req.params;
+
+  const meeting = await TeamHubMeeting.findById(meetingId);
+
+  if (!meeting) {
+    return res.status(404).json({
+      success: false,
+      message: "Meeting not found.",
+    });
+  }
+
+  meeting.status = "Ended";
+
+  await meeting.save();
+
+  res.json({
+    success: true,
+    data: meeting,
+  });
 };
