@@ -33,6 +33,10 @@ const {
   markNotificationRead,
   markAllNotificationsRead,
   getOrCreateConversation,
+  getMyDirectConversations,
+getDirectMessages,
+sendDirectMessage,
+markDirectMessageRead,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -64,6 +68,10 @@ router.post("/channels/:channelId/members", protect, addChannelMember);
 router.delete("/channels/:channelId/members/:userId", protect, removeChannelMember);
 
 // DIRECT CHAT
-router.post("/conversation", protect, getOrCreateConversation);
+router.get("/direct/conversations", protect, getMyDirectConversations);
+router.post("/direct/conversation", protect, getOrCreateConversation);
+router.get("/direct/conversations/:conversationId/messages", protect, getDirectMessages);
+router.post("/direct/messages", protect, upload.array("attachments", 10), sendDirectMessage);
+router.put("/direct/messages/:messageId/read", protect, markDirectMessageRead);
 
 module.exports = router;

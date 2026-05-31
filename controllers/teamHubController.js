@@ -2,6 +2,7 @@ const path = require("path");
 const TeamChannel = require("../models/TeamChannel");
 const TeamMessage = require("../models/TeamMessage");
 const DirectConversation = require("../models/DirectConversation");
+const DirectMessage = require("../models/DirectMessage");
 const SystemUser = require("../models/SystemUser");
 const TeamHubDocument = require("../models/TeamHubDocument");
 const TeamHubNotification = require("../models/TeamHubNotification");
@@ -492,9 +493,102 @@ exports.markAllNotificationsRead = async (req, res) => {
 
 // ================= DIRECT CHAT =================
 
+const attachDirectConversationProfiles = async (conversations = [], myId = "") => {
+  const otherUserIds = [
+    ...new Set(
+      conversations
+        .flatMap((conversation) => conversation.participants || [])
+        .filter((participantId) => participantId && participantId !== myId)
+    ),
+  ];
+
+  const users = await SystemUser.find({
+    userId: { $in: otherUserIds },
+  }).select("userId fullName role branch dutyStatus employeeSnapshot status");
+
+  const userMap = {};
+  users.forEach((user) => {
+    userMap[user.userId] = {
+      userId: user.userId,
+      fullName: user.fullName,
+      role: user.role,
+      branch: user.branch,
+      dutyStatus: user.dutyStatus,
+      jobTitle: user.employeeSnapshot?.jobTitle || "",
+      department: user.employeeSnapshot?.department || "",
+      status: user.status,
+    };
+  });
+
+  return Promise.all(
+    conversations.map(async (conversation) => {
+      const obj = conversation.toObject();
+      const otherUserId = (obj.participants || []).find(
+        (participantId) => participantId !== myId
+      );
+
+      const lastMessage = await DirectMessage.findOne({
+        conversationId: obj._id,
+      }).sort({ createdAt: -1 });
+
+      const unreadCount = await DirectMessage.countDocuments({
+        conversationId: obj._id,
+        receiverId: myId,
+        isRead: false,
+      });
+
+      return {
+        ...obj,
+        otherUserId,
+        otherUserProfile: userMap[otherUserId] || null,
+        lastMessage,
+        unreadCount,
+      };
+    })
+  );
+};
+
+exports.getMyDirectConversations = async (req, res) => {
+  const myId = req.user.userId;
+
+  const conversations = await DirectConversation.find({
+    participants: myId,
+  }).sort({ updatedAt: -1 });
+
+  const enriched = await attachDirectConversationProfiles(conversations, myId);
+
+  res.json({ success: true, data: enriched });
+};
+
 exports.getOrCreateConversation = async (req, res) => {
   const { targetUserId } = req.body;
   const myId = req.user.userId;
+
+  if (!targetUserId) {
+    return res.status(400).json({
+      success: false,
+      message: "Target user is required.",
+    });
+  }
+
+  if (targetUserId === myId) {
+    return res.status(400).json({
+      success: false,
+      message: "You cannot start a direct chat with yourself.",
+    });
+  }
+
+  const targetUser = await SystemUser.findOne({
+    userId: targetUserId,
+    status: "Active",
+  }).select("userId fullName role branch dutyStatus employeeSnapshot status");
+
+  if (!targetUser) {
+    return res.status(404).json({
+      success: false,
+      message: "Target staff member not found.",
+    });
+  }
 
   let convo = await DirectConversation.findOne({
     participants: { $all: [myId, targetUserId] },
@@ -506,5 +600,134 @@ exports.getOrCreateConversation = async (req, res) => {
     });
   }
 
-  res.json({ success: true, data: convo });
+  res.json({
+    success: true,
+    data: {
+      ...convo.toObject(),
+      otherUserId: targetUserId,
+      otherUserProfile: {
+        userId: targetUser.userId,
+        fullName: targetUser.fullName,
+        role: targetUser.role,
+        branch: targetUser.branch,
+        dutyStatus: targetUser.dutyStatus,
+        jobTitle: targetUser.employeeSnapshot?.jobTitle || "",
+        department: targetUser.employeeSnapshot?.department || "",
+        status: targetUser.status,
+      },
+    },
+  });
+};
+
+exports.getDirectMessages = async (req, res) => {
+  const { conversationId } = req.params;
+  const myId = req.user.userId;
+
+  const conversation = await DirectConversation.findOne({
+    _id: conversationId,
+    participants: myId,
+  });
+
+  if (!conversation) {
+    return res.status(404).json({
+      success: false,
+      message: "Conversation not found.",
+    });
+  }
+
+  await DirectMessage.updateMany(
+    {
+      conversationId,
+      receiverId: myId,
+      isRead: false,
+    },
+    {
+      $set: {
+        isRead: true,
+        readAt: new Date(),
+      },
+    }
+  );
+
+  const messages = await DirectMessage.find({ conversationId }).sort({
+    createdAt: 1,
+  });
+
+  res.json({ success: true, data: messages });
+};
+
+exports.sendDirectMessage = async (req, res) => {
+  const { conversationId, receiverId, message } = req.body;
+  const senderId = req.user.userId;
+
+  const attachments = buildAttachments(req.files || []);
+
+  if (!conversationId || !receiverId) {
+    return res.status(400).json({
+      success: false,
+      message: "Conversation and receiver are required.",
+    });
+  }
+
+  if (!message && attachments.length === 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Message or attachment is required.",
+    });
+  }
+
+  const conversation = await DirectConversation.findOne({
+    _id: conversationId,
+    participants: { $all: [senderId, receiverId] },
+  });
+
+  if (!conversation) {
+    return res.status(404).json({
+      success: false,
+      message: "Conversation not found.",
+    });
+  }
+
+  const directMessage = await DirectMessage.create({
+    conversationId,
+    senderId,
+    receiverId,
+    message,
+    attachments,
+  });
+
+  conversation.updatedAt = new Date();
+  await conversation.save();
+
+  await TeamHubNotification.create({
+    userId: receiverId,
+    type: "DirectMessage",
+    title: "New direct message",
+    body: message || "You received a direct message attachment.",
+    messageId: null,
+  });
+
+  res.status(201).json({
+    success: true,
+    data: directMessage,
+  });
+};
+
+exports.markDirectMessageRead = async (req, res) => {
+  const { messageId } = req.params;
+  const myId = req.user.userId;
+
+  const message = await DirectMessage.findOneAndUpdate(
+    {
+      _id: messageId,
+      receiverId: myId,
+    },
+    {
+      isRead: true,
+      readAt: new Date(),
+    },
+    { new: true }
+  );
+
+  res.json({ success: true, data: message });
 };
