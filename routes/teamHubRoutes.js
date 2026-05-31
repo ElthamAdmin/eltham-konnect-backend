@@ -23,6 +23,10 @@ const {
   sendReply,
   getChannelDocuments,
   uploadChannelDocument,
+uploadDocumentVersion,
+lockDocument,
+unlockDocument,
+moveDocumentFolder,
   getChannelMembers,
   addChannelMember,
   removeChannelMember,
@@ -83,6 +87,10 @@ router.delete("/tasks/:taskId", protect, deleteChannelTask);
 // CHANNEL FILES
 router.get("/documents/:channelId", protect, getChannelDocuments);
 router.post("/documents", protect, upload.single("file"), uploadChannelDocument);
+router.post("/documents/:documentId/version", protect, upload.single("file"), uploadDocumentVersion);
+router.put("/documents/:documentId/lock", protect, lockDocument);
+router.put("/documents/:documentId/unlock", protect, unlockDocument);
+router.put("/documents/:documentId/move", protect, moveDocumentFolder);
 
 // CHANNEL MEMBERS
 router.get("/channels/:channelId/members", protect, getChannelMembers);

@@ -555,7 +555,7 @@ exports.getChannelDocuments = async (req, res) => {
 };
 
 exports.uploadChannelDocument = async (req, res) => {
-  const { channelId, title, folder } = req.body;
+  const { channelId, title, folder, folderPath, parentFolder } = req.body;
   const file = req.file;
 
   if (!channelId) {
@@ -572,19 +572,184 @@ exports.uploadChannelDocument = async (req, res) => {
     });
   }
 
+  const uploadedByName = req.user.fullName || req.user.email || "System User";
+
   const document = await TeamHubDocument.create({
     channelId,
     title: title || file.originalname,
     folder: folder || "General",
+    folderPath: folderPath || folder || "General",
+    parentFolder: parentFolder || "",
     originalName: file.originalname,
     fileName: file.filename,
     fileUrl: `/uploads/team-hub/${file.filename}`,
     mimeType: file.mimetype,
     size: file.size,
     uploadedBy: req.user.userId,
+    uploadedByName,
+    currentVersion: 1,
+    versions: [
+      {
+        versionNumber: 1,
+        originalName: file.originalname,
+        fileName: file.filename,
+        fileUrl: `/uploads/team-hub/${file.filename}`,
+        mimeType: file.mimetype,
+        size: file.size,
+        uploadedBy: req.user.userId,
+        uploadedByName,
+        notes: "Initial upload",
+      },
+    ],
   });
 
   res.status(201).json({ success: true, data: document });
+};
+
+exports.uploadDocumentVersion = async (req, res) => {
+  const { documentId } = req.params;
+  const { notes } = req.body;
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({
+      success: false,
+      message: "New version file is required.",
+    });
+  }
+
+  const document = await TeamHubDocument.findById(documentId);
+
+  if (!document || document.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Document not found.",
+    });
+  }
+
+  if (
+    document.isLocked &&
+    document.lockedByUserId &&
+    document.lockedByUserId !== req.user.userId
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: `Document is locked by ${document.lockedByName || "another user"}.`,
+    });
+  }
+
+  const uploadedByName = req.user.fullName || req.user.email || "System User";
+  const nextVersion = Number(document.currentVersion || 1) + 1;
+
+  document.currentVersion = nextVersion;
+  document.originalName = file.originalname;
+  document.fileName = file.filename;
+  document.fileUrl = `/uploads/team-hub/${file.filename}`;
+  document.mimeType = file.mimetype;
+  document.size = file.size;
+
+  document.versions.push({
+    versionNumber: nextVersion,
+    originalName: file.originalname,
+    fileName: file.filename,
+    fileUrl: `/uploads/team-hub/${file.filename}`,
+    mimeType: file.mimetype,
+    size: file.size,
+    uploadedBy: req.user.userId,
+    uploadedByName,
+    notes: notes || "",
+  });
+
+  await document.save();
+
+  res.json({ success: true, data: document });
+};
+
+exports.lockDocument = async (req, res) => {
+  const { documentId } = req.params;
+
+  const document = await TeamHubDocument.findById(documentId);
+
+  if (!document || document.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Document not found.",
+    });
+  }
+
+  if (
+    document.isLocked &&
+    document.lockedByUserId &&
+    document.lockedByUserId !== req.user.userId
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: `Document is already locked by ${document.lockedByName || "another user"}.`,
+    });
+  }
+
+  document.isLocked = true;
+  document.lockedByUserId = req.user.userId;
+  document.lockedByName = req.user.fullName || req.user.email || "System User";
+  document.lockedAt = new Date();
+
+  await document.save();
+
+  res.json({ success: true, data: document });
+};
+
+exports.unlockDocument = async (req, res) => {
+  const { documentId } = req.params;
+
+  const document = await TeamHubDocument.findById(documentId);
+
+  if (!document || document.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Document not found.",
+    });
+  }
+
+  const isOwner = document.lockedByUserId === req.user.userId;
+  const isAdmin = req.user.role === "Admin";
+
+  if (document.isLocked && !isOwner && !isAdmin) {
+    return res.status(403).json({
+      success: false,
+      message: "Only the person who locked this document or an Admin can unlock it.",
+    });
+  }
+
+  document.isLocked = false;
+  document.lockedByUserId = "";
+  document.lockedByName = "";
+  document.lockedAt = null;
+
+  await document.save();
+
+  res.json({ success: true, data: document });
+};
+
+exports.moveDocumentFolder = async (req, res) => {
+  const { documentId } = req.params;
+  const { folder, folderPath, parentFolder } = req.body;
+
+  const document = await TeamHubDocument.findById(documentId);
+
+  if (!document || document.status !== "Active") {
+    return res.status(404).json({
+      success: false,
+      message: "Document not found.",
+    });
+  }
+
+  document.folder = folder || "General";
+  document.folderPath = folderPath || folder || "General";
+  document.parentFolder = parentFolder || "";
+
+  await document.save();
+
+  res.json({ success: true, data: document });
 };
 
 // ================= CHANNEL MEMBERS =================
