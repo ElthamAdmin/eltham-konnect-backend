@@ -19,7 +19,7 @@ const getTrialBalance = async (req, res) => {
       let debit = 0;
       let credit = 0;
 
-      if (balance !== 0) {
+      if (balance > 0) {
         if (account.normalBalance === "Debit") {
           debit = balance;
           totalDebit += debit;
@@ -29,14 +29,26 @@ const getTrialBalance = async (req, res) => {
         }
       }
 
+      if (balance < 0) {
+        const absoluteBalance = Math.abs(balance);
+
+        if (account.normalBalance === "Debit") {
+          credit = absoluteBalance;
+          totalCredit += credit;
+        } else {
+          debit = absoluteBalance;
+          totalDebit += debit;
+        }
+      }
+
       rows.push({
         accountCode: account.accountCode,
         accountName: account.accountName,
         category: account.accountCategory,
         accountType: account.accountType,
         normalBalance: account.normalBalance,
-        debit,
-        credit,
+        debit: roundMoney(debit),
+        credit: roundMoney(credit),
       });
     }
 
