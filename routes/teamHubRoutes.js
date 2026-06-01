@@ -57,6 +57,11 @@ moveChannelFolder,
 getChannelMeetings,
 startMeeting,
 endMeeting,
+joinMeeting,
+leaveMeeting,
+getMeetingAttendance,
+updateMeetingNotes,
+convertMeetingActionToTask,
 } = require("../controllers/teamHubController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -97,6 +102,16 @@ router.put(
   "/meetings/:meetingId/end",
   protect,
   endMeeting
+);
+
+router.post("/meetings/:meetingId/join", protect, joinMeeting);
+router.post("/meetings/:meetingId/leave", protect, leaveMeeting);
+router.get("/meetings/:meetingId/attendance", protect, getMeetingAttendance);
+router.put("/meetings/:meetingId/notes", protect, updateMeetingNotes);
+router.post(
+  "/meetings/:meetingId/action-items/:actionItemId/convert-task",
+  protect,
+  convertMeetingActionToTask
 );
 
 // CHANNEL CALENDAR

@@ -9,6 +9,7 @@ const TeamHubNotification = require("../models/TeamHubNotification");
 const TeamHubFolder = require("../models/TeamHubFolder");
 const TeamHubCalendarEvent = require("../models/TeamHubCalendarEvent");
 const TeamHubTask = require("../models/TeamHubTask");
+const TeamHubMeetingAttendance = require("../models/TeamHubMeetingAttendance");
 const TeamHubMeeting = require("../models/TeamHubMeeting");
 
 // ================= CHANNELS =================
@@ -1442,4 +1443,136 @@ exports.endMeeting = async (req, res) => {
     success: true,
     data: meeting,
   });
+};
+
+exports.joinMeeting = async (req, res) => {
+  const { meetingId } = req.params;
+  const userId = req.user.userId;
+
+  const meeting = await TeamHubMeeting.findById(meetingId);
+
+  if (!meeting) {
+    return res.status(404).json({ success: false, message: "Meeting not found." });
+  }
+
+  let attendance = await TeamHubMeetingAttendance.findOne({
+    meetingId,
+    userId,
+    attendanceStatus: "Joined",
+  });
+
+  if (!attendance) {
+    attendance = await TeamHubMeetingAttendance.create({
+      meetingId,
+      channelId: meeting.channelId,
+      userId,
+      fullName: req.user.fullName || req.user.email || "System User",
+      role: req.user.role || "",
+      joinTime: new Date(),
+      attendanceStatus: "Joined",
+    });
+  }
+
+  res.json({ success: true, data: attendance });
+};
+
+exports.leaveMeeting = async (req, res) => {
+  const { meetingId } = req.params;
+  const userId = req.user.userId;
+
+  const attendance = await TeamHubMeetingAttendance.findOne({
+    meetingId,
+    userId,
+    attendanceStatus: "Joined",
+  }).sort({ createdAt: -1 });
+
+  if (!attendance) {
+    return res.status(404).json({
+      success: false,
+      message: "Active meeting attendance record not found.",
+    });
+  }
+
+  attendance.leaveTime = new Date();
+  attendance.durationMinutes = Math.max(
+    Math.round((attendance.leaveTime - attendance.joinTime) / 60000),
+    0
+  );
+  attendance.attendanceStatus = "Completed";
+
+  await attendance.save();
+
+  res.json({ success: true, data: attendance });
+};
+
+exports.getMeetingAttendance = async (req, res) => {
+  const { meetingId } = req.params;
+
+  const attendance = await TeamHubMeetingAttendance.find({ meetingId }).sort({
+    joinTime: 1,
+  });
+
+  res.json({ success: true, data: attendance });
+};
+
+exports.updateMeetingNotes = async (req, res) => {
+  const { meetingId } = req.params;
+  const { notes, decisions, actionItems } = req.body;
+
+  const meeting = await TeamHubMeeting.findById(meetingId);
+
+  if (!meeting) {
+    return res.status(404).json({ success: false, message: "Meeting not found." });
+  }
+
+  if (notes !== undefined) meeting.notes = notes;
+  if (decisions !== undefined) meeting.decisions = decisions;
+  if (Array.isArray(actionItems)) meeting.actionItems = actionItems;
+
+  await meeting.save();
+
+  res.json({ success: true, data: meeting });
+};
+
+exports.convertMeetingActionToTask = async (req, res) => {
+  const { meetingId, actionItemId } = req.params;
+
+  const meeting = await TeamHubMeeting.findById(meetingId);
+
+  if (!meeting) {
+    return res.status(404).json({ success: false, message: "Meeting not found." });
+  }
+
+  const actionItem = meeting.actionItems.id(actionItemId);
+
+  if (!actionItem) {
+    return res.status(404).json({ success: false, message: "Action item not found." });
+  }
+
+  if (actionItem.createdTaskId) {
+    return res.status(400).json({
+      success: false,
+      message: "This action item was already converted to a task.",
+    });
+  }
+
+  const task = await TeamHubTask.create({
+    taskNumber: `TASK-${Date.now()}`,
+    channelId: meeting.channelId,
+    title: actionItem.title,
+    description: `Created from meeting: ${meeting.title}`,
+    assignedToUserId: actionItem.assignedToUserId || "",
+    assignedToName: actionItem.assignedToName || "",
+    priority: "Medium",
+    dueDate: actionItem.dueDate || "",
+    createdByUserId: req.user.userId,
+    createdByName: req.user.fullName || req.user.email || "System User",
+  });
+
+  actionItem.createdTaskId = task._id;
+  actionItem.status = "Converted To Task";
+
+  await meeting.save();
+
+  res.status(201).json({ success: true, data: { meeting, task } });
 };
