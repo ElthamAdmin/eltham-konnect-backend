@@ -469,6 +469,31 @@ exports.createChannelTask = async (req, res) => {
     });
   }
 
+  if (dueDate) {
+  await TeamHubCalendarEvent.create({
+    eventNumber: `CAL-TASK-${Date.now()}`,
+    channelId,
+    title: `Task Due: ${task.title}`,
+    description: task.description || "Task deadline from Team Hub.",
+    eventType: "Deadline",
+    startDate: dueDate,
+    startTime: "",
+    endDate: dueDate,
+    endTime: "",
+    location: "Team Hub Tasks",
+    attendees: assignedToUserId
+      ? [
+          {
+            userId: assignedToUserId,
+            fullName: assignedToName,
+          },
+        ]
+      : [],
+    createdByUserId: req.user.userId,
+    createdByName: req.user.fullName || req.user.email || "System User",
+  });
+}
+
   res.status(201).json({ success: true, data: task });
 };
 
@@ -1397,6 +1422,27 @@ exports.startMeeting = async (req, res) => {
       req.user.email ||
       "System User",
   });
+
+  const now = new Date();
+
+const startDate = now.toISOString().slice(0, 10);
+const startTime = now.toTimeString().slice(0, 5);
+
+await TeamHubCalendarEvent.create({
+  eventNumber: `CAL-MEET-${Date.now()}`,
+  channelId,
+  title: meeting.title,
+  description: `Meeting started by ${meeting.startedByName}.`,
+  eventType: "Meeting",
+  startDate,
+  startTime,
+  endDate: startDate,
+  endTime: "",
+  location: meeting.meetingUrl,
+  attendees: [],
+  createdByUserId: req.user.userId,
+  createdByName: req.user.fullName || req.user.email || "System User",
+});
 
   res.status(201).json({
     success: true,
