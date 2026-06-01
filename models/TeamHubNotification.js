@@ -7,7 +7,7 @@ const TeamHubNotificationSchema = new mongoose.Schema(
     messageId: { type: mongoose.Schema.Types.ObjectId, ref: "TeamMessage" },
     type: {
       type: String,
-      enum: ["Mention", "Announcement", "AddedToChannel", "DirectMessage"],
+      enum: ["Mention", "Announcement", "AddedToChannel", "DirectMessage", "MeetingStarted"],
       required: true,
     },
     title: { type: String, default: "" },

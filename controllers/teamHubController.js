@@ -1401,6 +1401,25 @@ exports.startMeeting = async (req, res) => {
     success: true,
     data: meeting,
   });
+
+  const channel = await TeamChannel.findById(channelId);
+
+const notifyUserIds = [
+  ...new Set([channel?.createdBy, ...(channel?.members || [])].filter(Boolean)),
+].filter((userId) => userId !== req.user.userId);
+
+if (notifyUserIds.length) {
+  await TeamHubNotification.insertMany(
+    notifyUserIds.map((userId) => ({
+      userId,
+      channelId,
+      type: "MeetingStarted",
+      title: "Team Hub meeting started",
+      body: `${meeting.title} was started by ${meeting.startedByName}.`,
+      isRead: false,
+    }))
+  );
+}
 };
 
 exports.endMeeting = async (req, res) => {
