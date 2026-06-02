@@ -1,15 +1,14 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
-const JournalEntry = require("../models/JournalEntry");
 const { postJournalEntry } = require("../utils/generalLedgerPoster");
+
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 const closeAccountingPeriod = async (req, res) => {
   try {
-    const revenueAccounts = await ChartOfAccount.find({
-      accountCategory: "Revenue",
-    });
-
-    const expenseAccounts = await ChartOfAccount.find({
-      accountCategory: "Expense",
+    const incomeStatementAccounts = await ChartOfAccount.find({
+      accountCategory: { $in: ["Revenue", "Expense", "Cost of Sales"] },
+      status: "Active",
     });
 
     const retainedEarnings = await ChartOfAccount.findOne({
@@ -25,97 +24,78 @@ const closeAccountingPeriod = async (req, res) => {
 
     let totalRevenue = 0;
     let totalExpenses = 0;
-
-    for (const account of revenueAccounts) {
-      totalRevenue += Number(account.currentBalance || 0);
-    }
-
-    for (const account of expenseAccounts) {
-      totalExpenses += Number(account.currentBalance || 0);
-    }
-
-    const netIncome = totalRevenue - totalExpenses;
-
-    if (netIncome === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No net income to close",
-      });
-    }
-
     const lines = [];
 
-    for (const account of revenueAccounts) {
-      const balance = Number(account.currentBalance || 0);
+    for (const account of incomeStatementAccounts) {
+      const balance = roundMoney(account.currentBalance || 0);
 
-      if (balance <= 0) continue;
+      if (balance === 0) continue;
 
-      lines.push({
-        accountCode: account.accountCode,
-        accountName: account.accountName,
-        debit: balance,
-        credit: 0,
-        description: "Period closing entry",
-      });
+      if (account.accountCategory === "Revenue") {
+        totalRevenue += balance;
 
-      account.currentBalance = 0;
-      await account.save();
+        lines.push({
+          accountCode: account.accountCode,
+          debit: balance,
+          credit: 0,
+          description: "Close revenue to retained earnings",
+        });
+      }
+
+      if (
+        account.accountCategory === "Expense" ||
+        account.accountCategory === "Cost of Sales"
+      ) {
+        totalExpenses += balance;
+
+        lines.push({
+          accountCode: account.accountCode,
+          debit: 0,
+          credit: balance,
+          description: "Close expense/cost of sales to retained earnings",
+        });
+      }
     }
 
-    for (const account of expenseAccounts) {
-      const balance = Number(account.currentBalance || 0);
+    const netIncome = roundMoney(totalRevenue - totalExpenses);
 
-      if (balance <= 0) continue;
-
-      lines.push({
-        accountCode: account.accountCode,
-        accountName: account.accountName,
-        debit: 0,
-        credit: balance,
-        description: "Period closing entry",
+    if (netIncome === 0 || lines.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No income statement balances to close",
       });
-
-      account.currentBalance = 0;
-      await account.save();
     }
 
     if (netIncome > 0) {
       lines.push({
-        accountCode: retainedEarnings.accountCode,
-        accountName: retainedEarnings.accountName,
+        accountCode: "3100",
         debit: 0,
         credit: netIncome,
         description: "Net profit transferred to retained earnings",
       });
-
-      retainedEarnings.currentBalance += netIncome;
     } else {
       lines.push({
-        accountCode: retainedEarnings.accountCode,
-        accountName: retainedEarnings.accountName,
+        accountCode: "3100",
         debit: Math.abs(netIncome),
         credit: 0,
         description: "Net loss transferred to retained earnings",
       });
-
-      retainedEarnings.currentBalance -= Math.abs(netIncome);
     }
 
-    await retainedEarnings.save();
-
     const journalEntry = await postJournalEntry({
-  entryDate: new Date().toISOString().split("T")[0],
-  reference: "PERIOD-CLOSE",
-  sourceModule: "Accounting",
-  memo: "Period closing entry",
-  createdBy: req.user?.fullName || "System User",
-  lines,
-});
+      entryDate: new Date().toISOString().split("T")[0],
+      reference: `PERIOD-CLOSE-${Date.now()}`,
+      sourceModule: "Accounting",
+      memo: "Period closing entry",
+      createdBy: req.user?.fullName || "System User",
+      lines,
+    });
 
     res.json({
       success: true,
       message: "Accounting period closed successfully",
       netIncome,
+      journalEntry,
     });
   } catch (error) {
     console.error("Error closing accounting period:", error);
