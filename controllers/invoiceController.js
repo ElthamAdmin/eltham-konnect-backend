@@ -50,38 +50,23 @@ const calculateBaseCurrencyAmount = ({
   );
 };
 
-const updateFinancialAccountBalance = async ({
-  account,
-  amount,
-  direction,
-}) => {
-  if (!account) return null;
+const syncFinancialAccountFromLedger = async (account) => {
+  if (!account || !account.linkedChartAccountCode) return account;
 
-  const numericAmount = roundMoney(amount);
+  const linkedChartAccount = await ChartOfAccount.findOne({
+    accountCode: account.linkedChartAccountCode,
+  });
 
-  if (direction === "increase") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) +
-        numericAmount
-    );
-  }
+  if (!linkedChartAccount) return account;
 
-  if (direction === "decrease") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) -
-        numericAmount
-    );
-  }
-
-  account.baseCurrencyBalance =
-    calculateBaseCurrencyAmount({
-      amount: account.currentBalance,
-      currency: account.currency,
-      exchangeRate: account.exchangeRate,
-    });
+  account.currentBalance = roundMoney(linkedChartAccount.currentBalance || 0);
+  account.baseCurrencyBalance = calculateBaseCurrencyAmount({
+    amount: account.currentBalance,
+    currency: account.currency,
+    exchangeRate: account.exchangeRate,
+  });
 
   await account.save();
-
   return account;
 };
 
@@ -930,11 +915,7 @@ changeGiven,
   transactionDate: now,
 });
 
-await updateFinancialAccountBalance({
-  account,
-  amount: invoiceTotal,
-  direction: "increase",
-});
+await syncFinancialAccountFromLedger(account);
 
     const accountsReceivableAccount =
   await ChartOfAccount.findOne({

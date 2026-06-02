@@ -26,27 +26,16 @@ const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
   return roundMoney(numericAmount * Number(exchangeRate || 1));
 };
 
-const updateFinancialAccountBalance = async ({
-  account,
-  amount,
-  direction,
-}) => {
-  if (!account) return null;
+const syncFinancialAccountFromLedger = async (account) => {
+  if (!account || !account.linkedChartAccountCode) return account;
 
-  const numericAmount = roundMoney(amount);
+  const linkedChartAccount = await ChartOfAccount.findOne({
+    accountCode: account.linkedChartAccountCode,
+  });
 
-  if (direction === "increase") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) + numericAmount
-    );
-  }
+  if (!linkedChartAccount) return account;
 
-  if (direction === "decrease") {
-    account.currentBalance = roundMoney(
-      Number(account.currentBalance || 0) - numericAmount
-    );
-  }
-
+  account.currentBalance = roundMoney(linkedChartAccount.currentBalance || 0);
   account.baseCurrencyBalance = calculateBaseCurrencyAmount({
     amount: account.currentBalance,
     currency: account.currency,
@@ -54,7 +43,6 @@ const updateFinancialAccountBalance = async ({
   });
 
   await account.save();
-
   return account;
 };
 
@@ -360,11 +348,6 @@ paidFromAccountName = selectedFinancialAccount.accountName;
         transactionDate: new Date(date),
       });
 
-      await updateFinancialAccountBalance({
-  account: selectedFinancialAccount,
-  amount: numericAmount,
-  direction: isCreditCard ? "increase" : "decrease",
-});
     }
 
     try {
@@ -686,11 +669,6 @@ if (paidFromAccountNumber) {
     transactionDate: new Date(),
   });
 
-  await updateFinancialAccountBalance({
-  account: selectedFinancialAccount,
-  amount: Number(payrollBreakdown.netPay || 0),
-  direction: "decrease",
-});
 }
 
     try {

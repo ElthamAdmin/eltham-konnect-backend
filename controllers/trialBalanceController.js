@@ -1,12 +1,31 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 const getTrialBalance = async (req, res) => {
   try {
-    const accounts = await ChartOfAccount.find().sort({
+    const accounts = await ChartOfAccount.find({ status: "Active" }).sort({
       accountCode: 1,
+    });
+
+    const ledgerTotals = await GeneralLedgerTransaction.aggregate([
+      {
+        $group: {
+          _id: "$accountCode",
+          totalDebit: { $sum: "$debit" },
+          totalCredit: { $sum: "$credit" },
+        },
+      },
+    ]);
+
+    const totalsMap = {};
+    ledgerTotals.forEach((item) => {
+      totalsMap[item._id] = {
+        totalDebit: roundMoney(item.totalDebit),
+        totalCredit: roundMoney(item.totalCredit),
+      };
     });
 
     const rows = [];
@@ -14,32 +33,41 @@ const getTrialBalance = async (req, res) => {
     let totalCredit = 0;
 
     for (const account of accounts) {
-      const balance = roundMoney(account.currentBalance || 0);
+      const totals = totalsMap[account.accountCode] || {
+        totalDebit: 0,
+        totalCredit: 0,
+      };
+
+      let balance = 0;
+
+      if (account.normalBalance === "Debit") {
+        balance = roundMoney(totals.totalDebit - totals.totalCredit);
+      } else {
+        balance = roundMoney(totals.totalCredit - totals.totalDebit);
+      }
 
       let debit = 0;
       let credit = 0;
 
-      if (balance > 0) {
+      if (balance >= 0) {
         if (account.normalBalance === "Debit") {
           debit = balance;
-          totalDebit += debit;
         } else {
           credit = balance;
-          totalCredit += credit;
         }
-      }
-
-      if (balance < 0) {
-        const absoluteBalance = Math.abs(balance);
-
+      } else {
         if (account.normalBalance === "Debit") {
-          credit = absoluteBalance;
-          totalCredit += credit;
+          credit = Math.abs(balance);
         } else {
-          debit = absoluteBalance;
-          totalDebit += debit;
+          debit = Math.abs(balance);
         }
       }
+
+      debit = roundMoney(debit);
+      credit = roundMoney(credit);
+
+      totalDebit += debit;
+      totalCredit += credit;
 
       rows.push({
         accountCode: account.accountCode,
@@ -47,8 +75,8 @@ const getTrialBalance = async (req, res) => {
         category: account.accountCategory,
         accountType: account.accountType,
         normalBalance: account.normalBalance,
-        debit: roundMoney(debit),
-        credit: roundMoney(credit),
+        debit,
+        credit,
       });
     }
 
@@ -57,6 +85,7 @@ const getTrialBalance = async (req, res) => {
 
     res.json({
       success: true,
+      sourceOfTruth: "GeneralLedgerTransaction",
       balanced: totalDebit === totalCredit,
       totalDebit,
       totalCredit,
