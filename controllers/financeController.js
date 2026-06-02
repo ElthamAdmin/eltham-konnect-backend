@@ -330,12 +330,22 @@ let selectedFinancialAccount = null;
         });
       }
 
-      if (Number(selectedFinancialAccount.currentBalance || 0) < numericAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient balance in selected account",
-        });
-      }
+      const isCreditCard =
+  selectedFinancialAccount.accountType === "Credit Card";
+
+if (!isCreditCard && Number(selectedFinancialAccount.currentBalance || 0) < numericAmount) {
+  return res.status(400).json({
+    success: false,
+    message: "Insufficient balance in selected account",
+  });
+}
+
+if (!selectedFinancialAccount.linkedChartAccountCode) {
+  return res.status(400).json({
+    success: false,
+    message: "Selected financial account is not linked to a Chart of Accounts code.",
+  });
+}
 
 paidFromAccountName = selectedFinancialAccount.accountName;
 
@@ -343,7 +353,7 @@ paidFromAccountName = selectedFinancialAccount.accountName;
         transactionNumber: `TRN-${Date.now()}`,
         accountNumber: selectedFinancialAccount.accountNumber,
         accountName: selectedFinancialAccount.accountName,
-        transactionType: "Expense Payment",
+        transactionType: isCreditCard ? "Credit Card Charge" : "Expense Payment",
         amount: numericAmount,
         reference: category,
         notes: description,
@@ -353,7 +363,7 @@ paidFromAccountName = selectedFinancialAccount.accountName;
       await updateFinancialAccountBalance({
   account: selectedFinancialAccount,
   amount: numericAmount,
-  direction: "decrease",
+  direction: isCreditCard ? "increase" : "decrease",
 });
     }
 
@@ -383,6 +393,11 @@ paidFromAccountName = selectedFinancialAccount.accountName;
   });
 } catch (ledgerError) {
   console.error("Expense journal posting failed:", ledgerError.message);
+  return res.status(500).json({
+    success: false,
+    message: "Expense was not saved because accounting posting failed.",
+    error: ledgerError.message,
+  });
 }
 
     const receiptUrl = req.file
