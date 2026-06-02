@@ -1055,45 +1055,129 @@ const getFinancialReports = async (req, res) => {
     const grossProfit = roundMoney(revenue - costOfSales);
     const netProfit = roundMoney(revenue - totalExpenses);
 
-    const getChartBalanceByCategory = (category, normalSide = "Debit") => {
-      return roundMoney(
-        chartAccounts
-          .filter((account) => account.accountCategory === category)
-          .reduce((sum, account) => {
-            return sum + Number(account.currentBalance || 0);
-          }, 0)
-      );
-    };
+    const getLedgerBalanceByCategory = (
+  category,
+  normalBalance = "Debit"
+) => {
+  const accountsInCategory = chartAccounts.filter(
+    (account) =>
+      account.accountCategory === category
+  );
 
-    const totalAssets = getChartBalanceByCategory("Asset", "Debit");
-    const totalLiabilities = getChartBalanceByCategory("Liability", "Credit");
-    const totalEquity = getChartBalanceByCategory("Equity", "Credit");
+  return roundMoney(
+    accountsInCategory.reduce((sum, account) => {
+      const accountLedger = filteredLedger.filter(
+        (entry) =>
+          entry.accountCode === account.accountCode
+      );
+
+      const debitTotal = accountLedger.reduce(
+        (ledgerSum, item) =>
+          ledgerSum + Number(item.debit || 0),
+        0
+      );
+
+      const creditTotal = accountLedger.reduce(
+        (ledgerSum, item) =>
+          ledgerSum + Number(item.credit || 0),
+        0
+      );
+
+      let balance = 0;
+
+      if (
+        account.normalBalance === "Debit"
+      ) {
+        balance = debitTotal - creditTotal;
+      } else {
+        balance = creditTotal - debitTotal;
+      }
+
+      return sum + balance;
+    }, 0)
+  );
+};
+
+const totalAssets =
+  getLedgerBalanceByCategory("Asset");
+
+const totalLiabilities =
+  getLedgerBalanceByCategory("Liability");
+
+const totalEquity =
+  getLedgerBalanceByCategory("Equity");
 
     const cashOnHand = roundMoney(
-      chartAccounts
-        .filter(
-          (account) =>
-            account.accountCategory === "Asset" &&
-            (
-              String(account.accountName || "").toLowerCase().includes("cash") ||
-              String(account.accountName || "").toLowerCase().includes("bank") ||
-              String(account.accountType || "").toLowerCase().includes("bank")
-            )
+  chartAccounts
+    .filter(
+      (account) =>
+        account.accountCategory === "Asset" &&
+        (
+          String(account.accountName || "")
+            .toLowerCase()
+            .includes("cash") ||
+          String(account.accountName || "")
+            .toLowerCase()
+            .includes("bank") ||
+          String(account.accountType || "")
+            .toLowerCase()
+            .includes("bank")
         )
-        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
-    );
+    )
+    .reduce((sum, account) => {
+      const accountLedger = filteredLedger.filter(
+        (entry) =>
+          entry.accountCode === account.accountCode
+      );
+
+      const debitTotal = accountLedger.reduce(
+        (ledgerSum, item) =>
+          ledgerSum + Number(item.debit || 0),
+        0
+      );
+
+      const creditTotal = accountLedger.reduce(
+        (ledgerSum, item) =>
+          ledgerSum + Number(item.credit || 0),
+        0
+      );
+
+      return (
+        sum +
+        (debitTotal - creditTotal)
+      );
+    }, 0)
+);
 
     const accountsReceivable = roundMoney(
-      chartAccounts
-        .filter((account) => account.accountCode === "1100")
-        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
-    );
+  filteredLedger
+    .filter(
+      (entry) =>
+        entry.accountCode === "1100"
+    )
+    .reduce(
+      (sum, entry) =>
+        sum +
+        Number(entry.debit || 0) -
+        Number(entry.credit || 0),
+      0
+    )
+);
 
     const accountsPayable = roundMoney(
-      chartAccounts
-        .filter((account) => account.accountCode === "2000")
-        .reduce((sum, account) => sum + Number(account.currentBalance || 0), 0)
-    );
+  filteredLedger
+    .filter(
+      (entry) =>
+        entry.accountCode === "2000"
+    )
+    .reduce(
+      (sum, entry) =>
+        sum +
+        Number(entry.credit || 0) -
+        Number(entry.debit || 0),
+      0
+    )
+);
 
     const expenseByCategoryMap = {};
 
