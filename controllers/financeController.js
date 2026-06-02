@@ -1331,26 +1331,30 @@ const totalEquity =
       cashFlow.cashInflowFromRevenue - cashFlow.cashOutflowForExpenses
     );
 
-    const balanceSheet = {
-      assets: {
-        cashOnHand,
-        accountsReceivable,
-        totalAssets,
-      },
-      liabilities: {
-        accountsPayable,
-        totalLiabilities,
-      },
-      equity: {
-        totalEquity,
-        accountingEquationEquity: roundMoney(totalAssets - totalLiabilities),
-      },
-      check: {
-        assetsMinusLiabilitiesAndEquity: roundMoney(
-          totalAssets - totalLiabilities - totalEquity
-        ),
-      },
-    };
+    const adjustedEquity = roundMoney(totalEquity + netProfit);
+
+const balanceSheet = {
+  assets: {
+    cashOnHand,
+    accountsReceivable,
+    totalAssets,
+  },
+  liabilities: {
+    accountsPayable,
+    totalLiabilities,
+  },
+  equity: {
+    totalEquity,
+    currentProfitOrLoss: netProfit,
+    adjustedEquity,
+    accountingEquationEquity: roundMoney(totalAssets - totalLiabilities),
+  },
+  check: {
+    assetsMinusLiabilitiesAndEquity: roundMoney(
+      totalAssets - totalLiabilities - adjustedEquity
+    ),
+  },
+};
 
     res.json({
       success: true,
