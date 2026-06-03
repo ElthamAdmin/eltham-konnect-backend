@@ -261,8 +261,12 @@ module.exports = {
       const equity = [];
 
       let totalAssets = 0;
-      let totalLiabilities = 0;
-      let totalEquity = 0;
+let totalLiabilities = 0;
+let totalEquity = 0;
+
+let totalRevenue = 0;
+let totalCostOfSales = 0;
+let totalExpenses = 0;
 
       accounts.forEach((account) => {
         const item = {
@@ -271,6 +275,18 @@ module.exports = {
           accountType: account.accountType,
           balance: Number(account.currentBalance || 0),
         };
+
+        if (account.accountCategory === "Revenue") {
+  totalRevenue += Number(account.currentBalance || 0);
+}
+
+if (account.accountCategory === "Cost of Sales") {
+  totalCostOfSales += Number(account.currentBalance || 0);
+}
+
+if (account.accountCategory === "Expense") {
+  totalExpenses += Number(account.currentBalance || 0);
+}
 
         if (account.accountCategory === "Asset") {
           assets.push(item);
@@ -288,8 +304,18 @@ module.exports = {
         }
       });
 
-      const accountingDifference =
-        totalAssets - (totalLiabilities + totalEquity);
+      const currentNetProfit = roundMoney(
+  totalRevenue - totalCostOfSales - totalExpenses
+);
+
+const adjustedEquity = roundMoney(
+  totalEquity + currentNetProfit
+);
+
+const accountingDifference = roundMoney(
+  totalAssets -
+  (totalLiabilities + adjustedEquity)
+);
 
       res.json({
         success: true,
@@ -300,10 +326,12 @@ module.exports = {
           liabilities,
           equity,
           totals: {
-            totalAssets,
-            totalLiabilities,
-            totalEquity,
-            accountingDifference,
+  totalAssets,
+  totalLiabilities,
+  totalEquity,
+  currentNetProfit,
+  adjustedEquity,
+  accountingDifference,
             isBalanced:
               Math.round(accountingDifference * 100) / 100 === 0,
           },
