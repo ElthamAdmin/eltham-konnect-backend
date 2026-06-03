@@ -22,7 +22,22 @@ const getUserName = (req) =>
 
 const getUserBranch = (req) => req.user?.branch || "Eltham Park Mainstore";
 
-const getDateString = () => new Date().toISOString().split("T")[0];
+const getDateString = () => {
+  const now = new Date();
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+
+  const year = parts.find((p) => p.type === "year").value;
+  const month = parts.find((p) => p.type === "month").value;
+  const day = parts.find((p) => p.type === "day").value;
+
+  return `${year}-${month}-${day}`;
+};
 
 const applyChartBalance = (account, debit, credit) => {
   const debitAmount = Number(debit || 0);
