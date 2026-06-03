@@ -305,16 +305,6 @@ module.exports = {
         );
       }
 
-      if (
-  account.accountCode === "1000" ||
-  account.accountCode === "2000" ||
-  account.accountCode === "4000" ||
-  account.accountCode === "5000" ||
-  account.accountCode === "6000"
-) {
-  return;
-}
-
       const item = {
         accountCode: account.accountCode,
         accountName: account.accountName,
