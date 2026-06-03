@@ -249,104 +249,158 @@ module.exports = {
   getProfitAndLoss,
 
   getBalanceSheet: async (req, res) => {
-    try {
-      const accounts = await ChartOfAccount.find({
-        status: "Active",
-      }).sort({
-        accountCode: 1,
-      });
+  try {
+    const accounts = await ChartOfAccount.find({
+      status: "Active",
+    }).sort({
+      accountCode: 1,
+    });
 
-      const assets = [];
-      const liabilities = [];
-      const equity = [];
-
-      let totalAssets = 0;
-let totalLiabilities = 0;
-let totalEquity = 0;
-
-let totalRevenue = 0;
-let totalCostOfSales = 0;
-let totalExpenses = 0;
-
-      accounts.forEach((account) => {
-        const item = {
-          accountCode: account.accountCode,
-          accountName: account.accountName,
-          accountType: account.accountType,
-          balance: Number(account.currentBalance || 0),
-        };
-
-        if (account.accountCategory === "Revenue") {
-  totalRevenue += Number(account.currentBalance || 0);
-}
-
-if (account.accountCategory === "Cost of Sales") {
-  totalCostOfSales += Number(account.currentBalance || 0);
-}
-
-if (account.accountCategory === "Expense") {
-  totalExpenses += Number(account.currentBalance || 0);
-}
-
-        if (account.accountCategory === "Asset") {
-          assets.push(item);
-          totalAssets += item.balance;
-        }
-
-        if (account.accountCategory === "Liability") {
-          liabilities.push(item);
-          totalLiabilities += item.balance;
-        }
-
-        if (account.accountCategory === "Equity") {
-          equity.push(item);
-          totalEquity += item.balance;
-        }
-      });
-
-      const currentNetProfit = roundMoney(
-  totalRevenue - totalCostOfSales - totalExpenses
-);
-
-const adjustedEquity = roundMoney(
-  totalEquity + currentNetProfit
-);
-
-const accountingDifference = roundMoney(
-  totalAssets -
-  (totalLiabilities + adjustedEquity)
-);
-
-      res.json({
-        success: true,
-        data: {
-          reportTitle: "Balance Sheet",
-          generatedAt: new Date().toISOString(),
-          assets,
-          liabilities,
-          equity,
-          totals: {
-  totalAssets,
-  totalLiabilities,
-  totalEquity,
-  currentNetProfit,
-  adjustedEquity,
-  accountingDifference,
-            isBalanced:
-              Math.round(accountingDifference * 100) / 100 === 0,
-          },
+    const ledgerTotals = await GeneralLedgerTransaction.aggregate([
+      {
+        $group: {
+          _id: "$accountCode",
+          totalDebit: { $sum: "$debit" },
+          totalCredit: { $sum: "$credit" },
         },
-      });
-    } catch (error) {
-      console.error("Balance sheet error:", error);
+      },
+    ]);
 
-      res.status(500).json({
-        success: false,
-        message: "Could not generate balance sheet",
-        error: error.message,
-      });
-    }
-  },
+    const totalsMap = {};
+
+    ledgerTotals.forEach((item) => {
+      totalsMap[item._id] = {
+        totalDebit: roundMoney(item.totalDebit),
+        totalCredit: roundMoney(item.totalCredit),
+      };
+    });
+
+    const assets = [];
+    const liabilities = [];
+    const equity = [];
+
+    let totalAssets = 0;
+    let totalLiabilities = 0;
+    let totalEquity = 0;
+
+    let totalRevenue = 0;
+    let totalCostOfSales = 0;
+    let totalExpenses = 0;
+
+    accounts.forEach((account) => {
+      const totals = totalsMap[account.accountCode] || {
+        totalDebit: 0,
+        totalCredit: 0,
+      };
+
+      let balance = 0;
+
+      if (account.normalBalance === "Debit") {
+        balance = roundMoney(
+          totals.totalDebit - totals.totalCredit
+        );
+      } else {
+        balance = roundMoney(
+          totals.totalCredit - totals.totalDebit
+        );
+      }
+
+      if (
+  account.accountCode === "1000" ||
+  account.accountCode === "2000" ||
+  account.accountCode === "3000" ||
+  account.accountCode === "4000" ||
+  account.accountCode === "5000" ||
+  account.accountCode === "6000"
+) {
+  return;
+}
+
+      const item = {
+        accountCode: account.accountCode,
+        accountName: account.accountName,
+        accountType: account.accountType,
+        balance,
+      };
+
+      if (account.accountCategory === "Revenue") {
+        totalRevenue += balance;
+      }
+
+      if (account.accountCategory === "Cost of Sales") {
+        totalCostOfSales += balance;
+      }
+
+      if (account.accountCategory === "Expense") {
+        totalExpenses += balance;
+      }
+
+      if (account.accountCategory === "Asset") {
+        assets.push(item);
+        totalAssets += balance;
+      }
+
+      if (account.accountCategory === "Liability") {
+        liabilities.push(item);
+        totalLiabilities += balance;
+      }
+
+      if (account.accountCategory === "Equity") {
+        equity.push(item);
+        totalEquity += balance;
+      }
+    });
+
+    totalAssets = roundMoney(totalAssets);
+    totalLiabilities = roundMoney(totalLiabilities);
+    totalEquity = roundMoney(totalEquity);
+
+    const currentNetProfit = roundMoney(
+      totalRevenue -
+      totalCostOfSales -
+      totalExpenses
+    );
+
+    const adjustedEquity = roundMoney(
+      totalEquity + currentNetProfit
+    );
+
+    const accountingDifference = roundMoney(
+      totalAssets -
+      (totalLiabilities + adjustedEquity)
+    );
+
+    res.json({
+      success: true,
+      sourceOfTruth: "GeneralLedgerTransaction",
+      data: {
+        reportTitle: "Balance Sheet",
+        generatedAt: new Date().toISOString(),
+        assets,
+        liabilities,
+        equity,
+        totals: {
+          totalAssets,
+          totalLiabilities,
+          totalEquity,
+          currentNetProfit,
+          adjustedEquity,
+          accountingDifference,
+          isBalanced:
+            Math.round(accountingDifference * 100) / 100 === 0,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Balance sheet error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not generate balance sheet",
+      error: error.message,
+    });
+  }
+},
 
   closeYearToRetainedEarnings,
 };
