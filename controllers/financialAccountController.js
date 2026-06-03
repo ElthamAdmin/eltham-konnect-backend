@@ -45,7 +45,7 @@ const createLinkedChartAccount = async ({
     accountCategory: getAccountCategory(accountType),
     accountType,
     openingBalance: roundMoney(openingBalance),
-    currentBalance: 0,
+currentBalance: roundMoney(openingBalance),
     normalBalance: getNormalBalance(accountType),
     description: `Linked financial account for ${accountName}`,
     isSystemAccount: false,
@@ -204,13 +204,13 @@ const getAccounts = async (req, res) => {
       return {
         ...plain,
         currentBalance:
-  linkedChartAccount?.currentBalance ??
   plain.currentBalance ??
+  linkedChartAccount?.currentBalance ??
   0,
 baseCurrencyBalance:
-  linkedChartAccount?.currentBalance ??
   plain.baseCurrencyBalance ??
   plain.currentBalance ??
+  linkedChartAccount?.currentBalance ??
   0,
 linkedChartAccount,
       };
