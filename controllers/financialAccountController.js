@@ -203,7 +203,10 @@ const getAccounts = async (req, res) => {
 
       return {
         ...plain,
-        currentBalance: plain.currentBalance ?? 0,
+        currentBalance:
+  linkedChartAccount?.currentBalance ??
+  plain.currentBalance ??
+  0,
 baseCurrencyBalance:
   linkedChartAccount?.currentBalance ??
   plain.baseCurrencyBalance ??
@@ -254,13 +257,23 @@ const updateAccount = async (req, res) => {
     if (status !== undefined) account.status = status;
     if (currency !== undefined) account.currency = String(currency || "JMD").toUpperCase();
 if (exchangeRate !== undefined) account.exchangeRate = Number(exchangeRate || 1);
-if (currentBalance !== undefined) account.currentBalance = roundMoney(currentBalance);
 
-account.baseCurrencyBalance = calculateBaseCurrencyAmount({
-  amount: account.currentBalance,
-  currency: account.currency,
-  exchangeRate: account.exchangeRate,
-});
+const linkedChartAccount =
+  await ChartOfAccount.findOne({
+    accountCode: account.linkedChartAccountCode,
+  });
+
+const ledgerBalance =
+  linkedChartAccount?.currentBalance || 0;
+
+account.currentBalance = ledgerBalance;
+
+account.baseCurrencyBalance =
+  calculateBaseCurrencyAmount({
+    amount: ledgerBalance,
+    currency: account.currency,
+    exchangeRate: account.exchangeRate,
+  });
 
     if (!account.linkedChartAccountCode) {
       account.linkedChartAccountCode = account.accountNumber;
