@@ -80,6 +80,16 @@ deliveryType: {
     default: 0,
   },
 
+  amountPaid: {
+  type: Number,
+  default: 0,
+},
+
+balanceDue: {
+  type: Number,
+  default: 0,
+},
+
   status: {
     type: String,
     default: "Unpaid",

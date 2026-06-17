@@ -8,8 +8,10 @@ const POSShiftHandover = require("../models/POSShiftHandover");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const ChartOfAccount = require("../models/ChartOfAccount");
-const JournalEntry = require("../models/JournalEntry");
-const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
+const {
+  postJournalEntry,
+  SYSTEM_ACCOUNTS,
+} = require("../utils/generalLedgerPoster");
 
 
 const roundMoney = (value) =>
@@ -37,82 +39,6 @@ const getDateString = () => {
   const day = parts.find((p) => p.type === "day").value;
 
   return `${year}-${month}-${day}`;
-};
-
-const applyChartBalance = (account, debit, credit) => {
-  const debitAmount = Number(debit || 0);
-  const creditAmount = Number(credit || 0);
-
-  if (account.normalBalance === "Debit") {
-    account.currentBalance =
-      Number(account.currentBalance || 0) + debitAmount - creditAmount;
-  } else {
-    account.currentBalance =
-      Number(account.currentBalance || 0) + creditAmount - debitAmount;
-  }
-};
-
-const getRunningBalance = async (accountCode, normalBalance, debit, credit) => {
-  const lastLedger = await GeneralLedgerTransaction.findOne({ accountCode })
-    .sort({ createdAt: -1, _id: -1 });
-
-  const previous = Number(lastLedger?.runningBalance || 0);
-
-  if (normalBalance === "Debit") {
-    return roundMoney(previous + Number(debit || 0) - Number(credit || 0));
-  }
-
-  return roundMoney(previous + Number(credit || 0) - Number(debit || 0));
-};
-
-const getOrCreateAssetChartAccount = async (financialAccount) => {
-  const accountCode =
-    financialAccount.linkedChartAccountCode ||
-    `1000-${String(financialAccount.accountNumber).replace(/[^a-zA-Z0-9]/g, "")}`;
-
-  let account = await ChartOfAccount.findOne({ accountCode });
-
-  if (!account) {
-    account = await ChartOfAccount.create({
-      accountCode,
-      accountName: financialAccount.accountName,
-      accountCategory: "Asset",
-      accountType: financialAccount.accountType,
-      normalBalance: "Debit",
-      description: "Auto-created from POS receiving account",
-      isSystemAccount: true,
-      allowManualEntries: false,
-      status: "Active",
-    });
-  }
-
-  return account;
-};
-
-const getOrCreateRevenueChartAccount = async (invoiceType) => {
-  const accountCode = invoiceType === "Marketplace" ? "4105" : "4100";
-  const accountName =
-    invoiceType === "Marketplace"
-      ? "Marketplace Sales Income"
-      : "Shipping Sales Income";
-
-  let account = await ChartOfAccount.findOne({ accountCode });
-
-  if (!account) {
-    account = await ChartOfAccount.create({
-      accountCode,
-      accountName,
-      accountCategory: "Revenue",
-      accountType: "Sales Income",
-      normalBalance: "Credit",
-      description: "Auto-created POS revenue account",
-      isSystemAccount: true,
-      allowManualEntries: false,
-      status: "Active",
-    });
-  }
-
-  return account;
 };
 
 const updateDrawerTotals = async ({ drawer, paymentMethod, amount }) => {
@@ -289,25 +215,6 @@ const cashOutInvoice = async (req, res) => {
       notes,
     } = req.body;
 
-    if (!paidIntoAccountNumber) {
-  return res.status(400).json({
-    success: false,
-    message: "Please select the financial account that received this payment.",
-  });
-}
-
-const receivingAccount = await FinancialAccount.findOne({
-  accountNumber: paidIntoAccountNumber,
-  status: "Active",
-});
-
-if (!receivingAccount) {
-  return res.status(404).json({
-    success: false,
-    message: "Selected financial account was not found or is inactive.",
-  });
-}
-
     if (!invoiceType || !invoiceNumber) {
       return res.status(400).json({
         success: false,
@@ -315,10 +222,48 @@ if (!receivingAccount) {
       });
     }
 
+    if (!paidIntoAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Please select the financial account that received this payment.",
+      });
+    }
+
+    const receivingAccount = await FinancialAccount.findOne({
+      accountNumber: paidIntoAccountNumber,
+      status: "Active",
+    });
+
+    if (!receivingAccount) {
+      return res.status(404).json({
+        success: false,
+        message: "Selected financial account was not found or is inactive.",
+      });
+    }
+
+    if (!receivingAccount.linkedChartAccountCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Selected financial account is not linked to the Chart of Accounts.",
+      });
+    }
+
+    const cashOrBankAccount = await ChartOfAccount.findOne({
+      accountCode: receivingAccount.linkedChartAccountCode,
+      status: "Active",
+    });
+
+    if (!cashOrBankAccount) {
+      return res.status(404).json({
+        success: false,
+        message: "Linked Chart of Accounts account was not found.",
+      });
+    }
+
     const drawer = await POSCashDrawer.findOne({
       openedByUserId: getUserId(req),
-branch: getUserBranch(req),
-status: "Open",
+      branch: getUserBranch(req),
+      status: "Open",
     });
 
     if (!drawer) {
@@ -345,178 +290,126 @@ status: "Open",
       });
     }
 
-    const finalTotal = roundMoney(invoice.finalTotal);
-    const tendered = roundMoney(amountTendered || finalTotal);
-    const changeGiven =
-      paymentMethod === "Cash" ? roundMoney(Math.max(tendered - finalTotal, 0)) : 0;
+    const finalTotal = roundMoney(invoice.finalTotal || 0);
+    const existingPaid = roundMoney(invoice.amountPaid || 0);
+    const outstandingBeforePayment = roundMoney(finalTotal - existingPaid);
 
-    if (paymentMethod === "Cash" && tendered < finalTotal) {
+    if (outstandingBeforePayment <= 0) {
+      invoice.status = "Paid";
+      invoice.balanceDue = 0;
+      await invoice.save();
+
       return res.status(400).json({
         success: false,
-        message: "Amount tendered cannot be less than the invoice total.",
+        message: "This invoice has no outstanding balance.",
       });
     }
 
-    invoice.status = "Paid";
-    invoice.paidAt = new Date();
+    const tendered = roundMoney(amountTendered || outstandingBeforePayment);
+
+    if (tendered <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount tendered must be greater than zero.",
+      });
+    }
+
+    const paymentApplied = roundMoney(Math.min(tendered, outstandingBeforePayment));
+    const changeGiven =
+      paymentMethod === "Cash" ? roundMoney(Math.max(tendered - paymentApplied, 0)) : 0;
+
+    const newAmountPaid = roundMoney(existingPaid + paymentApplied);
+    const newBalanceDue = roundMoney(finalTotal - newAmountPaid);
+
+    invoice.amountPaid = newAmountPaid;
+    invoice.balanceDue = newBalanceDue;
+    invoice.status = newBalanceDue <= 0 ? "Paid" : "Partially Paid";
+
+    if (invoice.status === "Paid") {
+      invoice.paidAt = new Date();
+    }
 
     if (invoiceType === "Shipping") {
-      invoice.paidDate = new Date().toISOString().split("T")[0];
+      invoice.paidDate =
+        invoice.status === "Paid" ? new Date().toISOString().split("T")[0] : null;
       invoice.paymentMethod = paymentMethod;
       invoice.amountTendered = tendered;
       invoice.changeGiven = changeGiven;
       invoice.paidIntoAccountNumber = paidIntoAccountNumber || "";
-      invoice.paidIntoAccountName = paidIntoAccountName || "";
+      invoice.paidIntoAccountName = paidIntoAccountName || receivingAccount.accountName;
       invoice.cashierName = getUserName(req);
     }
 
     await invoice.save();
 
-if (invoiceType === "Shipping") {
-  const trackingNumbers = (invoice.packages || [])
-    .map((pkg) => pkg.trackingNumber)
-    .filter(Boolean);
+    if (invoiceType === "Shipping" && invoice.status === "Paid") {
+      const trackingNumbers = (invoice.packages || [])
+        .map((pkg) => pkg.trackingNumber)
+        .filter(Boolean);
 
-  if (trackingNumbers.length > 0) {
-    await Package.updateMany(
-      { trackingNumber: { $in: trackingNumbers } },
-      {
-        $set: {
-          status: "Delivered",
-          readyForPickup: false,
-          readyForPickupDate: null,
-          invoiceStatus: "Paid",
-          statusUpdatedAt: new Date(),
-        },
+      if (trackingNumbers.length > 0) {
+        await Package.updateMany(
+          { trackingNumber: { $in: trackingNumbers } },
+          {
+            $set: {
+              status: "Delivered",
+              readyForPickup: false,
+              readyForPickupDate: null,
+              invoiceStatus: "Paid",
+              statusUpdatedAt: new Date(),
+            },
+          }
+        );
       }
-    );
-  }
-}
+    }
 
-await updateDrawerTotals({
-  drawer,
-  paymentMethod,
-  amount: finalTotal,
-});
+    await updateDrawerTotals({
+      drawer,
+      paymentMethod,
+      amount: paymentApplied,
+    });
 
-    receivingAccount.currentBalance = roundMoney(
-  Number(receivingAccount.currentBalance || 0) + finalTotal
-);
+    const journalEntry = await postJournalEntry({
+      entryDate: getDateString(),
+      reference: `${invoiceType} invoice ${invoiceNumber}`,
+      sourceModule: "POS",
+      memo: `POS payment received for ${invoiceType} invoice ${invoiceNumber}`,
+      createdBy: getUserName(req),
+      lines: [
+        {
+          accountCode: cashOrBankAccount.accountCode,
+          accountName: cashOrBankAccount.accountName,
+          debit: paymentApplied,
+          credit: 0,
+          description: `Payment received into ${receivingAccount.accountName}`,
+        },
+        {
+          accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+          debit: 0,
+          credit: paymentApplied,
+          description: `Customer receivable cleared for ${invoiceNumber}`,
+        },
+      ],
+    });
 
-receivingAccount.baseCurrencyBalance = roundMoney(
-  Number(receivingAccount.baseCurrencyBalance || 0) +
-    finalTotal * Number(receivingAccount.exchangeRate || 1)
-);
-
-await receivingAccount.save();
-
-const assetAccount = await getOrCreateAssetChartAccount(receivingAccount);
-const revenueAccount = await getOrCreateRevenueChartAccount(invoiceType);
-
-applyChartBalance(assetAccount, finalTotal, 0);
-applyChartBalance(revenueAccount, 0, finalTotal);
-
-await assetAccount.save();
-await revenueAccount.save();
-
-const entryNumber = `JE-POS-${Date.now()}`;
-const entryDate = getDateString();
-const reference = `${invoiceType} invoice ${invoiceNumber}`;
-
-const journalEntry = await JournalEntry.create({
-  entryNumber,
-  entryDate,
-  reference,
-  sourceModule: "POS",
-  memo: `POS payment received for ${reference}`,
-  totalDebit: finalTotal,
-  totalCredit: finalTotal,
-  status: "Posted",
-  createdBy: getUserName(req),
-  lines: [
-    {
-      accountCode: assetAccount.accountCode,
-      accountName: assetAccount.accountName,
-      debit: finalTotal,
-      credit: 0,
-      description: `Payment received into ${receivingAccount.accountName}`,
-    },
-    {
-      accountCode: revenueAccount.accountCode,
-      accountName: revenueAccount.accountName,
-      debit: 0,
-      credit: finalTotal,
-      description: `${invoiceType} revenue from POS`,
-    },
-  ],
-});
-
-const assetRunningBalance = await getRunningBalance(
-  assetAccount.accountCode,
-  assetAccount.normalBalance,
-  finalTotal,
-  0
-);
-
-const revenueRunningBalance = await getRunningBalance(
-  revenueAccount.accountCode,
-  revenueAccount.normalBalance,
-  0,
-  finalTotal
-);
-
-const assetLedger = await GeneralLedgerTransaction.create({
-  ledgerNumber: `GL-POS-${Date.now()}-DR`,
-  entryNumber,
-  entryDate,
-  accountCode: assetAccount.accountCode,
-  accountName: assetAccount.accountName,
-  accountCategory: assetAccount.accountCategory,
-  normalBalance: assetAccount.normalBalance,
-  debit: finalTotal,
-  credit: 0,
-  runningBalance: assetRunningBalance,
-  reference,
-  sourceModule: "POS",
-  memo: journalEntry.memo,
-  description: `POS payment received into ${receivingAccount.accountName}`,
-});
-
-const revenueLedger = await GeneralLedgerTransaction.create({
-  ledgerNumber: `GL-POS-${Date.now()}-CR`,
-  entryNumber,
-  entryDate,
-  accountCode: revenueAccount.accountCode,
-  accountName: revenueAccount.accountName,
-  accountCategory: revenueAccount.accountCategory,
-  normalBalance: revenueAccount.normalBalance,
-  debit: 0,
-  credit: finalTotal,
-  runningBalance: revenueRunningBalance,
-  reference,
-  sourceModule: "POS",
-  memo: journalEntry.memo,
-  description: `${invoiceType} POS revenue`,
-});
-
-const financeTransaction = await AccountTransaction.create({
-  transactionNumber: `TRN-POS-${Date.now()}`,
-  accountNumber: receivingAccount.accountNumber,
-  accountName: receivingAccount.accountName,
-  linkedChartAccountCode: assetAccount.accountCode,
-  journalEntryNumber: entryNumber,
-  ledgerReference: `${assetLedger.ledgerNumber}, ${revenueLedger.ledgerNumber}`,
-  transactionType: "Invoice Payment",
-  amount: finalTotal,
-  paymentMethod,
-  amountTendered: tendered,
-  changeGiven,
-  reference,
-  notes:
-    notes ||
-    `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
-  transactionDate: new Date(),
-});
+    const financeTransaction = await AccountTransaction.create({
+      transactionNumber: `TRN-POS-${Date.now()}`,
+      accountNumber: receivingAccount.accountNumber,
+      accountName: receivingAccount.accountName,
+      linkedChartAccountCode: cashOrBankAccount.accountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
+      transactionType: "Invoice Payment",
+      amount: paymentApplied,
+      paymentMethod,
+      amountTendered: tendered,
+      changeGiven,
+      reference: `${invoiceType} invoice ${invoiceNumber}`,
+      notes:
+        notes ||
+        `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
+      transactionDate: new Date(),
+    });
 
     const transaction = await POSTransaction.create({
       transactionNumber: `POS-${Date.now()}`,
@@ -524,12 +417,12 @@ const financeTransaction = await AccountTransaction.create({
       invoiceNumber,
       customerName: invoice.customerName || "",
       customerEkonId: invoice.customerEkonId || invoice.customerKey || "",
-      amountPaid: finalTotal,
+      amountPaid: paymentApplied,
       amountTendered: tendered,
       changeGiven,
       paymentMethod,
       paidIntoAccountNumber: paidIntoAccountNumber || "",
-      paidIntoAccountName: paidIntoAccountName || "",
+      paidIntoAccountName: paidIntoAccountName || receivingAccount.accountName,
       cashierUserId: getUserId(req),
       cashierName: getUserName(req),
       branch: getUserBranch(req),
@@ -539,16 +432,28 @@ const financeTransaction = await AccountTransaction.create({
 
     res.json({
       success: true,
-      message: `${invoiceType} invoice cashed out successfully.`,
+      message:
+        invoice.status === "Paid"
+          ? `${invoiceType} invoice paid successfully.`
+          : `${invoiceType} invoice partially paid. Balance remaining: ${newBalanceDue}`,
       data: {
-  invoice,
-  drawer,
-  transaction,
-  financeTransaction,
-  receivingAccount,
-  journalEntry,
-  ledgers: [assetLedger, revenueLedger],
-},
+        invoice,
+        drawer,
+        transaction,
+        financeTransaction,
+        receivingAccount,
+        journalEntry,
+        paymentSummary: {
+          invoiceTotal: finalTotal,
+          previousPaid: existingPaid,
+          paymentApplied,
+          amountTendered: tendered,
+          changeGiven,
+          amountPaid: newAmountPaid,
+          balanceDue: newBalanceDue,
+          status: invoice.status,
+        },
+      },
     });
   } catch (error) {
     res.status(500).json({

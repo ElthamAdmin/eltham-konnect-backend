@@ -1,6 +1,10 @@
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const BankReconciliation = require("../models/BankReconciliation");
+const ChartOfAccount = require("../models/ChartOfAccount");
+
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 const getBankingDashboard = async (req, res) => {
   try {
@@ -16,15 +20,40 @@ const getBankingDashboard = async (req, res) => {
       createdAt: -1,
     });
 
-    const totalCash = accounts.reduce(
-      (sum, account) => sum + Number(account.currentBalance || 0),
-      0
-    );
+    const linkedCodes = accounts
+  .map((account) => account.linkedChartAccountCode)
+  .filter(Boolean);
+
+const chartAccounts = await ChartOfAccount.find({
+  accountCode: { $in: linkedCodes },
+});
+
+const chartMap = {};
+chartAccounts.forEach((account) => {
+  chartMap[account.accountCode] = account;
+});
+
+const accountsWithLedgerBalances = accounts.map((account) => {
+  const plain = account.toObject();
+  const linkedChartAccount = chartMap[plain.linkedChartAccountCode];
+
+  return {
+    ...plain,
+    currentBalance: roundMoney(linkedChartAccount?.currentBalance || 0),
+    baseCurrencyBalance: roundMoney(linkedChartAccount?.currentBalance || 0),
+    linkedChartAccount,
+  };
+});
+
+const totalCash = accountsWithLedgerBalances.reduce(
+  (sum, account) => sum + Number(account.currentBalance || 0),
+  0
+);
 
     res.json({
       success: true,
       totalCash,
-      accounts,
+      accounts: accountsWithLedgerBalances,
       transactions,
       reconciliations,
     });

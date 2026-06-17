@@ -71,23 +71,6 @@ const createTransaction = async (req, res) => {
       });
     }
 
-    const increaseTypes = ["Deposit", "Transfer In", "Invoice Payment"];
-    const decreaseTypes = ["Withdrawal", "Transfer Out", "Expense Payment", "Credit Card Payment"];
-
-    if (increaseTypes.includes(transactionType)) {
-      account.currentBalance += numericAmount;
-    } else if (decreaseTypes.includes(transactionType)) {
-      if (account.currentBalance < numericAmount) {
-        return res.status(400).json({
-          success: false,
-          message: "Insufficient balance in selected account",
-        });
-      }
-      account.currentBalance -= numericAmount;
-    }
-
-    await account.save();
-
     const transaction = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}`,
       accountNumber: account.accountNumber,
@@ -169,12 +152,6 @@ const createTransfer = async (req, res) => {
         message: "Insufficient balance in source account",
       });
     }
-
-    fromAccount.currentBalance -= numericAmount;
-    toAccount.currentBalance += numericAmount;
-
-    await fromAccount.save();
-    await toAccount.save();
 
     const transferRef = reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
 
