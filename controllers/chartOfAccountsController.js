@@ -2,9 +2,11 @@ const ChartOfAccount = require("../models/ChartOfAccount");
 
 const getAccounts = async (req, res) => {
   try {
-    const accounts = await ChartOfAccount.find().sort({
-      accountCode: 1,
-    });
+    const accounts = await ChartOfAccount.find({
+  status: "Active",
+}).sort({
+  accountCode: 1,
+});
 
     res.json({
       success: true,
