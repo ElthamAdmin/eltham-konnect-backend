@@ -19,18 +19,33 @@ const getTrialBalance = async (req, res) => {
       let debit = 0;
       let credit = 0;
 
-      if (balance >= 0) {
-        if (account.normalBalance === "Debit") {
-          debit = balance;
-        } else {
-          credit = balance;
-        }
-      } else {
-        if (account.normalBalance === "Debit") {
-          credit = Math.abs(balance);
-        } else {
-          debit = Math.abs(balance);
-        }
+      switch (account.accountCategory) {
+        case "Asset":
+        case "Expense":
+        case "Cost of Sales":
+          if (balance >= 0) {
+            debit = balance;
+          } else {
+            credit = Math.abs(balance);
+          }
+          break;
+
+        case "Liability":
+        case "Equity":
+        case "Revenue":
+          if (balance >= 0) {
+            credit = balance;
+          } else {
+            debit = Math.abs(balance);
+          }
+          break;
+
+        default:
+          if (account.normalBalance === "Debit") {
+            debit = Math.abs(balance);
+          } else {
+            credit = Math.abs(balance);
+          }
       }
 
       debit = roundMoney(debit);
