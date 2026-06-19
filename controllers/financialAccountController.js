@@ -201,19 +201,25 @@ const getAccounts = async (req, res) => {
       const plain = account.toObject();
       const linkedChartAccount = chartMap[plain.linkedChartAccountCode];
 
-      return {
-        ...plain,
-        currentBalance:
-  plain.currentBalance ??
-  linkedChartAccount?.currentBalance ??
-  0,
-baseCurrencyBalance:
-  plain.baseCurrencyBalance ??
-  plain.currentBalance ??
-  linkedChartAccount?.currentBalance ??
-  0,
-linkedChartAccount,
-      };
+      const currency = String(plain.currency || "JMD").toUpperCase();
+const ledgerBalance = roundMoney(linkedChartAccount?.currentBalance || 0);
+
+const currentBalance =
+  currency === "JMD"
+    ? ledgerBalance
+    : roundMoney(plain.currentBalance || 0);
+
+const baseCurrencyBalance =
+  currency === "JMD"
+    ? currentBalance
+    : ledgerBalance;
+
+return {
+  ...plain,
+  currentBalance,
+  baseCurrencyBalance,
+  linkedChartAccount,
+};
     });
 
     res.json({
