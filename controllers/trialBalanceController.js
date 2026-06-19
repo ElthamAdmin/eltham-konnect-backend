@@ -4,28 +4,15 @@ const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const ChartOfAccount = require("../models/ChartOfAccount");
+
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
 const getTrialBalance = async (req, res) => {
   try {
     const accounts = await ChartOfAccount.find({ status: "Active" }).sort({
       accountCode: 1,
-    });
-
-    const ledgerTotals = await GeneralLedgerTransaction.aggregate([
-      {
-        $group: {
-          _id: "$accountCode",
-          totalDebit: { $sum: "$debit" },
-          totalCredit: { $sum: "$credit" },
-        },
-      },
-    ]);
-
-    const totalsMap = {};
-    ledgerTotals.forEach((item) => {
-      totalsMap[item._id] = {
-        totalDebit: roundMoney(item.totalDebit),
-        totalCredit: roundMoney(item.totalCredit),
-      };
     });
 
     const rows = [];
@@ -33,18 +20,7 @@ const getTrialBalance = async (req, res) => {
     let totalCredit = 0;
 
     for (const account of accounts) {
-      const totals = totalsMap[account.accountCode] || {
-        totalDebit: 0,
-        totalCredit: 0,
-      };
-
-      let balance = 0;
-
-      if (account.normalBalance === "Debit") {
-        balance = roundMoney(totals.totalDebit - totals.totalCredit);
-      } else {
-        balance = roundMoney(totals.totalCredit - totals.totalDebit);
-      }
+      const balance = roundMoney(account.currentBalance || 0);
 
       let debit = 0;
       let credit = 0;
@@ -85,7 +61,7 @@ const getTrialBalance = async (req, res) => {
 
     res.json({
       success: true,
-      sourceOfTruth: "GeneralLedgerTransaction",
+      sourceOfTruth: "ChartOfAccount.currentBalance",
       balanced: totalDebit === totalCredit,
       totalDebit,
       totalCredit,
