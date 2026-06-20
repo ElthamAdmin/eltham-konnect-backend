@@ -256,25 +256,6 @@ module.exports = {
       accountCode: 1,
     });
 
-    const ledgerTotals = await GeneralLedgerTransaction.aggregate([
-      {
-        $group: {
-          _id: "$accountCode",
-          totalDebit: { $sum: "$debit" },
-          totalCredit: { $sum: "$credit" },
-        },
-      },
-    ]);
-
-    const totalsMap = {};
-
-    ledgerTotals.forEach((item) => {
-      totalsMap[item._id] = {
-        totalDebit: roundMoney(item.totalDebit),
-        totalCredit: roundMoney(item.totalCredit),
-      };
-    });
-
     const assets = [];
     const liabilities = [];
     const equity = [];
@@ -288,22 +269,7 @@ module.exports = {
     let totalExpenses = 0;
 
     accounts.forEach((account) => {
-      const totals = totalsMap[account.accountCode] || {
-        totalDebit: 0,
-        totalCredit: 0,
-      };
-
-      let balance = 0;
-
-      if (account.normalBalance === "Debit") {
-        balance = roundMoney(
-          totals.totalDebit - totals.totalCredit
-        );
-      } else {
-        balance = roundMoney(
-          totals.totalCredit - totals.totalDebit
-        );
-      }
+      const balance = roundMoney(account.currentBalance || 0);
 
       const item = {
         accountCode: account.accountCode,
@@ -361,7 +327,7 @@ module.exports = {
 
     res.json({
       success: true,
-      sourceOfTruth: "GeneralLedgerTransaction",
+      sourceOfTruth: "ChartOfAccount",
       data: {
         reportTitle: "Balance Sheet",
         generatedAt: new Date().toISOString(),
