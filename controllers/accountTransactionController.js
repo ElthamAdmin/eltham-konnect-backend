@@ -1,5 +1,9 @@
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
+const ChartOfAccount = require("../models/ChartOfAccount");
+
+const roundMoney = (value) =>
+  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
 const getTransactions = async (req, res) => {
   try {
@@ -38,13 +42,7 @@ const getTransactions = async (req, res) => {
 
 const createTransaction = async (req, res) => {
   try {
-    const {
-      accountNumber,
-      transactionType,
-      amount,
-      reference,
-      notes,
-    } = req.body;
+    const { accountNumber, transactionType, amount, reference, notes } = req.body;
 
     if (!accountNumber || !transactionType || !amount) {
       return res.status(400).json({
@@ -62,7 +60,7 @@ const createTransaction = async (req, res) => {
       });
     }
 
-    const numericAmount = Number(amount);
+    const numericAmount = roundMoney(amount);
 
     if (numericAmount <= 0) {
       return res.status(400).json({
@@ -100,13 +98,7 @@ const createTransaction = async (req, res) => {
 
 const createTransfer = async (req, res) => {
   try {
-    const {
-      fromAccountNumber,
-      toAccountNumber,
-      amount,
-      reference,
-      notes,
-    } = req.body;
+    const { fromAccountNumber, toAccountNumber, amount, reference, notes } = req.body;
 
     if (!fromAccountNumber || !toAccountNumber || !amount) {
       return res.status(400).json({
@@ -122,7 +114,7 @@ const createTransfer = async (req, res) => {
       });
     }
 
-    const numericAmount = Number(amount);
+    const numericAmount = roundMoney(amount);
 
     if (numericAmount <= 0) {
       return res.status(400).json({
@@ -146,14 +138,15 @@ const createTransfer = async (req, res) => {
       });
     }
 
-    if (fromAccount.currentBalance < numericAmount) {
+    if (roundMoney(fromAccount.currentBalance) < numericAmount) {
       return res.status(400).json({
         success: false,
         message: "Insufficient balance in source account",
       });
     }
 
-    const transferRef = reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
+    const transferRef =
+      reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
 
     const transferOut = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}-OUT`,
@@ -177,10 +170,38 @@ const createTransfer = async (req, res) => {
       transactionDate: new Date(),
     });
 
+    fromAccount.currentBalance = roundMoney(fromAccount.currentBalance - numericAmount);
+
+    if (toAccount.accountType === "Credit Card") {
+      toAccount.currentBalance = roundMoney(toAccount.currentBalance - numericAmount);
+    } else {
+      toAccount.currentBalance = roundMoney(toAccount.currentBalance + numericAmount);
+    }
+
+    fromAccount.baseCurrencyBalance = fromAccount.currentBalance;
+    toAccount.baseCurrencyBalance = toAccount.currentBalance;
+
+    await fromAccount.save();
+    await toAccount.save();
+
+    await ChartOfAccount.findOneAndUpdate(
+      { accountCode: fromAccount.linkedChartAccountCode },
+      { $set: { currentBalance: fromAccount.currentBalance } }
+    );
+
+    await ChartOfAccount.findOneAndUpdate(
+      { accountCode: toAccount.linkedChartAccountCode },
+      { $set: { currentBalance: toAccount.currentBalance } }
+    );
+
     res.status(201).json({
       success: true,
       message: "Transfer completed successfully",
       data: { transferOut, transferIn },
+      updatedAccounts: {
+        fromAccount,
+        toAccount,
+      },
     });
   } catch (error) {
     console.error("Error creating transfer:", error);
