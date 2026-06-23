@@ -5,6 +5,15 @@ const ChartOfAccount = require("../models/ChartOfAccount");
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const syncChartAccount = async (account) => {
+  if (!account.linkedChartAccountCode) return;
+
+  await ChartOfAccount.findOneAndUpdate(
+    { accountCode: account.linkedChartAccountCode },
+    { $set: { currentBalance: account.currentBalance } }
+  );
+};
+
 const getTransactions = async (req, res) => {
   try {
     const page = Number(req.query.page || 1);
@@ -93,37 +102,16 @@ const createTransaction = async (req, res) => {
 
     if (normalizedType === "Deposit") {
       account.currentBalance = roundMoney(account.currentBalance + numericAmount);
-      account.baseCurrencyBalance = account.currentBalance;
-
-      await account.save();
-
-      await ChartOfAccount.findOneAndUpdate(
-        { accountCode: account.linkedChartAccountCode },
-        { $set: { currentBalance: account.currentBalance } }
-      );
-
-      await ChartOfAccount.findOneAndUpdate(
-        { accountCode: "3000" },
-        { $inc: { currentBalance: numericAmount } }
-      );
     }
 
     if (normalizedType === "Withdrawal") {
       account.currentBalance = roundMoney(account.currentBalance - numericAmount);
-      account.baseCurrencyBalance = account.currentBalance;
-
-      await account.save();
-
-      await ChartOfAccount.findOneAndUpdate(
-        { accountCode: account.linkedChartAccountCode },
-        { $set: { currentBalance: account.currentBalance } }
-      );
-
-      await ChartOfAccount.findOneAndUpdate(
-        { accountCode: "3050" },
-        { $inc: { currentBalance: numericAmount } }
-      );
     }
+
+    account.baseCurrencyBalance = account.currentBalance;
+
+    await account.save();
+    await syncChartAccount(account);
 
     res.status(201).json({
       success: true,
@@ -229,15 +217,8 @@ const createTransfer = async (req, res) => {
     await fromAccount.save();
     await toAccount.save();
 
-    await ChartOfAccount.findOneAndUpdate(
-      { accountCode: fromAccount.linkedChartAccountCode },
-      { $set: { currentBalance: fromAccount.currentBalance } }
-    );
-
-    await ChartOfAccount.findOneAndUpdate(
-      { accountCode: toAccount.linkedChartAccountCode },
-      { $set: { currentBalance: toAccount.currentBalance } }
-    );
+    await syncChartAccount(fromAccount);
+    await syncChartAccount(toAccount);
 
     res.status(201).json({
       success: true,
