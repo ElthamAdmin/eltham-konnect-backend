@@ -69,8 +69,10 @@ const createTransaction = async (req, res) => {
       });
     }
 
+    const normalizedType = String(transactionType).trim();
+
     if (
-      transactionType === "Withdrawal" &&
+      normalizedType === "Withdrawal" &&
       roundMoney(account.currentBalance) < numericAmount
     ) {
       return res.status(400).json({
@@ -83,18 +85,18 @@ const createTransaction = async (req, res) => {
       transactionNumber: `TRN-${Date.now()}`,
       accountNumber: account.accountNumber,
       accountName: account.accountName,
-      transactionType,
+      transactionType: normalizedType,
       amount: numericAmount,
       reference: reference || "",
       notes: notes || "",
       transactionDate: new Date(),
     });
 
-    if (transactionType === "Deposit") {
+    if (normalizedType === "Deposit") {
       account.currentBalance = roundMoney(account.currentBalance + numericAmount);
     }
 
-    if (transactionType === "Withdrawal") {
+    if (normalizedType === "Withdrawal") {
       account.currentBalance = roundMoney(account.currentBalance - numericAmount);
     }
 
@@ -118,6 +120,123 @@ const createTransaction = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to create account transaction",
+      error: error.message,
+    });
+  }
+};
+
+const createTransfer = async (req, res) => {
+  try {
+    const { fromAccountNumber, toAccountNumber, amount, reference, notes } = req.body;
+
+    if (!fromAccountNumber || !toAccountNumber || !amount) {
+      return res.status(400).json({
+        success: false,
+        message: "From account, to account, and amount are required",
+      });
+    }
+
+    if (fromAccountNumber === toAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Source and destination accounts must be different",
+      });
+    }
+
+    const numericAmount = roundMoney(amount);
+
+    if (numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Transfer amount must be greater than zero",
+      });
+    }
+
+    const fromAccount = await FinancialAccount.findOne({
+      accountNumber: fromAccountNumber,
+    });
+
+    const toAccount = await FinancialAccount.findOne({
+      accountNumber: toAccountNumber,
+    });
+
+    if (!fromAccount || !toAccount) {
+      return res.status(404).json({
+        success: false,
+        message: "Account not found",
+      });
+    }
+
+    if (roundMoney(fromAccount.currentBalance) < numericAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient balance in source account",
+      });
+    }
+
+    const transferRef =
+      reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
+
+    const transferOut = await AccountTransaction.create({
+      transactionNumber: `TRN-${Date.now()}-OUT`,
+      accountNumber: fromAccount.accountNumber,
+      accountName: fromAccount.accountName,
+      transactionType: "Transfer Out",
+      amount: numericAmount,
+      reference: transferRef,
+      notes: notes || "",
+      transactionDate: new Date(),
+    });
+
+    const transferIn = await AccountTransaction.create({
+      transactionNumber: `TRN-${Date.now()}-IN`,
+      accountNumber: toAccount.accountNumber,
+      accountName: toAccount.accountName,
+      transactionType: "Transfer In",
+      amount: numericAmount,
+      reference: transferRef,
+      notes: notes || "",
+      transactionDate: new Date(),
+    });
+
+    fromAccount.currentBalance = roundMoney(fromAccount.currentBalance - numericAmount);
+
+    if (toAccount.accountType === "Credit Card") {
+      toAccount.currentBalance = roundMoney(toAccount.currentBalance - numericAmount);
+    } else {
+      toAccount.currentBalance = roundMoney(toAccount.currentBalance + numericAmount);
+    }
+
+    fromAccount.baseCurrencyBalance = fromAccount.currentBalance;
+    toAccount.baseCurrencyBalance = toAccount.currentBalance;
+
+    await fromAccount.save();
+    await toAccount.save();
+
+    await ChartOfAccount.findOneAndUpdate(
+      { accountCode: fromAccount.linkedChartAccountCode },
+      { $set: { currentBalance: fromAccount.currentBalance } }
+    );
+
+    await ChartOfAccount.findOneAndUpdate(
+      { accountCode: toAccount.linkedChartAccountCode },
+      { $set: { currentBalance: toAccount.currentBalance } }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Transfer completed successfully",
+      data: { transferOut, transferIn },
+      updatedAccounts: {
+        fromAccount,
+        toAccount,
+      },
+    });
+  } catch (error) {
+    console.error("Error creating transfer:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to complete transfer",
       error: error.message,
     });
   }
