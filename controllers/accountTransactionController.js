@@ -61,6 +61,7 @@ const createTransaction = async (req, res) => {
     }
 
     const numericAmount = roundMoney(amount);
+    const normalizedType = String(transactionType).trim();
 
     if (numericAmount <= 0) {
       return res.status(400).json({
@@ -68,8 +69,6 @@ const createTransaction = async (req, res) => {
         message: "Amount must be greater than zero",
       });
     }
-
-    const normalizedType = String(transactionType).trim();
 
     if (
       normalizedType === "Withdrawal" &&
@@ -94,20 +93,37 @@ const createTransaction = async (req, res) => {
 
     if (normalizedType === "Deposit") {
       account.currentBalance = roundMoney(account.currentBalance + numericAmount);
+      account.baseCurrencyBalance = account.currentBalance;
+
+      await account.save();
+
+      await ChartOfAccount.findOneAndUpdate(
+        { accountCode: account.linkedChartAccountCode },
+        { $set: { currentBalance: account.currentBalance } }
+      );
+
+      await ChartOfAccount.findOneAndUpdate(
+        { accountCode: "3000" },
+        { $inc: { currentBalance: numericAmount } }
+      );
     }
 
     if (normalizedType === "Withdrawal") {
       account.currentBalance = roundMoney(account.currentBalance - numericAmount);
+      account.baseCurrencyBalance = account.currentBalance;
+
+      await account.save();
+
+      await ChartOfAccount.findOneAndUpdate(
+        { accountCode: account.linkedChartAccountCode },
+        { $set: { currentBalance: account.currentBalance } }
+      );
+
+      await ChartOfAccount.findOneAndUpdate(
+        { accountCode: "3050" },
+        { $inc: { currentBalance: numericAmount } }
+      );
     }
-
-    account.baseCurrencyBalance = account.currentBalance;
-
-    await account.save();
-
-    await ChartOfAccount.findOneAndUpdate(
-      { accountCode: account.linkedChartAccountCode },
-      { $set: { currentBalance: account.currentBalance } }
-    );
 
     res.status(201).json({
       success: true,
