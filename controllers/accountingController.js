@@ -105,8 +105,6 @@ const getBalanceSheet = async (req, res) => {
           totalAssets: balanceSheet.totals.totalAssets,
           totalLiabilities: balanceSheet.totals.totalLiabilities,
           totalEquity: balanceSheet.totals.totalEquity,
-          currentNetProfit: 0,
-          adjustedEquity: balanceSheet.totals.totalEquity,
           accountingDifference: balanceSheet.totals.difference,
           isBalanced: balanceSheet.totals.isBalanced,
         },
