@@ -23,6 +23,8 @@ const accountMappingService = require("./accountMappingService");
 
 const periodService = require("./periodService");
 
+const trialBalanceService = require("./trialBalanceService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -40,4 +42,5 @@ module.exports = {
   workflowService,
   accountMappingService,
   periodService,
+  trialBalanceService,
 };
