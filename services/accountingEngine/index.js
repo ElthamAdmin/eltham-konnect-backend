@@ -21,6 +21,8 @@ const workflowService = require("./workflowService");
 
 const accountMappingService = require("./accountMappingService");
 
+const periodService = require("./periodService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -37,4 +39,5 @@ module.exports = {
   transactionTemplates,
   workflowService,
   accountMappingService,
+  periodService,
 };
