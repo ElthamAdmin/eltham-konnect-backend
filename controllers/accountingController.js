@@ -95,19 +95,24 @@ const getBalanceSheet = async (req, res) => {
         })),
 
         equity: balanceSheet.equity.accounts.map((item) => ({
-          accountCode: item.accountCode,
-          accountName: item.accountName,
-          accountType: "",
-          balance: item.amount,
-        })),
+  accountCode: item.accountCode,
+  accountName: item.accountName,
+  accountType:
+    item.accountCode === "CURRENT-EARNINGS"
+      ? "Current Year Earnings"
+      : "Equity",
+  balance: item.amount,
+})),
 
         totals: {
-          totalAssets: balanceSheet.totals.totalAssets,
-          totalLiabilities: balanceSheet.totals.totalLiabilities,
-          totalEquity: balanceSheet.totals.totalEquity,
-          accountingDifference: balanceSheet.totals.difference,
-          isBalanced: balanceSheet.totals.isBalanced,
-        },
+  totalAssets: balanceSheet.totals.totalAssets,
+  totalLiabilities: balanceSheet.totals.totalLiabilities,
+  ownerEquityOnly: balanceSheet.equity.ownerEquityOnly,
+  currentYearEarnings: balanceSheet.equity.currentYearEarnings,
+  totalEquity: balanceSheet.totals.totalEquity,
+  accountingDifference: balanceSheet.totals.difference,
+  isBalanced: balanceSheet.totals.isBalanced,
+},
 
         engine: balanceSheet,
       },
