@@ -34,20 +34,22 @@ const accountTransactionSchema = new mongoose.Schema(
     },
 
     transactionType: {
-      type: String,
-      enum: [
-        "Deposit",
-        "Withdrawal",
-        "Transfer In",
-        "Transfer Out",
-        "Invoice Payment",
-        "Expense Payment",
-        "Credit Card Payment",
-"Credit Card Charge",
-"Payroll Payment",
-      ],
-      required: true,
-    },
+  type: String,
+  enum: [
+    "Deposit",
+    "Owner Deposit",
+    "Withdrawal",
+    "Owner Drawing",
+    "Transfer In",
+    "Transfer Out",
+    "Invoice Payment",
+    "Expense Payment",
+    "Credit Card Payment",
+    "Credit Card Charge",
+    "Payroll Payment",
+  ],
+  required: true,
+},
 
     amount: {
       type: Number,

@@ -2,16 +2,45 @@ const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const ChartOfAccount = require("../models/ChartOfAccount");
 
+const {
+  postJournalEntry,
+  SYSTEM_ACCOUNTS,
+} = require("../utils/generalLedgerPoster");
+
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
-const syncChartAccount = async (account) => {
-  if (!account.linkedChartAccountCode) return;
+const getBaseCurrencyBalance = (account) => {
+  const amount = roundMoney(account.currentBalance || 0);
+  const currency = String(account.currency || "JMD").toUpperCase();
 
-  await ChartOfAccount.findOneAndUpdate(
-    { accountCode: account.linkedChartAccountCode },
-    { $set: { currentBalance: account.currentBalance } }
-  );
+  if (currency === "JMD") return amount;
+
+  return roundMoney(amount * Number(account.exchangeRate || 1));
+};
+
+const syncFinancialAccountFromChart = async (account) => {
+  if (!account || !account.linkedChartAccountCode) return account;
+
+  const chartAccount = await ChartOfAccount.findOne({
+    accountCode: account.linkedChartAccountCode,
+  });
+
+  if (!chartAccount) return account;
+
+  account.currentBalance = roundMoney(chartAccount.currentBalance || 0);
+  account.baseCurrencyBalance = getBaseCurrencyBalance(account);
+
+  await account.save();
+  return account;
+};
+
+const requireLinkedChartAccount = (account) => {
+  if (!account.linkedChartAccountCode) {
+    throw new Error(
+      `${account.accountName} is not linked to a Chart of Accounts code.`
+    );
+  }
 };
 
 const getTransactions = async (req, res) => {
@@ -51,7 +80,14 @@ const getTransactions = async (req, res) => {
 
 const createTransaction = async (req, res) => {
   try {
-    const { accountNumber, transactionType, amount, reference, notes } = req.body;
+    const {
+      accountNumber,
+      transactionType,
+      amount,
+      reference,
+      notes,
+      transactionDate,
+    } = req.body;
 
     if (!accountNumber || !transactionType || !amount) {
       return res.status(400).json({
@@ -69,8 +105,12 @@ const createTransaction = async (req, res) => {
       });
     }
 
+    requireLinkedChartAccount(account);
+
     const numericAmount = roundMoney(amount);
     const normalizedType = String(transactionType).trim();
+    const postingDate =
+      transactionDate || new Date().toISOString().slice(0, 10);
 
     if (numericAmount <= 0) {
       return res.status(400).json({
@@ -79,9 +119,25 @@ const createTransaction = async (req, res) => {
       });
     }
 
+    const allowedTypes = [
+      "Deposit",
+      "Owner Deposit",
+      "Withdrawal",
+      "Owner Drawing",
+    ];
+
+    if (!allowedTypes.includes(normalizedType)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only Deposit, Owner Deposit, Withdrawal, and Owner Drawing are allowed here. Use transfer endpoint for transfers.",
+      });
+    }
+
     if (
-      normalizedType === "Withdrawal" &&
-      roundMoney(account.currentBalance) < numericAmount
+      ["Withdrawal", "Owner Drawing"].includes(normalizedType) &&
+      account.accountType !== "Credit Card" &&
+      roundMoney(account.currentBalance || 0) < numericAmount
     ) {
       return res.status(400).json({
         success: false,
@@ -89,35 +145,65 @@ const createTransaction = async (req, res) => {
       });
     }
 
+    let debitAccountCode = "";
+    let creditAccountCode = "";
+    let memo = "";
+
+    if (normalizedType === "Deposit" || normalizedType === "Owner Deposit") {
+      debitAccountCode = account.linkedChartAccountCode;
+      creditAccountCode = SYSTEM_ACCOUNTS.OWNER_EQUITY;
+      memo = `${normalizedType} into ${account.accountName}`;
+    }
+
+    if (normalizedType === "Withdrawal" || normalizedType === "Owner Drawing") {
+      debitAccountCode = SYSTEM_ACCOUNTS.OWNER_DRAWINGS;
+      creditAccountCode = account.linkedChartAccountCode;
+      memo = `${normalizedType} from ${account.accountName}`;
+    }
+
+    const journalEntry = await postJournalEntry({
+      entryDate: postingDate,
+      memo,
+      reference: reference || normalizedType,
+      sourceModule: "Account Transactions",
+      createdBy: req.user?.fullName || "System User",
+      lines: [
+        {
+          accountCode: debitAccountCode,
+          debit: numericAmount,
+          credit: 0,
+          description: notes || memo,
+        },
+        {
+          accountCode: creditAccountCode,
+          debit: 0,
+          credit: numericAmount,
+          description: notes || memo,
+        },
+      ],
+    });
+
     const transaction = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}`,
       accountNumber: account.accountNumber,
       accountName: account.accountName,
+      linkedChartAccountCode: account.linkedChartAccountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
       transactionType: normalizedType,
       amount: numericAmount,
       reference: reference || "",
       notes: notes || "",
-      transactionDate: new Date(),
+      transactionDate: new Date(postingDate),
     });
 
-    if (normalizedType === "Deposit") {
-      account.currentBalance = roundMoney(account.currentBalance + numericAmount);
-    }
-
-    if (normalizedType === "Withdrawal") {
-      account.currentBalance = roundMoney(account.currentBalance - numericAmount);
-    }
-
-    account.baseCurrencyBalance = account.currentBalance;
-
-    await account.save();
-    await syncChartAccount(account);
+    const updatedAccount = await syncFinancialAccountFromChart(account);
 
     res.status(201).json({
       success: true,
-      message: "Account transaction recorded successfully",
+      message: "Account transaction posted successfully",
       data: transaction,
-      updatedAccount: account,
+      updatedAccount,
     });
   } catch (error) {
     console.error("Error creating account transaction:", error);
@@ -131,7 +217,14 @@ const createTransaction = async (req, res) => {
 
 const createTransfer = async (req, res) => {
   try {
-    const { fromAccountNumber, toAccountNumber, amount, reference, notes } = req.body;
+    const {
+      fromAccountNumber,
+      toAccountNumber,
+      amount,
+      reference,
+      notes,
+      transactionDate,
+    } = req.body;
 
     if (!fromAccountNumber || !toAccountNumber || !amount) {
       return res.status(400).json({
@@ -148,6 +241,8 @@ const createTransfer = async (req, res) => {
     }
 
     const numericAmount = roundMoney(amount);
+    const postingDate =
+      transactionDate || new Date().toISOString().slice(0, 10);
 
     if (numericAmount <= 0) {
       return res.status(400).json({
@@ -171,7 +266,13 @@ const createTransfer = async (req, res) => {
       });
     }
 
-    if (roundMoney(fromAccount.currentBalance) < numericAmount) {
+    requireLinkedChartAccount(fromAccount);
+    requireLinkedChartAccount(toAccount);
+
+    if (
+      fromAccount.accountType !== "Credit Card" &&
+      roundMoney(fromAccount.currentBalance || 0) < numericAmount
+    ) {
       return res.status(400).json({
         success: false,
         message: "Insufficient balance in source account",
@@ -181,52 +282,66 @@ const createTransfer = async (req, res) => {
     const transferRef =
       reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
 
+    const journalEntry = await postJournalEntry({
+      entryDate: postingDate,
+      memo: transferRef,
+      reference: transferRef,
+      sourceModule: "Account Transfers",
+      createdBy: req.user?.fullName || "System User",
+      lines: [
+        {
+          accountCode: toAccount.linkedChartAccountCode,
+          debit: numericAmount,
+          credit: 0,
+          description: notes || transferRef,
+        },
+        {
+          accountCode: fromAccount.linkedChartAccountCode,
+          debit: 0,
+          credit: numericAmount,
+          description: notes || transferRef,
+        },
+      ],
+    });
+
     const transferOut = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}-OUT`,
       accountNumber: fromAccount.accountNumber,
       accountName: fromAccount.accountName,
+      linkedChartAccountCode: fromAccount.linkedChartAccountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
       transactionType: "Transfer Out",
       amount: numericAmount,
       reference: transferRef,
       notes: notes || "",
-      transactionDate: new Date(),
+      transactionDate: new Date(postingDate),
     });
 
     const transferIn = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}-IN`,
       accountNumber: toAccount.accountNumber,
       accountName: toAccount.accountName,
+      linkedChartAccountCode: toAccount.linkedChartAccountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
       transactionType: "Transfer In",
       amount: numericAmount,
       reference: transferRef,
       notes: notes || "",
-      transactionDate: new Date(),
+      transactionDate: new Date(postingDate),
     });
 
-    fromAccount.currentBalance = roundMoney(fromAccount.currentBalance - numericAmount);
-
-    if (toAccount.accountType === "Credit Card") {
-      toAccount.currentBalance = roundMoney(toAccount.currentBalance - numericAmount);
-    } else {
-      toAccount.currentBalance = roundMoney(toAccount.currentBalance + numericAmount);
-    }
-
-    fromAccount.baseCurrencyBalance = fromAccount.currentBalance;
-    toAccount.baseCurrencyBalance = toAccount.currentBalance;
-
-    await fromAccount.save();
-    await toAccount.save();
-
-    await syncChartAccount(fromAccount);
-    await syncChartAccount(toAccount);
+    const updatedFromAccount = await syncFinancialAccountFromChart(fromAccount);
+    const updatedToAccount = await syncFinancialAccountFromChart(toAccount);
 
     res.status(201).json({
       success: true,
-      message: "Transfer completed successfully",
+      message: "Transfer posted successfully",
       data: { transferOut, transferIn },
       updatedAccounts: {
-        fromAccount,
-        toAccount,
+        fromAccount: updatedFromAccount,
+        toAccount: updatedToAccount,
       },
     });
   } catch (error) {
