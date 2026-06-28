@@ -1,10 +1,12 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
+const { ensureSystemAccounts } = require("../utils/generalLedgerPoster");
 const {
   rebuildAllAccountBalancesFromLedger,
 } = require("../services/accountingEngine");
 
 const getAccounts = async (req, res) => {
   try {
+    await ensureSystemAccounts();
     await rebuildAllAccountBalancesFromLedger();
 
     const accounts = await ChartOfAccount.find({
