@@ -7,12 +7,15 @@ const {
   createExpense,
 } = require("../controllers/expenseController");
 
-const router = express.Router();
-
 const {
   getPayroll,
   getMyPayroll,
   createPayroll,
+} = require("../controllers/payrollController");
+
+const router = express.Router();
+
+const {
   getFinanceSummary,
   getFinancialReports,
   getMonthlyIncomeVsExpenses,
