@@ -1,12 +1,17 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
+const {
+  rebuildAllAccountBalancesFromLedger,
+} = require("../services/accountingEngine");
 
 const getAccounts = async (req, res) => {
   try {
+    await rebuildAllAccountBalancesFromLedger();
+
     const accounts = await ChartOfAccount.find({
-  status: "Active",
-}).sort({
-  accountCode: 1,
-});
+      status: "Active",
+    }).sort({
+      accountCode: 1,
+    });
 
     res.json({
       success: true,
@@ -36,12 +41,7 @@ const createAccount = async (req, res) => {
       description,
     } = req.body;
 
-    if (
-      !accountCode ||
-      !accountName ||
-      !accountCategory ||
-      !normalBalance
-    ) {
+    if (!accountCode || !accountName || !accountCategory || !normalBalance) {
       return res.status(400).json({
         success: false,
         message: "Required fields are missing",
@@ -70,6 +70,8 @@ const createAccount = async (req, res) => {
       normalBalance,
       description,
     });
+
+    await rebuildAllAccountBalancesFromLedger();
 
     res.status(201).json({
       success: true,
