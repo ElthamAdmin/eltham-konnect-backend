@@ -3,6 +3,7 @@ const JournalEntry = require("../models/JournalEntry");
 const ChartOfAccount = require("../models/ChartOfAccount");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const AccountingPeriod = require("../models/AccountingPeriod");
+const FinancialAccount = require("../models/FinancialAccount");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -12,24 +13,19 @@ const SYSTEM_ACCOUNTS = {
   NCB_BANK: "1010",
   ACCOUNTS_RECEIVABLE: "1100",
   INVENTORY: "1200",
-
   ACCOUNTS_PAYABLE: "2000",
   PAYE_PAYABLE: "2100",
   NIS_PAYABLE: "2110",
   NHT_PAYABLE: "2120",
   EDUCATION_TAX_PAYABLE: "2130",
   PENSION_PAYABLE: "2140",
-
   OWNER_EQUITY: "3000",
   OWNER_DRAWINGS: "3050",
   RETAINED_EARNINGS: "3100",
-
   SHIPPING_REVENUE: "4000",
   MARKETPLACE_REVENUE: "4010",
   DELIVERY_REVENUE: "4020",
-
   COST_OF_SALES: "5000",
-
   OPERATING_EXPENSE: "6000",
   PAYROLL_EXPENSE: "6100",
   RENT_EXPENSE: "6200",
@@ -39,151 +35,47 @@ const SYSTEM_ACCOUNTS = {
 };
 
 const SYSTEM_ACCOUNT_DEFINITIONS = [
-  {
-    accountCode: "1000",
-    accountName: "Cash on Hand",
-    accountCategory: "Asset",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "1010",
-    accountName: "NCB Bank",
-    accountCategory: "Asset",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "1100",
-    accountName: "Accounts Receivable",
-    accountCategory: "Asset",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "1200",
-    accountName: "Inventory",
-    accountCategory: "Asset",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "2000",
-    accountName: "Accounts Payable",
-    accountCategory: "Liability",
-    normalBalance: "Credit",
-  },
-  {
-  accountCode: "2100",
-  accountName: "PAYE Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2110",
-  accountName: "NIS Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2120",
-  accountName: "NHT Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2130",
-  accountName: "Education Tax Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-{
-  accountCode: "2140",
-  accountName: "Pension Payable",
-  accountCategory: "Liability",
-  normalBalance: "Credit",
-},
-  {
-    accountCode: "3000",
-    accountName: "Owner Equity",
-    accountCategory: "Equity",
-    normalBalance: "Credit",
-  },
-  {
-  accountCode: "3050",
-  accountName: "Owner Drawings",
-  accountCategory: "Equity",
-  normalBalance: "Debit",
-},
-  {
-    accountCode: "3100",
-    accountName: "Retained Earnings",
-    accountCategory: "Equity",
-    normalBalance: "Credit",
-  },
-  {
-    accountCode: "4000",
-    accountName: "Shipping Revenue",
-    accountCategory: "Revenue",
-    normalBalance: "Credit",
-  },
-  {
-    accountCode: "4010",
-    accountName: "Marketplace Revenue",
-    accountCategory: "Revenue",
-    normalBalance: "Credit",
-  },
-  {
-  accountCode: "4020",
-  accountName: "Delivery Revenue",
-  accountCategory: "Revenue",
-  normalBalance: "Credit",
-},
-  {
-    accountCode: "5000",
-    accountName: "Cost of Sales",
-    accountCategory: "Cost of Sales",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "6000",
-    accountName: "Operating Expense",
-    accountCategory: "Expense",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "6100",
-    accountName: "Payroll Expense",
-    accountCategory: "Expense",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "6200",
-    accountName: "Rent Expense",
-    accountCategory: "Expense",
-    normalBalance: "Debit",
-  },
-  {
-    accountCode: "6300",
-    accountName: "Utilities Expense",
-    accountCategory: "Expense",
-    normalBalance: "Debit",
-  },
-  {
-  accountCode: "6400",
-  accountName: "Delivery Expense",
-  accountCategory: "Expense",
-  normalBalance: "Debit",
-},
-{
-  accountCode: "6500",
-  accountName: "Supplies Expense",
-  accountCategory: "Expense",
-  normalBalance: "Debit",
-},
-];
+  ["1000", "Cash on Hand", "Asset", "Debit"],
+  ["1010", "NCB Bank", "Asset", "Debit"],
+  ["1100", "Accounts Receivable", "Asset", "Debit"],
+  ["1200", "Inventory", "Asset", "Debit"],
+  ["2000", "Accounts Payable", "Liability", "Credit"],
+  ["2100", "PAYE Payable", "Liability", "Credit"],
+  ["2110", "NIS Payable", "Liability", "Credit"],
+  ["2120", "NHT Payable", "Liability", "Credit"],
+  ["2130", "Education Tax Payable", "Liability", "Credit"],
+  ["2140", "Pension Payable", "Liability", "Credit"],
+  ["3000", "Owner Equity", "Equity", "Credit"],
+  ["3050", "Owner Drawings", "Equity", "Debit"],
+  ["3100", "Retained Earnings", "Equity", "Credit"],
+  ["4000", "Shipping Revenue", "Revenue", "Credit"],
+  ["4010", "Marketplace Revenue", "Revenue", "Credit"],
+  ["4020", "Delivery Revenue", "Revenue", "Credit"],
+  ["5000", "Cost of Sales", "Cost of Sales", "Debit"],
+  ["6000", "Operating Expense", "Expense", "Debit"],
+  ["6100", "Payroll Expense", "Expense", "Debit"],
+  ["6200", "Rent Expense", "Expense", "Debit"],
+  ["6300", "Utilities Expense", "Expense", "Debit"],
+  ["6400", "Delivery Expense", "Expense", "Debit"],
+  ["6500", "Supplies Expense", "Expense", "Debit"],
+].map(([accountCode, accountName, accountCategory, normalBalance]) => ({
+  accountCode,
+  accountName,
+  accountCategory,
+  normalBalance,
+}));
 
 const generateEntryNumber = () =>
   `JE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
 const generateLedgerNumber = () =>
   `GL-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+const calculateBaseCurrencyAmount = ({ amount, currency, exchangeRate }) => {
+  const numericAmount = roundMoney(amount);
+  if (String(currency || "JMD").toUpperCase() === "JMD") return numericAmount;
+  return roundMoney(numericAmount * Number(exchangeRate || 1));
+};
 
 const validateAccountingPeriodOpen = async (entryDate) => {
   const postingDate = new Date(entryDate);
@@ -200,14 +92,9 @@ const validateAccountingPeriodOpen = async (entryDate) => {
     periodMonth,
   });
 
-  if (!accountingPeriod) {
-    return;
-  }
+  if (!accountingPeriod) return;
 
-  if (
-    accountingPeriod.status === "Closed" ||
-    accountingPeriod.status === "Locked"
-  ) {
+  if (["Closed", "Locked"].includes(accountingPeriod.status)) {
     throw new Error(
       `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
     );
@@ -222,6 +109,7 @@ const ensureSystemAccounts = async () => {
         $setOnInsert: {
           ...account,
           currentBalance: 0,
+          openingBalance: 0,
           status: "Active",
           isSystemAccount: true,
         },
@@ -232,8 +120,8 @@ const ensureSystemAccounts = async () => {
 };
 
 const validateJournalLines = (lines) => {
-  if (!Array.isArray(lines) || lines.length === 0) {
-    throw new Error("Journal entry lines are required.");
+  if (!Array.isArray(lines) || lines.length < 2) {
+    throw new Error("A journal entry must have at least two lines.");
   }
 
   let totalDebit = 0;
@@ -275,28 +163,103 @@ const validateJournalLines = (lines) => {
   return { totalDebit, totalCredit };
 };
 
-const calculateUpdatedBalance = ({ currentBalance, normalBalance, debit, credit }) => {
-  let updatedBalance = Number(currentBalance || 0);
-
+const calculateUpdatedBalance = ({
+  currentBalance,
+  normalBalance,
+  debit,
+  credit,
+}) => {
   if (normalBalance === "Debit") {
-    updatedBalance += Number(debit || 0);
-    updatedBalance -= Number(credit || 0);
-  } else {
-    updatedBalance -= Number(debit || 0);
-    updatedBalance += Number(credit || 0);
+    return roundMoney(Number(currentBalance || 0) + Number(debit || 0) - Number(credit || 0));
   }
 
-  return roundMoney(updatedBalance);
+  return roundMoney(Number(currentBalance || 0) - Number(debit || 0) + Number(credit || 0));
+};
+
+const syncFinancialAccountsForChartAccount = async (accountCode, session = null) => {
+  const query = FinancialAccount.find({ linkedChartAccountCode: accountCode });
+  if (session) query.session(session);
+
+  const financialAccounts = await query;
+
+  for (const financialAccount of financialAccounts) {
+    const chartAccountQuery = ChartOfAccount.findOne({ accountCode });
+    if (session) chartAccountQuery.session(session);
+
+    const chartAccount = await chartAccountQuery;
+    if (!chartAccount) continue;
+
+    financialAccount.currentBalance = roundMoney(chartAccount.currentBalance || 0);
+    financialAccount.baseCurrencyBalance = calculateBaseCurrencyAmount({
+      amount: financialAccount.currentBalance,
+      currency: financialAccount.currency,
+      exchangeRate: financialAccount.exchangeRate,
+    });
+
+    await financialAccount.save({ session });
+  }
+};
+
+const rebuildAccountBalanceFromLedger = async (accountCode) => {
+  const account = await ChartOfAccount.findOne({ accountCode });
+
+  if (!account) {
+    throw new Error(`Chart account ${accountCode} not found.`);
+  }
+
+  const ledgerLines = await GeneralLedgerTransaction.find({ accountCode }).sort({
+    entryDate: 1,
+    createdAt: 1,
+    _id: 1,
+  });
+
+  let balance = 0;
+
+  for (const line of ledgerLines) {
+    balance = calculateUpdatedBalance({
+      currentBalance: balance,
+      normalBalance: account.normalBalance,
+      debit: line.debit,
+      credit: line.credit,
+    });
+
+    line.runningBalance = balance;
+    await line.save();
+  }
+
+  account.currentBalance = roundMoney(balance);
+  await account.save();
+
+  await syncFinancialAccountsForChartAccount(accountCode);
+
+  return account;
+};
+
+const rebuildAllAccountBalancesFromLedger = async () => {
+  const accounts = await ChartOfAccount.find({ status: "Active" }).sort({
+    accountCode: 1,
+  });
+
+  const rebuiltAccounts = [];
+
+  for (const account of accounts) {
+    const rebuilt = await rebuildAccountBalanceFromLedger(account.accountCode);
+    rebuiltAccounts.push(rebuilt);
+  }
+
+  return rebuiltAccounts;
 };
 
 const postJournalEntry = async ({
   entryDate,
-  memo,
-  reference,
-  sourceModule,
-  createdBy,
+  memo = "",
+  reference = "",
+  sourceModule = "",
+  createdBy = "System User",
   lines = [],
 }) => {
+  await ensureSystemAccounts();
+
   const { totalDebit, totalCredit } = validateJournalLines(lines);
 
   await validateAccountingPeriodOpen(entryDate);
@@ -313,10 +276,11 @@ const postJournalEntry = async ({
       for (const line of lines) {
         const account = await ChartOfAccount.findOne({
           accountCode: line.accountCode,
+          status: "Active",
         }).session(session);
 
         if (!account) {
-          throw new Error(`Chart account ${line.accountCode} not found.`);
+          throw new Error(`Active chart account ${line.accountCode} not found.`);
         }
 
         const debit = roundMoney(line.debit);
@@ -392,6 +356,8 @@ const postJournalEntry = async ({
           ],
           { session }
         );
+
+        await syncFinancialAccountsForChartAccount(line.accountCode, session);
       }
     });
 
@@ -404,5 +370,8 @@ const postJournalEntry = async ({
 module.exports = {
   postJournalEntry,
   ensureSystemAccounts,
+  rebuildAccountBalanceFromLedger,
+  rebuildAllAccountBalancesFromLedger,
+  syncFinancialAccountsForChartAccount,
   SYSTEM_ACCOUNTS,
 };
