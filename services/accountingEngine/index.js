@@ -27,6 +27,8 @@ const trialBalanceService = require("./trialBalanceService");
 
 const balanceSheetService = require("./balanceSheetService");
 
+const profitLossService = require("./profitLossService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -45,4 +47,5 @@ module.exports = {
   periodService,
   trialBalanceService,
   balanceSheetService,
+  profitLossService,
 };
