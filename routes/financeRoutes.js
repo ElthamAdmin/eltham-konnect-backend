@@ -20,7 +20,7 @@ const {
   getFinancialReports,
   getMonthlyIncomeVsExpenses,
   rebuildFinanceBalances,
-} = require("../controllers/financeController");
+} = require("../controllers/reportController");
 
 const { protect } = require("../middleware/authMiddleware");
 
