@@ -69,23 +69,62 @@ const getFinancialReports = async (req, res) => {
 
 const getMonthlyIncomeVsExpenses = async (req, res) => {
   try {
-    const { from = "", to = "" } = req.query;
+    const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
-    const profitAndLoss = await profitLossService.buildProfitAndLoss({
-      from,
-      to,
+    const roundMoney = (value) =>
+      Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+    const toMonthKey = (value) => {
+      if (!value) return "";
+      const date = value instanceof Date ? value : new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return date.toISOString().slice(0, 7);
+    };
+
+    const ledgerTransactions = await GeneralLedgerTransaction.find().sort({
+      entryDate: 1,
+      createdAt: 1,
+    });
+
+    const monthMap = {};
+
+    ledgerTransactions.forEach((item) => {
+      const monthKey = toMonthKey(item.entryDate || item.createdAt);
+      if (!monthKey) return;
+
+      if (!monthMap[monthKey]) {
+        monthMap[monthKey] = {
+          month: monthKey,
+          income: 0,
+          expenses: 0,
+        };
+      }
+
+      if (item.accountCategory === "Revenue") {
+        monthMap[monthKey].income = roundMoney(
+          monthMap[monthKey].income +
+            Number(item.credit || 0) -
+            Number(item.debit || 0)
+        );
+      }
+
+      if (
+        item.accountCategory === "Expense" ||
+        item.accountCategory === "Cost of Sales"
+      ) {
+        monthMap[monthKey].expenses = roundMoney(
+          monthMap[monthKey].expenses +
+            Number(item.debit || 0) -
+            Number(item.credit || 0)
+        );
+      }
     });
 
     res.json({
       success: true,
-      data: {
-        filters: { from, to },
-        revenue: profitAndLoss.revenue,
-        costOfSales: profitAndLoss.costOfSales,
-        operatingExpenses: profitAndLoss.operatingExpenses,
-        grossProfit: profitAndLoss.grossProfit,
-        netProfit: profitAndLoss.netProfit,
-      },
+      data: Object.values(monthMap).sort((a, b) =>
+        a.month.localeCompare(b.month)
+      ),
     });
   } catch (error) {
     console.error("Error getting monthly income vs expenses:", error);
