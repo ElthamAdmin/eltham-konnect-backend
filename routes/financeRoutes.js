@@ -10,8 +10,6 @@ const {
 const router = express.Router();
 
 const {
-  getExpenses,
-  createExpense,
   getPayroll,
   getMyPayroll,
   createPayroll,
