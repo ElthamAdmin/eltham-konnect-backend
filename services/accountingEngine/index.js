@@ -31,6 +31,8 @@ const profitLossService = require("./profitLossService");
 
 const cashFlowService = require("./cashFlowService");
 
+const dashboardService = require("./dashboardService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -51,4 +53,5 @@ module.exports = {
   balanceSheetService,
   profitLossService,
   cashFlowService,
+  dashboardService,
 };
