@@ -17,6 +17,8 @@ const { reverseJournalEntry } = require("./reversalService");
 
 const transactionTemplates = require("./transactionTemplates");
 
+const workflowService = require("./workflowService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -31,4 +33,5 @@ module.exports = {
 
   reverseJournalEntry,
   transactionTemplates,
+  workflowService,
 };
