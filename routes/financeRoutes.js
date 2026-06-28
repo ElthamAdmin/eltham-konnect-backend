@@ -14,6 +14,7 @@ const {
   getFinanceSummary,
   getFinancialReports,
   getMonthlyIncomeVsExpenses,
+  rebuildFinanceBalances,
 } = require("../controllers/financeController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -56,6 +57,7 @@ const upload = multer({
 router.get("/summary", protect, getFinanceSummary);
 router.get("/reports", protect, getFinancialReports);
 router.get("/monthly-chart", protect, getMonthlyIncomeVsExpenses);
+router.post("/rebuild-balances", protect, rebuildFinanceBalances);
 
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);

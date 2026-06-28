@@ -10,6 +10,7 @@ const { writeAuditLog } = require("../utils/auditLogger");
 const {
   postJournalEntry,
   SYSTEM_ACCOUNTS,
+  rebuildAllAccountBalancesFromLedger,
 } = require("../utils/generalLedgerPoster");
 
 const roundMoney = (value) =>
@@ -1449,6 +1450,26 @@ const getMonthlyIncomeVsExpenses = async (req, res) => {
   }
 };
 
+const rebuildFinanceBalances = async (req, res) => {
+  try {
+    const rebuiltAccounts = await rebuildAllAccountBalancesFromLedger();
+
+    res.json({
+      success: true,
+      message: "Finance balances rebuilt successfully from General Ledger.",
+      totalAccountsRebuilt: rebuiltAccounts.length,
+      data: rebuiltAccounts,
+    });
+  } catch (error) {
+    console.error("Error rebuilding finance balances:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to rebuild finance balances",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getExpenses,
   createExpense,
@@ -1458,4 +1479,5 @@ module.exports = {
   getFinanceSummary,
   getFinancialReports,
   getMonthlyIncomeVsExpenses,
+  rebuildFinanceBalances,
 };
