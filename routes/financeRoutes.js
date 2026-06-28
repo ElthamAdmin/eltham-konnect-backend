@@ -13,6 +13,10 @@ const {
   createPayroll,
 } = require("../controllers/payrollController");
 
+const {
+  auditTrialBalance,
+} = require("../controllers/accountingAuditController");
+
 const router = express.Router();
 
 const {
@@ -63,6 +67,7 @@ router.get("/summary", protect, getFinanceSummary);
 router.get("/reports", protect, getFinancialReports);
 router.get("/monthly-chart", protect, getMonthlyIncomeVsExpenses);
 router.post("/rebuild-balances", protect, rebuildFinanceBalances);
+router.get("/audit/trial-balance", protect, auditTrialBalance);
 
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);

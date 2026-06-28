@@ -33,6 +33,8 @@ const cashFlowService = require("./cashFlowService");
 
 const dashboardService = require("./dashboardService");
 
+const integrityAuditService = require("./integrityAuditService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -54,4 +56,5 @@ module.exports = {
   profitLossService,
   cashFlowService,
   dashboardService,
+  integrityAuditService,
 };
