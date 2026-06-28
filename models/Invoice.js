@@ -90,9 +90,40 @@ balanceDue: {
   default: 0,
 },
 
+journalEntryNumber: {
+  type: String,
+  default: "",
+},
+
+journalStatus: {
+  type: String,
+  enum: [
+    "Not Posted",
+    "Posted",
+    "Adjusted",
+    "Reversed",
+  ],
+  default: "Not Posted",
+},
+
+journalPostedAt: {
+  type: Date,
+  default: null,
+},
+
   status: {
     type: String,
-    default: "Unpaid",
+    enum: [
+  "Draft",
+  "Unpaid",
+  "Partially Paid",
+  "Paid",
+  "Cancelled",
+  "Written Off",
+  "Refunded",
+],
+
+default: "Unpaid",
   },
 
   paymentLink: {
