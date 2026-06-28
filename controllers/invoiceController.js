@@ -10,11 +10,9 @@ const CustomerNotification = require("../models/CustomerNotification");
 const PointsHistory = require("../models/PointsHistory");
 const { writeAuditLog } = require("../utils/auditLogger");
 const {
-  postJournalEntry,
-  SYSTEM_ACCOUNTS,
-  ensureSystemAccounts,
-} = require("../utils/generalLedgerPoster");
-const ChartOfAccount = require("../models/ChartOfAccount");
+  postCustomerInvoice,
+  receiveInvoicePayment,
+} = require("../services/accountingService");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -265,52 +263,15 @@ await Package.updateMany(
       referenceId: invoice.invoiceNumber,
     });
 
-    const accountsReceivableAccount =
-  await ChartOfAccount.findOne({
-    accountCode: "1100",
-  });
+    const journalEntry = await postCustomerInvoice({
+  invoice,
+  user: req.user,
+});
 
-const revenueAccount =
-  await ChartOfAccount.findOne({
-    accountCode: "4000",
-  });
-
-  await ensureSystemAccounts();
-
-if (
-  accountsReceivableAccount &&
-  revenueAccount
-) {
-  await postJournalEntry({
-    entryDate: getJamaicaDateString(),
-    memo: `Invoice created for ${invoice.customerName}`,
-    reference: invoice.invoiceNumber,
-    sourceModule: "Invoices",
-    createdBy: req.user?.name || "System User",
-    lines: [
-      {
-        accountCode:
-          accountsReceivableAccount.accountCode,
-        accountName:
-          accountsReceivableAccount.accountName,
-        debit: Number(invoice.finalTotal || 0),
-        credit: 0,
-        description:
-          "Customer invoice receivable",
-      },
-      {
-        accountCode:
-          revenueAccount.accountCode,
-        accountName:
-          revenueAccount.accountName,
-        debit: 0,
-        credit: Number(invoice.finalTotal || 0),
-        description:
-          "Shipping revenue earned",
-      },
-    ],
-  });
-}
+invoice.journalEntryNumber = journalEntry.entryNumber;
+invoice.journalStatus = "Posted";
+invoice.journalPostedAt = new Date();
+await invoice.save();
 
     await writeAuditLog({
       req,
@@ -481,52 +442,15 @@ adjustmentNote: invoiceCharges.adjustmentNote,
       referenceId: invoice.invoiceNumber,
     });
 
-    const accountsReceivableAccount =
-  await ChartOfAccount.findOne({
-    accountCode: "1100",
-  });
+   const journalEntry = await postCustomerInvoice({
+  invoice,
+  user: req.user,
+});
 
-const revenueAccount =
-  await ChartOfAccount.findOne({
-    accountCode: "4000",
-  });
-
-  await ensureSystemAccounts();
-
-if (
-  accountsReceivableAccount &&
-  revenueAccount
-) {
-  await postJournalEntry({
-    entryDate: getJamaicaDateString(),
-    memo: `Invoice created for ${invoice.customerName}`,
-    reference: invoice.invoiceNumber,
-    sourceModule: "Invoices",
-    createdBy: req.user?.name || "System User",
-    lines: [
-      {
-        accountCode:
-          accountsReceivableAccount.accountCode,
-        accountName:
-          accountsReceivableAccount.accountName,
-        debit: Number(invoice.finalTotal || 0),
-        credit: 0,
-        description:
-          "Customer invoice receivable",
-      },
-      {
-        accountCode:
-          revenueAccount.accountCode,
-        accountName:
-          revenueAccount.accountName,
-        debit: 0,
-        credit: Number(invoice.finalTotal || 0),
-        description:
-          "Shipping revenue earned",
-      },
-    ],
-  });
-}
+invoice.journalEntryNumber = journalEntry.entryNumber;
+invoice.journalStatus = "Posted";
+invoice.journalPostedAt = new Date();
+await invoice.save();
 
     await writeAuditLog({
       req,
@@ -917,52 +841,25 @@ changeGiven,
 
 await syncFinancialAccountFromLedger(account);
 
-    const accountsReceivableAccount =
-  await ChartOfAccount.findOne({
-    accountCode: "1100",
-  });
+    const paymentJournalEntry = await receiveInvoicePayment({
+  invoice,
+  receivingAccount: account,
+  amount: invoiceTotal,
+  user: req.user,
+});
 
-const cashAccount =
-  await ChartOfAccount.findOne({
-    accountCode:
-      account.linkedChartAccountCode ||
-      SYSTEM_ACCOUNTS.CASH_ON_HAND,
-  });
-
-  await ensureSystemAccounts();
-
-if (
-  accountsReceivableAccount &&
-  cashAccount
-) {
-  await postJournalEntry({
-    entryDate: getJamaicaDateString(),
-    memo: `Invoice payment received from ${invoice.customerName}`,
+await AccountTransaction.findOneAndUpdate(
+  {
     reference: invoice.invoiceNumber,
-    sourceModule: "Invoices",
-    createdBy: req.user?.name || "System User",
-    lines: [
-      {
-        accountCode: cashAccount.accountCode,
-        accountName: cashAccount.accountName,
-        debit: Number(invoice.finalTotal || 0),
-        credit: 0,
-        description:
-          "Cash received from customer",
-      },
-      {
-        accountCode:
-          accountsReceivableAccount.accountCode,
-        accountName:
-          accountsReceivableAccount.accountName,
-        debit: 0,
-        credit: Number(invoice.finalTotal || 0),
-        description:
-          "Customer receivable cleared",
-      },
-    ],
-  });
-}
+    transactionType: "Invoice Payment",
+  },
+  {
+    $set: {
+      journalEntryNumber: paymentJournalEntry.entryNumber,
+      ledgerReference: paymentJournalEntry.entryNumber,
+    },
+  }
+);
     const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
 
     await Package.updateMany(
