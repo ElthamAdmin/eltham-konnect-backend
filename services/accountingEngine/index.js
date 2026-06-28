@@ -15,6 +15,8 @@ const {
 
 const { reverseJournalEntry } = require("./reversalService");
 
+const transactionTemplates = require("./transactionTemplates");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -28,4 +30,5 @@ module.exports = {
   rebuildAllAccountBalancesFromLedger,
 
   reverseJournalEntry,
+  transactionTemplates,
 };
