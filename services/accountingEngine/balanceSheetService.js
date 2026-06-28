@@ -2,6 +2,30 @@ const { buildTrialBalance } = require("./trialBalanceService");
 const { buildProfitAndLoss } = require("./profitLossService");
 const { roundMoney } = require("./money");
 
+const PROFESSIONAL_EQUITY_ORDER = [
+  "3000",
+  "3010",
+  "3050",
+  "3100",
+  "3200",
+  "CURRENT-EARNINGS",
+];
+
+const sortEquityAccounts = (accounts = []) =>
+  accounts.sort((a, b) => {
+    const aIndex = PROFESSIONAL_EQUITY_ORDER.indexOf(a.accountCode);
+    const bIndex = PROFESSIONAL_EQUITY_ORDER.indexOf(b.accountCode);
+
+    if (aIndex === -1 && bIndex === -1) {
+      return String(a.accountCode).localeCompare(String(b.accountCode));
+    }
+
+    if (aIndex === -1) return 1;
+    if (bIndex === -1) return -1;
+
+    return aIndex - bIndex;
+  });
+
 const buildBalanceSheet = async ({ from = "", to = "" } = {}) => {
   const trialBalance = await buildTrialBalance({ from, to });
   const profitAndLoss = await buildProfitAndLoss({ from, to });
@@ -32,17 +56,21 @@ const buildBalanceSheet = async ({ from = "", to = "" } = {}) => {
 
   const currentYearEarnings = roundMoney(profitAndLoss.netProfit);
 
-  const equity =
-    currentYearEarnings !== 0
-      ? [
-          ...equityAccounts,
-          {
-            accountCode: "CURRENT-EARNINGS",
-            accountName: "Current Year Profit / Loss",
-            amount: currentYearEarnings,
-          },
-        ]
-      : equityAccounts;
+  const hasRealCurrentYearEarningsAccount = equityAccounts.some(
+    (account) => account.accountCode === "3200" && Number(account.amount || 0) !== 0
+  );
+
+  const displayEquityAccounts = [...equityAccounts];
+
+  if (!hasRealCurrentYearEarningsAccount && currentYearEarnings !== 0) {
+    displayEquityAccounts.push({
+      accountCode: "CURRENT-EARNINGS",
+      accountName: "Current Year Profit / Loss",
+      amount: currentYearEarnings,
+    });
+  }
+
+  const equity = sortEquityAccounts(displayEquityAccounts);
 
   const totalAssets = roundMoney(
     assets.reduce((sum, row) => sum + Number(row.amount || 0), 0)
@@ -50,6 +78,10 @@ const buildBalanceSheet = async ({ from = "", to = "" } = {}) => {
 
   const totalLiabilities = roundMoney(
     liabilities.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+  );
+
+  const ownerEquityOnly = roundMoney(
+    equityAccounts.reduce((sum, row) => sum + Number(row.amount || 0), 0)
   );
 
   const totalEquity = roundMoney(
@@ -61,31 +93,35 @@ const buildBalanceSheet = async ({ from = "", to = "" } = {}) => {
 
   return {
     filters: trialBalance.filters,
+
     assets: {
       accounts: assets,
       total: totalAssets,
     },
+
     liabilities: {
       accounts: liabilities,
       total: totalLiabilities,
     },
+
     equity: {
       accounts: equity,
       total: totalEquity,
-      ownerEquityOnly: roundMoney(
-        equityAccounts.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-      ),
+      ownerEquityOnly,
       currentYearEarnings,
     },
+
     totals: {
       totalAssets,
       totalLiabilities,
-      totalEquity,
+      ownerEquityOnly,
       currentYearEarnings,
+      totalEquity,
       liabilitiesPlusEquity,
       difference,
       isBalanced: difference === 0,
     },
+
     diagnostics: {
       trialBalanceIsBalanced: trialBalance.totals.isBalanced,
       trialBalanceDifference: trialBalance.totals.difference,
