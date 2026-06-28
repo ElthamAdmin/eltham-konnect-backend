@@ -68,7 +68,7 @@ const buildOwnerDepositLines = ({ financialAccount, amount, notes = "" }) => {
       description: notes || "Owner capital injection",
     },
     {
-      accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+      accountCode: SYSTEM_ACCOUNTS.OWNER_CAPITAL,
       debit: 0,
       credit: value,
       description: notes || "Owner capital injection",

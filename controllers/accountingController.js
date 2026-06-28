@@ -153,7 +153,7 @@ const closeYearToRetainedEarnings = async (req, res) => {
               description: "Year-end retained earnings closing",
             },
             {
-              accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+              accountCode: SYSTEM_ACCOUNTS.CURRENT_YEAR_EARNINGS,
               debit: netProfit,
               credit: 0,
               description: "Close current earnings into equity",
@@ -167,7 +167,7 @@ const closeYearToRetainedEarnings = async (req, res) => {
               description: "Year-end retained earnings loss closing",
             },
             {
-              accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+              accountCode: SYSTEM_ACCOUNTS.CURRENT_YEAR_EARNINGS,
               debit: 0,
               credit: Math.abs(netProfit),
               description: "Close current loss into equity",
