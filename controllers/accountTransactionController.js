@@ -3,9 +3,10 @@ const AccountTransaction = require("../models/AccountTransaction");
 const ChartOfAccount = require("../models/ChartOfAccount");
 
 const {
-  postJournalEntry,
-  SYSTEM_ACCOUNTS,
-} = require("../utils/generalLedgerPoster");
+  postOwnerDeposit,
+  postOwnerDrawing,
+  transferFunds,
+} = require("../services/accountingService");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -145,43 +146,27 @@ const createTransaction = async (req, res) => {
       });
     }
 
-    let debitAccountCode = "";
-    let creditAccountCode = "";
-    let memo = "";
+    let journalEntry = null;
 
-    if (normalizedType === "Deposit" || normalizedType === "Owner Deposit") {
-      debitAccountCode = account.linkedChartAccountCode;
-      creditAccountCode = SYSTEM_ACCOUNTS.OWNER_EQUITY;
-      memo = `${normalizedType} into ${account.accountName}`;
-    }
+if (normalizedType === "Deposit" || normalizedType === "Owner Deposit") {
+  journalEntry = await postOwnerDeposit({
+    financialAccount: account,
+    amount: numericAmount,
+    reference: reference || normalizedType,
+    notes: notes || "",
+    user: req.user,
+  });
+}
 
-    if (normalizedType === "Withdrawal" || normalizedType === "Owner Drawing") {
-      debitAccountCode = SYSTEM_ACCOUNTS.OWNER_DRAWINGS;
-      creditAccountCode = account.linkedChartAccountCode;
-      memo = `${normalizedType} from ${account.accountName}`;
-    }
-
-    const journalEntry = await postJournalEntry({
-      entryDate: postingDate,
-      memo,
-      reference: reference || normalizedType,
-      sourceModule: "Account Transactions",
-      createdBy: req.user?.fullName || "System User",
-      lines: [
-        {
-          accountCode: debitAccountCode,
-          debit: numericAmount,
-          credit: 0,
-          description: notes || memo,
-        },
-        {
-          accountCode: creditAccountCode,
-          debit: 0,
-          credit: numericAmount,
-          description: notes || memo,
-        },
-      ],
-    });
+if (normalizedType === "Withdrawal" || normalizedType === "Owner Drawing") {
+  journalEntry = await postOwnerDrawing({
+    financialAccount: account,
+    amount: numericAmount,
+    reference: reference || normalizedType,
+    notes: notes || "",
+    user: req.user,
+  });
+}
 
     const transaction = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}`,
@@ -282,27 +267,14 @@ const createTransfer = async (req, res) => {
     const transferRef =
       reference || `Transfer ${fromAccount.accountName} → ${toAccount.accountName}`;
 
-    const journalEntry = await postJournalEntry({
-      entryDate: postingDate,
-      memo: transferRef,
-      reference: transferRef,
-      sourceModule: "Account Transfers",
-      createdBy: req.user?.fullName || "System User",
-      lines: [
-        {
-          accountCode: toAccount.linkedChartAccountCode,
-          debit: numericAmount,
-          credit: 0,
-          description: notes || transferRef,
-        },
-        {
-          accountCode: fromAccount.linkedChartAccountCode,
-          debit: 0,
-          credit: numericAmount,
-          description: notes || transferRef,
-        },
-      ],
-    });
+    const journalEntry = await transferFunds({
+  fromAccount,
+  toAccount,
+  amount: numericAmount,
+  reference: transferRef,
+  notes: notes || "",
+  user: req.user,
+});
 
     const transferOut = await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}-OUT`,
