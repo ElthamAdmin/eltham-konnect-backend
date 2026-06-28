@@ -25,6 +25,8 @@ const periodService = require("./periodService");
 
 const trialBalanceService = require("./trialBalanceService");
 
+const balanceSheetService = require("./balanceSheetService");
+
 module.exports = {
   SYSTEM_ACCOUNTS,
 
@@ -36,11 +38,11 @@ module.exports = {
   syncFinancialAccountsForChartAccount,
   rebuildAccountBalanceFromLedger,
   rebuildAllAccountBalancesFromLedger,
-
   reverseJournalEntry,
   transactionTemplates,
   workflowService,
   accountMappingService,
   periodService,
   trialBalanceService,
+  balanceSheetService,
 };
