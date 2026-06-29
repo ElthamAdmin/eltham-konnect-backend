@@ -73,7 +73,7 @@ const postOpeningBalance = async ({
     lines: isCreditCard
       ? [
           {
-            accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+            accountCode: SYSTEM_ACCOUNTS.OWNER_CAPITAL,
             debit: amount,
             credit: 0,
             description: `Opening balance offset for ${account.accountName}`,
@@ -93,7 +93,7 @@ const postOpeningBalance = async ({
             description: `Opening asset balance for ${account.accountName}`,
           },
           {
-            accountCode: SYSTEM_ACCOUNTS.OWNER_EQUITY,
+            accountCode: SYSTEM_ACCOUNTS.OWNER_CAPITAL,
             debit: 0,
             credit: amount,
             description: `Opening balance offset for ${account.accountName}`,
