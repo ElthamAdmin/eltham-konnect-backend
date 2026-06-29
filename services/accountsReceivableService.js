@@ -2,6 +2,8 @@ const Invoice = require("../models/Invoice");
 const Customer = require("../models/Customer");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
+const AR_ACCOUNT_CODE = "1100";
+
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -26,6 +28,22 @@ const getOpenInvoices = async () => {
   }).sort({ createdAt: 1 });
 };
 
+const getInvoiceExpectedBalance = (invoice) => {
+  return roundMoney(
+    Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
+  );
+};
+
+const getInvoiceReportBalance = (invoice) => {
+  const storedBalance = roundMoney(invoice.balanceDue);
+
+  if (storedBalance > 0) {
+    return storedBalance;
+  }
+
+  return getInvoiceExpectedBalance(invoice);
+};
+
 const buildAgingReport = async () => {
   const invoices = await getOpenInvoices();
 
@@ -39,13 +57,9 @@ const buildAgingReport = async () => {
   };
 
   const rows = invoices.map((invoice) => {
-    const balanceDue = roundMoney(
-      invoice.balanceDue > 0
-        ? invoice.balanceDue
-        : Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
-    );
-
+    const balanceDue = getInvoiceReportBalance(invoice);
     const bucket = getAgeBucket(invoice);
+
     buckets[bucket] = roundMoney(Number(buckets[bucket] || 0) + balanceDue);
 
     return {
@@ -93,11 +107,7 @@ const buildCustomerStatement = async (customerEkonId) => {
     status: invoice.status,
     finalTotal: roundMoney(invoice.finalTotal),
     amountPaid: roundMoney(invoice.amountPaid),
-    balanceDue: roundMoney(
-      invoice.balanceDue > 0
-        ? invoice.balanceDue
-        : Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
-    ),
+    balanceDue: getInvoiceReportBalance(invoice),
     paymentHistory: invoice.paymentHistory || [],
   }));
 
@@ -110,7 +120,9 @@ const buildCustomerStatement = async (customerEkonId) => {
   );
 
   const totalOutstanding = roundMoney(
-    rows.reduce((sum, row) => sum + Number(row.balanceDue || 0), 0)
+    rows
+      .filter((row) => ["Unpaid", "Partially Paid"].includes(row.status))
+      .reduce((sum, row) => sum + Number(row.balanceDue || 0), 0)
   );
 
   return {
@@ -134,17 +146,11 @@ const reconcileARSubledgerToGL = async () => {
   const invoices = await getOpenInvoices();
 
   const subledgerBalance = roundMoney(
-    invoices.reduce((sum, invoice) => {
-      const balanceDue =
-        invoice.balanceDue > 0
-          ? invoice.balanceDue
-          : Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0);
-      return sum + Number(balanceDue || 0);
-    }, 0)
+    invoices.reduce((sum, invoice) => sum + getInvoiceReportBalance(invoice), 0)
   );
 
   const glLines = await GeneralLedgerTransaction.find({
-    accountCode: "1100",
+    accountCode: AR_ACCOUNT_CODE,
   });
 
   const glBalance = roundMoney(
@@ -162,6 +168,21 @@ const reconcileARSubledgerToGL = async () => {
   };
 };
 
+const findInvoiceNumberInLedgerLine = (line, invoiceNumbers = []) => {
+  const searchableText = [
+    line.reference,
+    line.memo,
+    line.description,
+    line.entryNumber,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return invoiceNumbers.find((invoiceNumber) =>
+    searchableText.includes(invoiceNumber)
+  );
+};
+
 const buildARDiagnosticAudit = async () => {
   const invoices = await Invoice.find().sort({
     createdAt: 1,
@@ -169,18 +190,18 @@ const buildARDiagnosticAudit = async () => {
   });
 
   const arLedgerLines = await GeneralLedgerTransaction.find({
-    accountCode: "1100",
+    accountCode: AR_ACCOUNT_CODE,
   }).sort({
     entryDate: 1,
     createdAt: 1,
   });
 
+  const invoiceNumbers = invoices.map((invoice) => invoice.invoiceNumber);
   const invoiceMap = {};
 
   invoices.forEach((invoice) => {
-    const expectedBalance = roundMoney(
-      Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
-    );
+    const expectedBalance = getInvoiceExpectedBalance(invoice);
+    const reportBalance = getInvoiceReportBalance(invoice);
 
     invoiceMap[invoice.invoiceNumber] = {
       invoiceNumber: invoice.invoiceNumber,
@@ -191,6 +212,7 @@ const buildARDiagnosticAudit = async () => {
       amountPaid: roundMoney(invoice.amountPaid),
       storedBalanceDue: roundMoney(invoice.balanceDue),
       expectedBalanceDue: expectedBalance,
+      reportBalanceDue: reportBalance,
       invoiceBalanceMismatch: roundMoney(
         Number(invoice.balanceDue || 0) - expectedBalance
       ),
@@ -199,16 +221,15 @@ const buildARDiagnosticAudit = async () => {
       ledgerBalance: 0,
       ledgerDifference: 0,
       relatedLedgerLines: [],
+      issueTypes: [],
+      hasIssue: false,
     };
   });
 
   const orphanLedgerLines = [];
 
   arLedgerLines.forEach((line) => {
-    const reference = line.reference || line.memo || "";
-    const invoiceNumber = Object.keys(invoiceMap).find((number) =>
-      String(reference).includes(number)
-    );
+    const invoiceNumber = findInvoiceNumberInLedgerLine(line, invoiceNumbers);
 
     const lineData = {
       ledgerNumber: line.ledgerNumber,
@@ -240,24 +261,61 @@ const buildARDiagnosticAudit = async () => {
 
   const rows = Object.values(invoiceMap).map((row) => {
     const ledgerBalance = roundMoney(row.ledgerDebit - row.ledgerCredit);
-    const expectedBalanceDue = roundMoney(row.expectedBalanceDue);
+    const ledgerDifference = roundMoney(ledgerBalance - row.reportBalanceDue);
+    const issueTypes = [];
+
+    if (
+      ["Unpaid", "Partially Paid"].includes(row.status) &&
+      row.relatedLedgerLines.length === 0
+    ) {
+      issueTypes.push("OPEN_INVOICE_WITH_NO_AR_LEDGER");
+    }
+
+    if (
+      row.status === "Paid" &&
+      row.reportBalanceDue !== 0
+    ) {
+      issueTypes.push("PAID_INVOICE_WITH_BALANCE");
+    }
+
+    if (
+      ["Unpaid", "Partially Paid"].includes(row.status) &&
+      row.invoiceBalanceMismatch !== 0
+    ) {
+      issueTypes.push("INVOICE_BALANCE_FIELD_MISMATCH");
+    }
+
+    if (
+      row.relatedLedgerLines.length > 0 &&
+      ledgerDifference !== 0 &&
+      Math.abs(ledgerDifference) >= 0.01
+    ) {
+      issueTypes.push("INVOICE_LEDGER_MISMATCH");
+    }
 
     return {
       ...row,
       ledgerBalance,
-      ledgerDifference: roundMoney(ledgerBalance - expectedBalanceDue),
-      hasIssue:
-        roundMoney(row.invoiceBalanceMismatch) !== 0 ||
-        roundMoney(ledgerBalance - expectedBalanceDue) !== 0,
+      ledgerDifference,
+      issueTypes,
+      hasIssue: issueTypes.length > 0,
     };
   });
 
-  const issueRows = rows.filter((row) => row.hasIssue);
+  const issues = rows.filter((row) => row.hasIssue);
+
+  const issueSummary = issues.reduce((summary, row) => {
+    row.issueTypes.forEach((type) => {
+      summary[type] = Number(summary[type] || 0) + 1;
+    });
+
+    return summary;
+  }, {});
 
   const invoiceSubledgerBalance = roundMoney(
     rows
       .filter((row) => ["Unpaid", "Partially Paid"].includes(row.status))
-      .reduce((sum, row) => sum + Number(row.expectedBalanceDue || 0), 0)
+      .reduce((sum, row) => sum + Number(row.reportBalanceDue || 0), 0)
   );
 
   const glARBalance = roundMoney(
@@ -267,18 +325,21 @@ const buildARDiagnosticAudit = async () => {
     )
   );
 
+  const difference = roundMoney(invoiceSubledgerBalance - glARBalance);
+
   return {
     generatedAt: new Date().toISOString(),
     totals: {
       invoiceSubledgerBalance,
       glARBalance,
-      difference: roundMoney(invoiceSubledgerBalance - glARBalance),
-      isReconciled: roundMoney(invoiceSubledgerBalance - glARBalance) === 0,
+      difference,
+      isReconciled: difference === 0,
       invoiceCount: rows.length,
-      issueCount: issueRows.length,
+      issueCount: issues.length,
       orphanLedgerLineCount: orphanLedgerLines.length,
     },
-    issues: issueRows,
+    issueSummary,
+    issues,
     orphanLedgerLines,
     rows,
   };
