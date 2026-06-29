@@ -869,6 +869,184 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
   };
 };
 
+const isSameOrBeforeToday = (value) => {
+  if (!value) return false;
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  return date <= today;
+};
+
+const getCollectionPriorityScore = ({
+  daysOutstanding = 0,
+  balanceDue = 0,
+  collectionsStatus = "Normal",
+  promiseToPayStatus = "None",
+  nextFollowUpDate = null,
+  promiseToPayDate = null,
+}) => {
+  let score = 0;
+
+  score += Math.min(40, Number(daysOutstanding || 0) * 0.5);
+  score += Math.min(25, Number(balanceDue || 0) / 1000);
+
+  if (["Overdue", "Collections", "Legal Review"].includes(collectionsStatus)) {
+    score += 15;
+  }
+
+  if (promiseToPayStatus === "Broken") score += 20;
+
+  if (
+    promiseToPayStatus === "Pending" &&
+    promiseToPayDate &&
+    isSameOrBeforeToday(promiseToPayDate)
+  ) {
+    score += 20;
+  }
+
+  if (nextFollowUpDate && isSameOrBeforeToday(nextFollowUpDate)) {
+    score += 10;
+  }
+
+  return Math.min(100, roundMoney(score));
+};
+
+const getRecommendedCollectionAction = ({
+  daysOutstanding = 0,
+  collectionsStatus = "Normal",
+  promiseToPayStatus = "None",
+  nextFollowUpDate = null,
+  promiseToPayDate = null,
+}) => {
+  if (
+    promiseToPayStatus === "Pending" &&
+    promiseToPayDate &&
+    isSameOrBeforeToday(promiseToPayDate)
+  ) {
+    return "Review broken promise and call customer";
+  }
+
+  if (promiseToPayStatus === "Broken") {
+    return "Escalate broken promise";
+  }
+
+  if (daysOutstanding >= 90) return "Final notice / write-off review";
+  if (daysOutstanding >= 60) return "Escalate to collections";
+  if (daysOutstanding >= 31) return "Call customer";
+
+  if (nextFollowUpDate && isSameOrBeforeToday(nextFollowUpDate)) {
+    return "Complete scheduled follow-up";
+  }
+
+  if (collectionsStatus === "Normal") return "Send reminder";
+
+  return "Review account";
+};
+
+const buildCollectionsWorkQueue = async () => {
+  const invoices = await getOpenInvoices();
+
+  const queue = invoices.map((invoice) => {
+    const balanceDue = getInvoiceReportBalance(invoice);
+    const daysOutstanding = getDaysOutstanding(invoice.dueDate || invoice.createdAt);
+
+    const promiseDue =
+      invoice.promiseToPayStatus === "Pending" &&
+      invoice.promiseToPayDate &&
+      isSameOrBeforeToday(invoice.promiseToPayDate);
+
+    const followUpDue =
+      invoice.nextFollowUpDate && isSameOrBeforeToday(invoice.nextFollowUpDate);
+
+    const priorityScore = getCollectionPriorityScore({
+      daysOutstanding,
+      balanceDue,
+      collectionsStatus: invoice.collectionsStatus,
+      promiseToPayStatus: invoice.promiseToPayStatus,
+      nextFollowUpDate: invoice.nextFollowUpDate,
+      promiseToPayDate: invoice.promiseToPayDate,
+    });
+
+    let reason = "Open receivable";
+
+    if (promiseDue) reason = "Promise-to-pay due or overdue";
+    else if (invoice.promiseToPayStatus === "Broken") reason = "Broken promise";
+    else if (followUpDue) reason = "Follow-up due";
+    else if (daysOutstanding >= 90) reason = "90+ days outstanding";
+    else if (daysOutstanding >= 60) reason = "60+ days outstanding";
+    else if (daysOutstanding >= 31) reason = "31+ days outstanding";
+
+    const priority =
+      priorityScore >= 80
+        ? "Critical"
+        : priorityScore >= 60
+          ? "High"
+          : priorityScore >= 35
+            ? "Medium"
+            : "Low";
+
+    return {
+      invoiceNumber: invoice.invoiceNumber,
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
+      invoiceDate: invoice.createdAt,
+      dueDate: invoice.dueDate || invoice.createdAt,
+      balanceDue,
+      amountPaid: roundMoney(invoice.amountPaid),
+      finalTotal: roundMoney(invoice.finalTotal),
+      daysOutstanding,
+      collectionsStatus: invoice.collectionsStatus || "Normal",
+      assignedCollector: invoice.assignedCollector || "",
+      nextFollowUpDate: invoice.nextFollowUpDate,
+      promiseToPayDate: invoice.promiseToPayDate,
+      promiseToPayAmount: roundMoney(invoice.promiseToPayAmount),
+      promiseToPayStatus: invoice.promiseToPayStatus || "None",
+      priorityScore,
+      priority,
+      reason,
+      recommendedAction: getRecommendedCollectionAction({
+        daysOutstanding,
+        collectionsStatus: invoice.collectionsStatus,
+        promiseToPayStatus: invoice.promiseToPayStatus,
+        nextFollowUpDate: invoice.nextFollowUpDate,
+        promiseToPayDate: invoice.promiseToPayDate,
+      }),
+      flags: {
+        followUpDue,
+        promiseDue,
+        brokenPromise: invoice.promiseToPayStatus === "Broken",
+        highRisk: priorityScore >= 60,
+        over30: daysOutstanding >= 31,
+        over60: daysOutstanding >= 60,
+        over90: daysOutstanding >= 90,
+      },
+    };
+  });
+
+  const sortedQueue = queue.sort(
+    (a, b) => Number(b.priorityScore || 0) - Number(a.priorityScore || 0)
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      totalOpenItems: sortedQueue.length,
+      dueToday: sortedQueue.filter((item) => item.flags.followUpDue).length,
+      brokenPromises: sortedQueue.filter((item) => item.flags.brokenPromise).length,
+      promiseDue: sortedQueue.filter((item) => item.flags.promiseDue).length,
+      highRisk: sortedQueue.filter((item) => item.flags.highRisk).length,
+      over30: sortedQueue.filter((item) => item.flags.over30).length,
+      over60: sortedQueue.filter((item) => item.flags.over60).length,
+      over90: sortedQueue.filter((item) => item.flags.over90).length,
+    },
+    queue: sortedQueue,
+  };
+};
+
 const addInvoiceCollectionNote = async ({
   invoiceNumber,
   note,
@@ -926,6 +1104,7 @@ module.exports = {
   buildARDiagnosticAudit,
   buildCollectionsDashboard,
   buildCustomerCollectionsProfile,
+  buildCollectionsWorkQueue,
   addInvoiceCollectionNote,
   updateInvoiceCollectionWorkflow,
 };

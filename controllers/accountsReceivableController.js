@@ -5,6 +5,7 @@ const {
   buildARDiagnosticAudit,
   buildCollectionsDashboard,
   buildCustomerCollectionsProfile,
+  buildCollectionsWorkQueue,
   addInvoiceCollectionNote,
   updateInvoiceCollectionWorkflow,
 } = require("../services/accountsReceivableService");
@@ -76,6 +77,20 @@ const getCollectionsDashboard = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Could not load collections dashboard",
+      error: error.message,
+    });
+  }
+};
+
+const getCollectionsWorkQueue = async (req, res) => {
+  try {
+    const queue = await buildCollectionsWorkQueue();
+    res.json({ success: true, data: queue });
+  } catch (error) {
+    console.error("Collections work queue error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load collections work queue",
       error: error.message,
     });
   }
@@ -166,6 +181,7 @@ module.exports = {
   getCollectionsDashboard,
   getARDiagnosticAudit,
   getCustomerCollectionsProfile,
+  getCollectionsWorkQueue,
   addCollectionNote,
   updateCollectionWorkflow,
 };

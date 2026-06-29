@@ -10,6 +10,7 @@ const {
   getARDiagnosticAudit,
   getCollectionsDashboard,
   getCustomerCollectionsProfile,
+  getCollectionsWorkQueue,
   addCollectionNote,
   updateCollectionWorkflow,
 } = require("../controllers/accountsReceivableController");
@@ -21,5 +22,6 @@ router.get("/customers/:customerEkonId/statement", protect, getCustomerStatement
 router.get("/collections/customers/:customerEkonId", protect, getCustomerCollectionsProfile);
 router.post("/collections/invoices/:invoiceNumber/notes", protect, addCollectionNote);
 router.put("/collections/invoices/:invoiceNumber/workflow", protect, updateCollectionWorkflow);
+router.get("/collections/work-queue", protect, getCollectionsWorkQueue);
 router.get("/collections-dashboard", protect, getCollectionsDashboard);
 module.exports = router;
