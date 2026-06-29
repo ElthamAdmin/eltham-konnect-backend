@@ -8,6 +8,7 @@ const {
   getCustomerStatement,
   getARReconciliation,
     getARDiagnosticAudit,
+    getCollectionsDashboard,
 
 } = require("../controllers/accountsReceivableController");
 
@@ -15,5 +16,5 @@ router.get("/aging", protect, getARAging);
 router.get("/reconcile", protect, getARReconciliation);
 router.get("/diagnostic-audit", protect, getARDiagnosticAudit);
 router.get("/customers/:customerEkonId/statement", protect, getCustomerStatement);
-
+router.get("/collections-dashboard", protect, getCollectionsDashboard);
 module.exports = router;

@@ -467,9 +467,92 @@ const buildARDiagnosticAudit = async () => {
   };
 };
 
+const buildCollectionsDashboard = async () => {
+  const aging = await buildAgingReport();
+  const reconciliation = await reconcileARSubledgerToGL();
+  const diagnostic = await buildARDiagnosticAudit();
+
+  const rows = aging.rows || [];
+
+  const overdueRows = rows.filter((row) =>
+    ["31-60", "61-90", "90+"].includes(row.bucket)
+  );
+
+  const topDebtors = [...rows]
+    .sort((a, b) => Number(b.balanceDue || 0) - Number(a.balanceDue || 0))
+    .slice(0, 10);
+
+  const oldestInvoices = [...rows]
+    .sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate))
+    .slice(0, 10);
+
+  const customersMap = {};
+
+  rows.forEach((row) => {
+    if (!customersMap[row.customerEkonId]) {
+      customersMap[row.customerEkonId] = {
+        customerEkonId: row.customerEkonId,
+        customerName: row.customerName,
+        outstandingBalance: 0,
+        invoiceCount: 0,
+        oldestInvoiceDate: row.invoiceDate,
+      };
+    }
+
+    customersMap[row.customerEkonId].outstandingBalance = roundMoney(
+      customersMap[row.customerEkonId].outstandingBalance + Number(row.balanceDue || 0)
+    );
+
+    customersMap[row.customerEkonId].invoiceCount += 1;
+
+    if (new Date(row.invoiceDate) < new Date(customersMap[row.customerEkonId].oldestInvoiceDate)) {
+      customersMap[row.customerEkonId].oldestInvoiceDate = row.invoiceDate;
+    }
+  });
+
+  const overdueCustomers = Object.values(customersMap).filter((customer) =>
+    overdueRows.some((row) => row.customerEkonId === customer.customerEkonId)
+  );
+
+  const currentAmount = roundMoney(
+    Number(aging.buckets.Current || 0) + Number(aging.buckets["1-30"] || 0)
+  );
+
+  const overdueAmount = roundMoney(
+    Number(aging.buckets["31-60"] || 0) +
+      Number(aging.buckets["61-90"] || 0) +
+      Number(aging.buckets["90+"] || 0)
+  );
+
+  const totalOutstanding = roundMoney(aging.totalOutstanding);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    kpis: {
+      totalOutstanding,
+      currentAmount,
+      overdueAmount,
+      overdueCustomers: overdueCustomers.length,
+      openInvoiceCount: rows.length,
+      reconciliationDifference: reconciliation.difference,
+      reconciliationStatus: reconciliation.isReconciled ? "Balanced" : "Review Required",
+      diagnosticHealthScore: diagnostic.healthScore,
+      criticalIssues: diagnostic.issueSummary?.critical || 0,
+      warningIssues: diagnostic.issueSummary?.warning || 0,
+    },
+    agingBuckets: aging.buckets,
+    topDebtors,
+    oldestInvoices,
+    overdueCustomers,
+    recommendations: diagnostic.recommendations || [],
+  };
+};
+
 module.exports = {
   buildAgingReport,
   buildCustomerStatement,
   reconcileARSubledgerToGL,
   buildARDiagnosticAudit,
+  buildCollectionsDashboard,
+
 };

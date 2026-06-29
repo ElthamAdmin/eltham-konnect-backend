@@ -3,6 +3,7 @@ const {
   buildCustomerStatement,
   reconcileARSubledgerToGL,
   buildARDiagnosticAudit,
+  buildCollectionsDashboard,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -63,9 +64,24 @@ const getARDiagnosticAudit = async (req, res) => {
   }
 };
 
+const getCollectionsDashboard = async (req, res) => {
+  try {
+    const dashboard = await buildCollectionsDashboard();
+    res.json({ success: true, data: dashboard });
+  } catch (error) {
+    console.error("Collections dashboard error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load collections dashboard",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getARAging,
   getCustomerStatement,
   getARReconciliation,
+  getCollectionsDashboard,
   getARDiagnosticAudit,
 };
