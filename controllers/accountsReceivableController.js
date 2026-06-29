@@ -4,6 +4,9 @@ const {
   reconcileARSubledgerToGL,
   buildARDiagnosticAudit,
   buildCollectionsDashboard,
+  buildCustomerCollectionsProfile,
+  addInvoiceCollectionNote,
+  updateInvoiceCollectionWorkflow,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -78,10 +81,91 @@ const getCollectionsDashboard = async (req, res) => {
   }
 };
 
+const getCustomerCollectionsProfile = async (req, res) => {
+  try {
+    const { customerEkonId } = req.params;
+    const profile = await buildCustomerCollectionsProfile(customerEkonId);
+
+    res.json({ success: true, data: profile });
+  } catch (error) {
+    console.error("Customer collections profile error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load customer collections profile",
+      error: error.message,
+    });
+  }
+};
+
+const addCollectionNote = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { note } = req.body;
+
+    if (!note || !String(note).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Collection note is required.",
+      });
+    }
+
+    const invoice = await addInvoiceCollectionNote({
+      invoiceNumber,
+      note: String(note).trim(),
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: "Collection note added successfully",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Add collection note error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not add collection note",
+      error: error.message,
+    });
+  }
+};
+
+const updateCollectionWorkflow = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+
+    const invoice = await updateInvoiceCollectionWorkflow({
+      invoiceNumber,
+      collectionsStatus: req.body.collectionsStatus,
+      assignedCollector: req.body.assignedCollector,
+      nextFollowUpDate: req.body.nextFollowUpDate,
+      promiseToPayDate: req.body.promiseToPayDate,
+      promiseToPayAmount: req.body.promiseToPayAmount,
+      promiseToPayStatus: req.body.promiseToPayStatus,
+    });
+
+    res.json({
+      success: true,
+      message: "Collection workflow updated successfully",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Update collection workflow error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not update collection workflow",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getARAging,
   getCustomerStatement,
   getARReconciliation,
   getCollectionsDashboard,
   getARDiagnosticAudit,
+  getCustomerCollectionsProfile,
+  addCollectionNote,
+  updateCollectionWorkflow,
 };

@@ -118,6 +118,48 @@ collectionsStatus: {
   default: "Normal",
 },
 
+assignedCollector: {
+  type: String,
+  default: "",
+},
+
+lastCollectionContact: {
+  type: Date,
+  default: null,
+},
+
+nextFollowUpDate: {
+  type: Date,
+  default: null,
+},
+
+promiseToPayDate: {
+  type: Date,
+  default: null,
+},
+
+promiseToPayAmount: {
+  type: Number,
+  default: 0,
+},
+
+promiseToPayStatus: {
+  type: String,
+  enum: ["None", "Pending", "Fulfilled", "Broken"],
+  default: "None",
+},
+
+collectionNotes: [
+  {
+    note: String,
+    createdBy: String,
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
+
 writeOffJournalEntryNumber: {
   type: String,
   default: "",

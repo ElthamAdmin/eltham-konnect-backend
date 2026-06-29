@@ -548,11 +548,274 @@ const buildCollectionsDashboard = async () => {
   };
 };
 
+const getDaysOutstanding = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 0;
+
+  return Math.max(
+    0,
+    Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24))
+  );
+};
+
+const getCustomerRiskLevel = ({ oldestInvoiceDays = 0, outstandingBalance = 0 }) => {
+  if (oldestInvoiceDays >= 90 || outstandingBalance >= 50000) return "Critical";
+  if (oldestInvoiceDays >= 60 || outstandingBalance >= 25000) return "High";
+  if (oldestInvoiceDays >= 31 || outstandingBalance >= 10000) return "Medium";
+  return "Low";
+};
+
+const getCollectionStatusFromRisk = (riskLevel) => {
+  if (riskLevel === "Critical") return "Collections";
+  if (riskLevel === "High") return "Overdue";
+  if (riskLevel === "Medium") return "Follow Up";
+  return "Normal";
+};
+
+const buildCustomerCollectionRecommendations = ({
+  riskLevel,
+  openInvoices,
+  oldestInvoiceDays,
+  outstandingBalance,
+  promiseToPayStatus,
+}) => {
+  const recommendations = [];
+
+  if (openInvoices === 0) {
+    recommendations.push("No open receivables. No collection action required.");
+    return recommendations;
+  }
+
+  if (riskLevel === "Critical") {
+    recommendations.push("Escalate this customer for urgent collection review.");
+  }
+
+  if (riskLevel === "High") {
+    recommendations.push("Contact customer and request payment arrangement.");
+  }
+
+  if (oldestInvoiceDays >= 60) {
+    recommendations.push("Invoice is over 60 days outstanding. Phone follow-up recommended.");
+  }
+
+  if (oldestInvoiceDays >= 90) {
+    recommendations.push("Invoice is over 90 days outstanding. Consider final notice or write-off review.");
+  }
+
+  if (outstandingBalance >= 25000) {
+    recommendations.push("High credit exposure. Review before allowing further credit.");
+  }
+
+  if (promiseToPayStatus === "Pending") {
+    recommendations.push("Customer has a pending promise-to-pay. Monitor follow-up date.");
+  }
+
+  return recommendations;
+};
+
+const buildCustomerCollectionsProfile = async (customerEkonId) => {
+  const customer = await Customer.findOne({ ekonId: customerEkonId });
+
+  if (!customer) {
+    throw new Error("Customer not found.");
+  }
+
+  const invoices = await Invoice.find({ customerEkonId }).sort({
+    createdAt: 1,
+    invoiceNumber: 1,
+  });
+
+  const openInvoices = invoices.filter((invoice) =>
+    ["Unpaid", "Partially Paid"].includes(invoice.status)
+  );
+
+  const invoiceRows = invoices.map((invoice) => {
+    const balanceDue = getInvoiceReportBalance(invoice);
+    const daysOutstanding = getDaysOutstanding(invoice.dueDate || invoice.createdAt);
+
+    return {
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.createdAt,
+      dueDate: invoice.dueDate || invoice.createdAt,
+      status: invoice.status,
+      collectionsStatus: invoice.collectionsStatus,
+      finalTotal: roundMoney(invoice.finalTotal),
+      amountPaid: roundMoney(invoice.amountPaid),
+      balanceDue,
+      daysOutstanding,
+      agingBucket: getAgeBucket(invoice),
+      assignedCollector: invoice.assignedCollector || "",
+      nextFollowUpDate: invoice.nextFollowUpDate,
+      promiseToPayDate: invoice.promiseToPayDate,
+      promiseToPayAmount: roundMoney(invoice.promiseToPayAmount),
+      promiseToPayStatus: invoice.promiseToPayStatus || "None",
+      collectionNotes: invoice.collectionNotes || [],
+      paymentHistory: invoice.paymentHistory || [],
+    };
+  });
+
+  const openInvoiceRows = invoiceRows.filter((row) =>
+    ["Unpaid", "Partially Paid"].includes(row.status)
+  );
+
+  const totalInvoiced = roundMoney(
+    invoiceRows.reduce((sum, row) => sum + Number(row.finalTotal || 0), 0)
+  );
+
+  const totalPaid = roundMoney(
+    invoiceRows.reduce((sum, row) => sum + Number(row.amountPaid || 0), 0)
+  );
+
+  const outstandingBalance = roundMoney(
+    openInvoiceRows.reduce((sum, row) => sum + Number(row.balanceDue || 0), 0)
+  );
+
+  const oldestInvoiceDays =
+    openInvoiceRows.length > 0
+      ? Math.max(...openInvoiceRows.map((row) => Number(row.daysOutstanding || 0)))
+      : 0;
+
+  const lastPaymentDates = invoiceRows
+    .flatMap((row) => row.paymentHistory || [])
+    .map((payment) => new Date(payment.paymentDate))
+    .filter((date) => !Number.isNaN(date.getTime()))
+    .sort((a, b) => b - a);
+
+  const lastPaymentDate =
+    lastPaymentDates.length > 0 ? lastPaymentDates[0].toISOString() : null;
+
+  const paymentHistory = invoiceRows
+    .flatMap((row) =>
+      (row.paymentHistory || []).map((payment) => ({
+        invoiceNumber: row.invoiceNumber,
+        paymentDate: payment.paymentDate,
+        amount: roundMoney(payment.amount),
+        paymentMethod: payment.paymentMethod,
+        receivingAccountName: payment.receivingAccountName,
+        journalEntryNumber: payment.journalEntryNumber,
+        receivedBy: payment.receivedBy,
+      }))
+    )
+    .sort((a, b) => new Date(b.paymentDate) - new Date(a.paymentDate));
+
+  const collectionNotes = invoiceRows
+    .flatMap((row) =>
+      (row.collectionNotes || []).map((note) => ({
+        invoiceNumber: row.invoiceNumber,
+        note: note.note,
+        createdBy: note.createdBy,
+        createdAt: note.createdAt,
+      }))
+    )
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+  const pendingPromise = openInvoiceRows.find(
+    (row) => row.promiseToPayStatus === "Pending"
+  );
+
+  const riskLevel = getCustomerRiskLevel({
+    oldestInvoiceDays,
+    outstandingBalance,
+  });
+
+  const collectionStatus = getCollectionStatusFromRisk(riskLevel);
+
+  return {
+    customer: {
+      ekonId: customer.ekonId,
+      name: customer.name,
+      email: customer.email,
+      phone: customer.phone,
+      branch: customer.branch,
+      address: customer.address,
+      status: customer.status,
+    },
+
+    summary: {
+      totalInvoiced,
+      totalPaid,
+      outstandingBalance,
+      openInvoiceCount: openInvoiceRows.length,
+      totalInvoiceCount: invoiceRows.length,
+      oldestInvoiceDays,
+      lastPaymentDate,
+      riskLevel,
+      collectionStatus,
+      pendingPromiseToPay: pendingPromise || null,
+    },
+
+    openInvoices: openInvoiceRows,
+    allInvoices: invoiceRows,
+    paymentHistory,
+    collectionNotes,
+
+    recommendations: buildCustomerCollectionRecommendations({
+      riskLevel,
+      openInvoices: openInvoiceRows.length,
+      oldestInvoiceDays,
+      outstandingBalance,
+      promiseToPayStatus: pendingPromise?.promiseToPayStatus || "None",
+    }),
+  };
+};
+
+const addInvoiceCollectionNote = async ({
+  invoiceNumber,
+  note,
+  user,
+}) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note,
+    createdBy: user?.fullName || user?.name || user?.email || "System User",
+  });
+
+  invoice.lastCollectionContact = new Date();
+  await invoice.save();
+
+  return invoice;
+};
+
+const updateInvoiceCollectionWorkflow = async ({
+  invoiceNumber,
+  collectionsStatus,
+  assignedCollector,
+  nextFollowUpDate,
+  promiseToPayDate,
+  promiseToPayAmount,
+  promiseToPayStatus,
+}) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  if (collectionsStatus !== undefined) invoice.collectionsStatus = collectionsStatus;
+  if (assignedCollector !== undefined) invoice.assignedCollector = assignedCollector;
+  if (nextFollowUpDate !== undefined) invoice.nextFollowUpDate = nextFollowUpDate || null;
+  if (promiseToPayDate !== undefined) invoice.promiseToPayDate = promiseToPayDate || null;
+  if (promiseToPayAmount !== undefined) invoice.promiseToPayAmount = roundMoney(promiseToPayAmount);
+  if (promiseToPayStatus !== undefined) invoice.promiseToPayStatus = promiseToPayStatus;
+
+  await invoice.save();
+
+  return invoice;
+};
+
 module.exports = {
   buildAgingReport,
   buildCustomerStatement,
   reconcileARSubledgerToGL,
   buildARDiagnosticAudit,
   buildCollectionsDashboard,
-
+  buildCustomerCollectionsProfile,
+  addInvoiceCollectionNote,
+  updateInvoiceCollectionWorkflow,
 };
