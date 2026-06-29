@@ -90,6 +90,39 @@ balanceDue: {
   default: 0,
 },
 
+dueDate: {
+  type: String,
+  default: "",
+},
+
+paymentTerms: {
+  type: String,
+  default: "Due on Receipt",
+},
+
+paymentHistory: [
+  {
+    paymentDate: Date,
+    amount: Number,
+    paymentMethod: String,
+    receivingAccountNumber: String,
+    receivingAccountName: String,
+    journalEntryNumber: String,
+    receivedBy: String,
+  },
+],
+
+collectionsStatus: {
+  type: String,
+  enum: ["Normal", "Follow Up", "Overdue", "Collections", "Written Off"],
+  default: "Normal",
+},
+
+writeOffJournalEntryNumber: {
+  type: String,
+  default: "",
+},
+
 journalEntryNumber: {
   type: String,
   default: "",

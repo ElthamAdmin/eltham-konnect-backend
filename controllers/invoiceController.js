@@ -5,6 +5,7 @@ const HREmployee = require("../models/HREmployee");
 const Payroll = require("../models/Payroll");
 const ShippingRate = require("../models/ShippingRate");
 const FinancialAccount = require("../models/FinancialAccount");
+const ChartOfAccount = require("../models/ChartOfAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const CustomerNotification = require("../models/CustomerNotification");
 const PointsHistory = require("../models/PointsHistory");
@@ -289,6 +290,12 @@ await invoice.save();
       },
     });
 
+    invoice.amountPaid = 0;
+    invoice.balanceDue = finalTotal;
+    invoice.dueDate = getJamaicaDateString();
+    invoice.paymentTerms = "Due on Receipt";
+
+
     res.json({
       success: true,
       message: "Invoice created successfully from ready packages",
@@ -468,6 +475,11 @@ await invoice.save();
         selectedPackageIds: readyPackages.map((pkg) => String(pkg._id)),
       },
     });
+
+    invoice.amountPaid = 0;
+    invoice.balanceDue = finalTotal;
+    invoice.dueDate = getJamaicaDateString();
+    invoice.paymentTerms = "Due on Receipt";
 
     res.json({
       success: true,
@@ -750,10 +762,11 @@ const markInvoicePaid = async (req, res) => {
   try {
     const { invoiceNumber } = req.params;
     const {
-  receivingAccountNumber,
-  paymentMethod = "Cash",
-  amountTendered,
-} = req.body;
+      receivingAccountNumber,
+      paymentMethod = "Cash",
+      amountTendered,
+      paymentAmount,
+    } = req.body;
 
     if (!receivingAccountNumber) {
       return res.status(400).json({
@@ -789,97 +802,134 @@ const markInvoicePaid = async (req, res) => {
       });
     }
 
-    const invoiceTotal = roundMoney(invoice.finalTotal || 0);
+    const outstandingBeforePayment = roundMoney(
+      Number(invoice.balanceDue || invoice.finalTotal || 0) -
+        Number(invoice.amountPaid || 0)
+    );
 
-const tenderedAmountValue =
-  amountTendered !== undefined && amountTendered !== ""
-    ? roundMoney(amountTendered)
-    : invoiceTotal;
+    const actualPaymentAmount = roundMoney(
+      paymentAmount || amountTendered || outstandingBeforePayment
+    );
 
-if (tenderedAmountValue < invoiceTotal) {
-  return res.status(400).json({
-    success: false,
-    message: "Amount tendered cannot be less than invoice total.",
-  });
-}
+    if (actualPaymentAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment amount must be greater than zero.",
+      });
+    }
 
-const changeGiven = roundMoney(
-  tenderedAmountValue - invoiceTotal
-);
+    if (actualPaymentAmount > outstandingBeforePayment) {
+      return res.status(400).json({
+        success: false,
+        message: "Payment amount cannot exceed outstanding balance.",
+      });
+    }
+
+    const tenderedAmountValue =
+      amountTendered !== undefined && amountTendered !== ""
+        ? roundMoney(amountTendered)
+        : actualPaymentAmount;
+
+    if (tenderedAmountValue < actualPaymentAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount tendered cannot be less than payment amount.",
+      });
+    }
+
+    const changeGiven = roundMoney(tenderedAmountValue - actualPaymentAmount);
+
+    const paymentJournalEntry = await receiveInvoicePayment({
+      invoice,
+      receivingAccount: account,
+      amount: actualPaymentAmount,
+      user: req.user,
+    });
 
     const now = new Date();
 
-    invoice.status = "Paid";
-    invoice.paidDate = getJamaicaDateString(now);
-    invoice.paidAt = now;
+    invoice.amountPaid = roundMoney(
+      Number(invoice.amountPaid || 0) + actualPaymentAmount
+    );
+
+    invoice.balanceDue = roundMoney(
+      Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
+    );
+
+    invoice.status = invoice.balanceDue <= 0 ? "Paid" : "Partially Paid";
+
+    if (invoice.status === "Paid") {
+      invoice.paidDate = getJamaicaDateString(now);
+      invoice.paidAt = now;
+    }
+
     invoice.paymentMethod = paymentMethod;
     invoice.amountTendered = tenderedAmountValue;
     invoice.changeGiven = changeGiven;
     invoice.paidIntoAccountNumber = account.accountNumber;
     invoice.paidIntoAccountName = account.accountName;
     invoice.cashierName =
-  req.user?.fullName || req.user?.name || req.user?.email || "System User";
+      req.user?.fullName || req.user?.name || req.user?.email || "System User";
+
+    invoice.paymentHistory = invoice.paymentHistory || [];
+    invoice.paymentHistory.push({
+      paymentDate: now,
+      amount: actualPaymentAmount,
+      paymentMethod,
+      receivingAccountNumber: account.accountNumber,
+      receivingAccountName: account.accountName,
+      journalEntryNumber: paymentJournalEntry.entryNumber,
+      receivedBy: invoice.cashierName,
+    });
+
     await invoice.save();
 
     await AccountTransaction.create({
-  transactionNumber: `TRN-${Date.now()}`,
-  accountNumber: account.accountNumber,
-  accountName: account.accountName,
-  linkedChartAccountCode:
-    account.linkedChartAccountCode || "",
-  journalEntryNumber: invoice.invoiceNumber,
-  ledgerReference: invoice.invoiceNumber,
-  transactionType: "Invoice Payment",
-  amount: invoiceTotal,
-paymentMethod,
-amountTendered: tenderedAmountValue,
-changeGiven,
-  reference: invoice.invoiceNumber,
-  notes: `Invoice payment received for ${invoice.customerName}`,
-  transactionDate: now,
-});
-
-await syncFinancialAccountFromLedger(account);
-
-    const paymentJournalEntry = await receiveInvoicePayment({
-  invoice,
-  receivingAccount: account,
-  amount: invoiceTotal,
-  user: req.user,
-});
-
-await AccountTransaction.findOneAndUpdate(
-  {
-    reference: invoice.invoiceNumber,
-    transactionType: "Invoice Payment",
-  },
-  {
-    $set: {
+      transactionNumber: `TRN-${Date.now()}`,
+      accountNumber: account.accountNumber,
+      accountName: account.accountName,
+      linkedChartAccountCode: account.linkedChartAccountCode || "",
       journalEntryNumber: paymentJournalEntry.entryNumber,
       ledgerReference: paymentJournalEntry.entryNumber,
-    },
-  }
-);
-    const trackingNumbers = (invoice.packages || []).map((pkg) => pkg.trackingNumber);
+      transactionType: "Invoice Payment",
+      amount: actualPaymentAmount,
+      paymentMethod,
+      amountTendered: tenderedAmountValue,
+      changeGiven,
+      reference: invoice.invoiceNumber,
+      notes: `Invoice payment received for ${invoice.customerName}`,
+      transactionDate: now,
+    });
 
-    await Package.updateMany(
-  { trackingNumber: { $in: trackingNumbers } },
-  {
-    $set: {
-      status: "Delivered",
-      readyForPickup: false,
-      readyForPickupDate: null,
-      invoiceStatus: "Paid",
-      statusUpdatedAt: now,
-    },
-  }
-);
+    await syncFinancialAccountFromLedger(account);
+
+    if (invoice.status === "Paid") {
+      const trackingNumbers = (invoice.packages || []).map(
+        (pkg) => pkg.trackingNumber
+      );
+
+      await Package.updateMany(
+        { trackingNumber: { $in: trackingNumbers } },
+        {
+          $set: {
+            status: "Delivered",
+            readyForPickup: false,
+            readyForPickupDate: null,
+            invoiceStatus: "Paid",
+            statusUpdatedAt: now,
+          },
+        }
+      );
+    }
 
     await createCustomerNotification({
       customerEkonId: invoice.customerEkonId,
       customerName: invoice.customerName,
-      title: "Invoice Paid Successfully",
-      message: `Your invoice ${invoice.invoiceNumber} has been marked as paid. Amount received: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
+      title:
+        invoice.status === "Paid"
+          ? "Invoice Paid Successfully"
+          : "Invoice Payment Received",
+      message: `Payment of JMD ${actualPaymentAmount.toLocaleString()} was received for invoice ${invoice.invoiceNumber}. Balance due: JMD ${Number(invoice.balanceDue || 0).toLocaleString()}.`,
       type: "Invoice Update",
       referenceType: "Invoice",
       referenceId: invoice.invoiceNumber,
@@ -887,25 +937,27 @@ await AccountTransaction.findOneAndUpdate(
 
     await writeAuditLog({
       req,
-      action: "MARK_INVOICE_PAID",
+      action: "RECEIVE_INVOICE_PAYMENT",
       module: "Invoices",
-      description: `Invoice ${invoice.invoiceNumber} marked paid and deposited into ${account.accountName}`,
+      description: `Payment received for invoice ${invoice.invoiceNumber}`,
       targetType: "Invoice",
       targetId: invoice.invoiceNumber,
       metadata: {
         customerName: invoice.customerName,
-        finalTotal: invoice.finalTotal,
-        receivingAccountNumber: account.accountNumber,
-        receivingAccountName: account.accountName,
-        paidDate: invoice.paidDate,
+        paymentAmount: actualPaymentAmount,
+        amountPaid: invoice.amountPaid,
+        balanceDue: invoice.balanceDue,
+        status: invoice.status,
+        journalEntryNumber: paymentJournalEntry.entryNumber,
       },
     });
 
     res.json({
       success: true,
-      message: "Invoice marked as paid, account updated, and packages delivered",
+      message: "Invoice payment recorded successfully",
       data: invoice,
       receivingAccount: account,
+      journalEntryNumber: paymentJournalEntry.entryNumber,
     });
   } catch (error) {
     console.error("Error updating invoice:", error);
