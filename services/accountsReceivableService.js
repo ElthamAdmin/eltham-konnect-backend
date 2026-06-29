@@ -28,19 +28,12 @@ const getOpenInvoices = async () => {
   }).sort({ createdAt: 1 });
 };
 
-const getInvoiceExpectedBalance = (invoice) => {
-  return roundMoney(
-    Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
-  );
-};
+const getInvoiceExpectedBalance = (invoice) =>
+  roundMoney(Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0));
 
 const getInvoiceReportBalance = (invoice) => {
   const storedBalance = roundMoney(invoice.balanceDue);
-
-  if (storedBalance > 0) {
-    return storedBalance;
-  }
-
+  if (storedBalance > 0) return storedBalance;
   return getInvoiceExpectedBalance(invoice);
 };
 
@@ -91,9 +84,7 @@ const buildAgingReport = async () => {
 const buildCustomerStatement = async (customerEkonId) => {
   const customer = await Customer.findOne({ ekonId: customerEkonId });
 
-  if (!customer) {
-    throw new Error("Customer not found.");
-  }
+  if (!customer) throw new Error("Customer not found.");
 
   const invoices = await Invoice.find({ customerEkonId }).sort({
     createdAt: 1,
@@ -183,6 +174,71 @@ const findInvoiceNumberInLedgerLine = (line, invoiceNumbers = []) => {
   );
 };
 
+const getHighestSeverity = (issueTypes = []) => {
+  if (
+    issueTypes.some((type) =>
+      [
+        "OPEN_INVOICE_WITH_NO_AR_LEDGER",
+        "ORPHAN_AR_LEDGER_LINE",
+        "DUPLICATE_AR_POSTING",
+      ].includes(type)
+    )
+  ) {
+    return "Critical";
+  }
+
+  if (
+    issueTypes.some((type) =>
+      [
+        "INVOICE_LEDGER_MISMATCH",
+        "INVOICE_BALANCE_FIELD_MISMATCH",
+        "PAID_INVOICE_WITH_BALANCE",
+      ].includes(type)
+    )
+  ) {
+    return "Warning";
+  }
+
+  return "Information";
+};
+
+const getHealthScore = ({ criticalCount, warningCount, difference }) => {
+  let score = 100;
+
+  score -= criticalCount * 5;
+  score -= warningCount * 0.25;
+
+  if (Math.abs(Number(difference || 0)) > 0) {
+    score -= Math.min(5, Math.abs(Number(difference || 0)) / 100);
+  }
+
+  score = Math.max(0, roundMoney(score));
+
+  let status = "Perfect";
+  if (score < 100 && score >= 98) status = "Excellent";
+  if (score < 98 && score >= 95) status = "Good";
+  if (score < 95 && score >= 90) status = "Fair";
+  if (score < 90) status = "Needs Attention";
+
+  return { score, status };
+};
+
+const buildReconciliationRecommendation = ({ difference, issueSummary }) => {
+  if (difference === 0 && Number(issueSummary.critical || 0) === 0) {
+    return "Accounts Receivable subledger reconciles with the General Ledger.";
+  }
+
+  if (Number(issueSummary.critical || 0) > 0) {
+    return "Review critical AR posting issues before proceeding to collections or write-offs.";
+  }
+
+  if (Math.abs(Number(difference || 0)) <= 500) {
+    return "AR is nearly balanced. Review small legacy or migration differences.";
+  }
+
+  return "Investigate AR subledger and General Ledger difference.";
+};
+
 const buildARDiagnosticAudit = async () => {
   const invoices = await Invoice.find().sort({
     createdAt: 1,
@@ -218,11 +274,7 @@ const buildARDiagnosticAudit = async () => {
       ),
       ledgerDebit: 0,
       ledgerCredit: 0,
-      ledgerBalance: 0,
-      ledgerDifference: 0,
       relatedLedgerLines: [],
-      issueTypes: [],
-      hasIssue: false,
     };
   });
 
@@ -241,6 +293,8 @@ const buildARDiagnosticAudit = async () => {
       sourceModule: line.sourceModule,
       memo: line.memo,
       description: line.description,
+      issueTypes: ["ORPHAN_AR_LEDGER_LINE"],
+      severity: "Critical",
     };
 
     if (!invoiceNumber) {
@@ -271,10 +325,7 @@ const buildARDiagnosticAudit = async () => {
       issueTypes.push("OPEN_INVOICE_WITH_NO_AR_LEDGER");
     }
 
-    if (
-      row.status === "Paid" &&
-      row.reportBalanceDue !== 0
-    ) {
+    if (row.status === "Paid" && row.reportBalanceDue !== 0) {
       issueTypes.push("PAID_INVOICE_WITH_BALANCE");
     }
 
@@ -293,22 +344,34 @@ const buildARDiagnosticAudit = async () => {
       issueTypes.push("INVOICE_LEDGER_MISMATCH");
     }
 
+    const severity = issueTypes.length > 0 ? getHighestSeverity(issueTypes) : "";
+
     return {
       ...row,
       ledgerBalance,
       ledgerDifference,
       issueTypes,
+      severity,
       hasIssue: issueTypes.length > 0,
     };
   });
 
   const issues = rows.filter((row) => row.hasIssue);
 
-  const issueSummary = issues.reduce((summary, row) => {
-    row.issueTypes.forEach((type) => {
+  const severitySummary = {
+    critical: issues.filter((issue) => issue.severity === "Critical").length +
+      orphanLedgerLines.length,
+    warning: issues.filter((issue) => issue.severity === "Warning").length,
+    information: issues.filter((issue) => issue.severity === "Information").length,
+  };
+
+  severitySummary.total =
+    severitySummary.critical + severitySummary.warning + severitySummary.information;
+
+  const issueTypes = [...issues, ...orphanLedgerLines].reduce((summary, row) => {
+    (row.issueTypes || []).forEach((type) => {
       summary[type] = Number(summary[type] || 0) + 1;
     });
-
     return summary;
   }, {});
 
@@ -327,18 +390,77 @@ const buildARDiagnosticAudit = async () => {
 
   const difference = roundMoney(invoiceSubledgerBalance - glARBalance);
 
+  const healthScore = getHealthScore({
+    criticalCount: severitySummary.critical,
+    warningCount: severitySummary.warning,
+    difference,
+  });
+
+  const autoFixCandidates = {
+    balanceDueMismatch: Number(issueTypes.INVOICE_BALANCE_FIELD_MISMATCH || 0),
+    paidInvoiceWithBalance: Number(issueTypes.PAID_INVOICE_WITH_BALANCE || 0),
+    openInvoiceMissingARLedger: Number(issueTypes.OPEN_INVOICE_WITH_NO_AR_LEDGER || 0),
+  };
+
+  const recommendations = [];
+
+  if (autoFixCandidates.balanceDueMismatch > 0) {
+    recommendations.push(
+      `Recalculate balanceDue for ${autoFixCandidates.balanceDueMismatch} invoice(s).`
+    );
+  }
+
+  if (autoFixCandidates.paidInvoiceWithBalance > 0) {
+    recommendations.push(
+      `Review ${autoFixCandidates.paidInvoiceWithBalance} paid invoice(s) with remaining balance.`
+    );
+  }
+
+  if (autoFixCandidates.openInvoiceMissingARLedger > 0) {
+    recommendations.push(
+      `Create missing AR journal entry for ${autoFixCandidates.openInvoiceMissingARLedger} open invoice(s).`
+    );
+  }
+
+  if (orphanLedgerLines.length > 0) {
+    recommendations.push(
+      `Review ${orphanLedgerLines.length} orphan AR ledger line(s), likely migration or legacy entries.`
+    );
+  }
+
   return {
     generatedAt: new Date().toISOString(),
+
     totals: {
       invoiceSubledgerBalance,
       glARBalance,
       difference,
       isReconciled: difference === 0,
       invoiceCount: rows.length,
-      issueCount: issues.length,
+      issueCount: severitySummary.total,
       orphanLedgerLineCount: orphanLedgerLines.length,
     },
-    issueSummary,
+
+    reconciliation: {
+      status:
+        difference === 0
+          ? "Balanced"
+          : Math.abs(difference) <= 500
+            ? "Nearly Balanced"
+            : "Out of Balance",
+      difference,
+      recommendation: buildReconciliationRecommendation({
+        difference,
+        issueSummary: severitySummary,
+      }),
+    },
+
+    healthScore,
+    issueSummary: severitySummary,
+    issueTypes,
+    autoFixCandidates,
+    recommendations,
+
     issues,
     orphanLedgerLines,
     rows,
