@@ -2,6 +2,7 @@ const {
   buildAgingReport,
   buildCustomerStatement,
   reconcileARSubledgerToGL,
+  buildARDiagnosticAudit,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -48,8 +49,23 @@ const getARReconciliation = async (req, res) => {
   }
 };
 
+const getARDiagnosticAudit = async (req, res) => {
+  try {
+    const audit = await buildARDiagnosticAudit();
+    res.json({ success: true, data: audit });
+  } catch (error) {
+    console.error("AR diagnostic audit error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not run AR diagnostic audit",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getARAging,
   getCustomerStatement,
   getARReconciliation,
+  getARDiagnosticAudit,
 };

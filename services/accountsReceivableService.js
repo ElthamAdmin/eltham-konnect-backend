@@ -162,8 +162,131 @@ const reconcileARSubledgerToGL = async () => {
   };
 };
 
+const buildARDiagnosticAudit = async () => {
+  const invoices = await Invoice.find().sort({
+    createdAt: 1,
+    invoiceNumber: 1,
+  });
+
+  const arLedgerLines = await GeneralLedgerTransaction.find({
+    accountCode: "1100",
+  }).sort({
+    entryDate: 1,
+    createdAt: 1,
+  });
+
+  const invoiceMap = {};
+
+  invoices.forEach((invoice) => {
+    const expectedBalance = roundMoney(
+      Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
+    );
+
+    invoiceMap[invoice.invoiceNumber] = {
+      invoiceNumber: invoice.invoiceNumber,
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
+      status: invoice.status,
+      finalTotal: roundMoney(invoice.finalTotal),
+      amountPaid: roundMoney(invoice.amountPaid),
+      storedBalanceDue: roundMoney(invoice.balanceDue),
+      expectedBalanceDue: expectedBalance,
+      invoiceBalanceMismatch: roundMoney(
+        Number(invoice.balanceDue || 0) - expectedBalance
+      ),
+      ledgerDebit: 0,
+      ledgerCredit: 0,
+      ledgerBalance: 0,
+      ledgerDifference: 0,
+      relatedLedgerLines: [],
+    };
+  });
+
+  const orphanLedgerLines = [];
+
+  arLedgerLines.forEach((line) => {
+    const reference = line.reference || line.memo || "";
+    const invoiceNumber = Object.keys(invoiceMap).find((number) =>
+      String(reference).includes(number)
+    );
+
+    const lineData = {
+      ledgerNumber: line.ledgerNumber,
+      entryNumber: line.entryNumber,
+      entryDate: line.entryDate,
+      debit: roundMoney(line.debit),
+      credit: roundMoney(line.credit),
+      reference: line.reference,
+      sourceModule: line.sourceModule,
+      memo: line.memo,
+      description: line.description,
+    };
+
+    if (!invoiceNumber) {
+      orphanLedgerLines.push(lineData);
+      return;
+    }
+
+    invoiceMap[invoiceNumber].ledgerDebit = roundMoney(
+      invoiceMap[invoiceNumber].ledgerDebit + Number(line.debit || 0)
+    );
+
+    invoiceMap[invoiceNumber].ledgerCredit = roundMoney(
+      invoiceMap[invoiceNumber].ledgerCredit + Number(line.credit || 0)
+    );
+
+    invoiceMap[invoiceNumber].relatedLedgerLines.push(lineData);
+  });
+
+  const rows = Object.values(invoiceMap).map((row) => {
+    const ledgerBalance = roundMoney(row.ledgerDebit - row.ledgerCredit);
+    const expectedBalanceDue = roundMoney(row.expectedBalanceDue);
+
+    return {
+      ...row,
+      ledgerBalance,
+      ledgerDifference: roundMoney(ledgerBalance - expectedBalanceDue),
+      hasIssue:
+        roundMoney(row.invoiceBalanceMismatch) !== 0 ||
+        roundMoney(ledgerBalance - expectedBalanceDue) !== 0,
+    };
+  });
+
+  const issueRows = rows.filter((row) => row.hasIssue);
+
+  const invoiceSubledgerBalance = roundMoney(
+    rows
+      .filter((row) => ["Unpaid", "Partially Paid"].includes(row.status))
+      .reduce((sum, row) => sum + Number(row.expectedBalanceDue || 0), 0)
+  );
+
+  const glARBalance = roundMoney(
+    arLedgerLines.reduce(
+      (sum, line) => sum + Number(line.debit || 0) - Number(line.credit || 0),
+      0
+    )
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totals: {
+      invoiceSubledgerBalance,
+      glARBalance,
+      difference: roundMoney(invoiceSubledgerBalance - glARBalance),
+      isReconciled: roundMoney(invoiceSubledgerBalance - glARBalance) === 0,
+      invoiceCount: rows.length,
+      issueCount: issueRows.length,
+      orphanLedgerLineCount: orphanLedgerLines.length,
+    },
+    issues: issueRows,
+    orphanLedgerLines,
+    rows,
+  };
+};
+
 module.exports = {
   buildAgingReport,
   buildCustomerStatement,
   reconcileARSubledgerToGL,
+  buildARDiagnosticAudit,
 };
