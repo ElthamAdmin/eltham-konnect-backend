@@ -613,6 +613,119 @@ const buildCustomerCollectionRecommendations = ({
   return recommendations;
 };
 
+const buildCustomerCollectionsTimeline = (invoiceRows = []) => {
+  const timeline = [];
+
+  invoiceRows.forEach((invoice) => {
+    timeline.push({
+      type: "Invoice Created",
+      title: "Invoice Created",
+      description: `Invoice ${invoice.invoiceNumber} was created for JMD ${roundMoney(
+        invoice.finalTotal
+      ).toLocaleString()}.`,
+      invoiceNumber: invoice.invoiceNumber,
+      date: invoice.invoiceDate,
+      createdBy: "System",
+      severity: "Info",
+    });
+
+    if (invoice.collectionsStatus && invoice.collectionsStatus !== "Normal") {
+      timeline.push({
+        type: "Collection Status",
+        title: `Collection status: ${invoice.collectionsStatus}`,
+        description: `Invoice ${invoice.invoiceNumber} is currently marked as ${invoice.collectionsStatus}.`,
+        invoiceNumber: invoice.invoiceNumber,
+        date: invoice.nextFollowUpDate || invoice.invoiceDate,
+        createdBy: invoice.assignedCollector || "System",
+        severity:
+          invoice.collectionsStatus === "Collections" ||
+          invoice.collectionsStatus === "Legal Review" ||
+          invoice.collectionsStatus === "Written Off"
+            ? "Critical"
+            : "Warning",
+      });
+    }
+
+    if (invoice.assignedCollector) {
+      timeline.push({
+        type: "Collector Assigned",
+        title: "Collector Assigned",
+        description: `${invoice.assignedCollector} assigned to invoice ${invoice.invoiceNumber}.`,
+        invoiceNumber: invoice.invoiceNumber,
+        date: invoice.nextFollowUpDate || invoice.invoiceDate,
+        createdBy: "System",
+        severity: "Info",
+      });
+    }
+
+    if (invoice.nextFollowUpDate) {
+      timeline.push({
+        type: "Follow-up Scheduled",
+        title: "Follow-up Scheduled",
+        description: `Follow-up scheduled for invoice ${invoice.invoiceNumber}.`,
+        invoiceNumber: invoice.invoiceNumber,
+        date: invoice.nextFollowUpDate,
+        createdBy: invoice.assignedCollector || "System",
+        severity: "Warning",
+      });
+    }
+
+    if (invoice.promiseToPayStatus && invoice.promiseToPayStatus !== "None") {
+      timeline.push({
+        type: "Promise To Pay",
+        title: `Promise To Pay - ${invoice.promiseToPayStatus}`,
+        description: `Customer promised to pay JMD ${roundMoney(
+          invoice.promiseToPayAmount
+        ).toLocaleString()} for invoice ${invoice.invoiceNumber}.`,
+        invoiceNumber: invoice.invoiceNumber,
+        date: invoice.promiseToPayDate || invoice.invoiceDate,
+        createdBy: invoice.assignedCollector || "System",
+        severity:
+          invoice.promiseToPayStatus === "Broken"
+            ? "Critical"
+            : invoice.promiseToPayStatus === "Fulfilled"
+              ? "Success"
+              : "Warning",
+      });
+    }
+
+    (invoice.collectionNotes || []).forEach((note) => {
+      timeline.push({
+        type: "Collection Note",
+        title: "Collection Note",
+        description: note.note,
+        invoiceNumber: invoice.invoiceNumber,
+        date: note.createdAt,
+        createdBy: note.createdBy || "System User",
+        severity: "Info",
+      });
+    });
+
+    (invoice.paymentHistory || []).forEach((payment) => {
+      timeline.push({
+        type: "Payment Received",
+        title: "Payment Received",
+        description: `Payment of JMD ${roundMoney(
+          payment.amount
+        ).toLocaleString()} received by ${payment.receivedBy || "System User"}.`,
+        invoiceNumber: invoice.invoiceNumber,
+        date: payment.paymentDate,
+        createdBy: payment.receivedBy || "System User",
+        severity: "Success",
+        metadata: {
+          paymentMethod: payment.paymentMethod,
+          receivingAccountName: payment.receivingAccountName,
+          journalEntryNumber: payment.journalEntryNumber,
+        },
+      });
+    });
+  });
+
+  return timeline
+    .filter((item) => item.date)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+};
+
 const buildCustomerCollectionsProfile = async (customerEkonId) => {
   const customer = await Customer.findOne({ ekonId: customerEkonId });
 
@@ -624,10 +737,6 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
     createdAt: 1,
     invoiceNumber: 1,
   });
-
-  const openInvoices = invoices.filter((invoice) =>
-    ["Unpaid", "Partially Paid"].includes(invoice.status)
-  );
 
   const invoiceRows = invoices.map((invoice) => {
     const balanceDue = getInvoiceReportBalance(invoice);
@@ -748,6 +857,7 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
     allInvoices: invoiceRows,
     paymentHistory,
     collectionNotes,
+    collectionTimeline: buildCustomerCollectionsTimeline(invoiceRows),
 
     recommendations: buildCustomerCollectionRecommendations({
       riskLevel,
