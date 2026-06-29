@@ -1,4 +1,5 @@
 const AccountingPeriod = require("../models/AccountingPeriod");
+const { periodService } = require("../services/accountingEngine");
 
 const getAccountingPeriods = async (req, res) => {
   try {
@@ -7,10 +8,7 @@ const getAccountingPeriods = async (req, res) => {
       periodMonth: -1,
     });
 
-    res.json({
-      success: true,
-      data: periods,
-    });
+    res.json({ success: true, data: periods });
   } catch (error) {
     console.error("Accounting periods error:", error);
     res.status(500).json({
@@ -21,9 +19,34 @@ const getAccountingPeriods = async (req, res) => {
   }
 };
 
+const getCurrentAccountingPeriod = async (req, res) => {
+  try {
+    const period = await periodService.getCurrentPeriod();
+
+    res.json({
+      success: true,
+      data: period,
+    });
+  } catch (error) {
+    console.error("Current accounting period error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load current accounting period",
+      error: error.message,
+    });
+  }
+};
+
 const createAccountingPeriod = async (req, res) => {
   try {
     const { fiscalYear, periodMonth, startDate, endDate, notes } = req.body;
+
+    if (!fiscalYear || !periodMonth || !startDate || !endDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Fiscal year, period month, start date, and end date are required.",
+      });
+    }
 
     const monthName = new Date(Number(fiscalYear), Number(periodMonth) - 1, 1)
       .toLocaleString("en-US", { month: "long" });
@@ -48,6 +71,7 @@ const createAccountingPeriod = async (req, res) => {
       startDate,
       endDate,
       status: "Open",
+      allowPosting: true,
       notes,
     });
 
@@ -66,31 +90,39 @@ const createAccountingPeriod = async (req, res) => {
   }
 };
 
-const closeAccountingManagementPeriod = async (req, res) => {
+const validateAccountingPeriod = async (req, res) => {
   try {
     const { periodNumber } = req.params;
 
-    const period = await AccountingPeriod.findOne({ periodNumber });
+    const validation = await periodService.validatePeriod({ periodNumber });
 
-    if (!period) {
-      return res.status(404).json({
-        success: false,
-        message: "Accounting period not found",
-      });
-    }
+    res.json({
+      success: true,
+      message: validation.passed
+        ? "Accounting period validation passed."
+        : "Accounting period validation failed.",
+      data: validation,
+    });
+  } catch (error) {
+    console.error("Validate accounting period error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not validate accounting period",
+      error: error.message,
+    });
+  }
+};
 
-    if (period.status === "Locked") {
-      return res.status(400).json({
-        success: false,
-        message: "Locked periods cannot be changed.",
-      });
-    }
+const closeAccountingManagementPeriod = async (req, res) => {
+  try {
+    const { periodNumber } = req.params;
+    const { notes = "" } = req.body;
 
-    period.status = "Closed";
-    period.closedAt = new Date();
-    period.closedBy = req.user?.name || req.user?.fullName || "System User";
-
-    await period.save();
+    const period = await periodService.closePeriod({
+      periodNumber,
+      notes,
+      user: req.user,
+    });
 
     res.json({
       success: true,
@@ -110,29 +142,13 @@ const closeAccountingManagementPeriod = async (req, res) => {
 const lockAccountingPeriod = async (req, res) => {
   try {
     const { periodNumber } = req.params;
+    const { notes = "" } = req.body;
 
-    const period = await AccountingPeriod.findOne({ periodNumber });
-
-    if (period?.status === "Open") {
-  return res.status(400).json({
-    success: false,
-    message:
-      "Accounting period must be closed before locking.",
-  });
-}
-
-    if (!period) {
-      return res.status(404).json({
-        success: false,
-        message: "Accounting period not found",
-      });
-    }
-
-    period.status = "Locked";
-    period.lockedAt = new Date();
-    period.lockedBy = req.user?.name || req.user?.fullName || "System User";
-
-    await period.save();
+    const period = await periodService.lockPeriod({
+      periodNumber,
+      notes,
+      user: req.user,
+    });
 
     res.json({
       success: true,
@@ -149,9 +165,38 @@ const lockAccountingPeriod = async (req, res) => {
   }
 };
 
+const reopenAccountingPeriod = async (req, res) => {
+  try {
+    const { periodNumber } = req.params;
+    const { reason = "" } = req.body;
+
+    const period = await periodService.reopenPeriod({
+      periodNumber,
+      reason,
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: "Accounting period reopened successfully",
+      data: period,
+    });
+  } catch (error) {
+    console.error("Reopen accounting period error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not reopen accounting period",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAccountingPeriods,
+  getCurrentAccountingPeriod,
   createAccountingPeriod,
+  validateAccountingPeriod,
   closeAccountingManagementPeriod,
   lockAccountingPeriod,
+  reopenAccountingPeriod,
 };
