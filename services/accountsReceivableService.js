@@ -947,6 +947,14 @@ const getRecommendedCollectionAction = ({
   return "Review account";
 };
 
+const getAutomatedCollectionStatus = ({ daysOutstanding = 0, promiseToPayStatus = "None" }) => {
+  if (promiseToPayStatus === "Broken") return "Collections";
+  if (daysOutstanding >= 90) return "Collections";
+  if (daysOutstanding >= 60) return "Overdue";
+  if (daysOutstanding >= 31) return "Follow Up";
+  return "Normal";
+};
+
 const buildCollectionsWorkQueue = async () => {
   const invoices = await getOpenInvoices();
 
@@ -1000,6 +1008,16 @@ const buildCollectionsWorkQueue = async () => {
       finalTotal: roundMoney(invoice.finalTotal),
       daysOutstanding,
       collectionsStatus: invoice.collectionsStatus || "Normal",
+      automatedStatus: getAutomatedCollectionStatus({
+  daysOutstanding,
+  promiseToPayStatus: invoice.promiseToPayStatus,
+}),
+statusChangeRecommended:
+  (invoice.collectionsStatus || "Normal") !==
+  getAutomatedCollectionStatus({
+    daysOutstanding,
+    promiseToPayStatus: invoice.promiseToPayStatus,
+  }),
       assignedCollector: invoice.assignedCollector || "",
       nextFollowUpDate: invoice.nextFollowUpDate,
       promiseToPayDate: invoice.promiseToPayDate,
