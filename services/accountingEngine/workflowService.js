@@ -10,7 +10,7 @@ const todayYMD = () => new Date().toISOString().slice(0, 10);
 const postCustomerInvoice = async ({ invoice, user }) => {
   const amount = roundMoney(invoice.finalTotal || invoice.balanceDue || 0);
 
-  const journalEntry = await postJournalEntry({
+  return postJournalEntry({
     entryDate: invoice.createdAt || todayYMD(),
     memo: `Invoice created for ${invoice.customerName}`,
     reference: invoice.invoiceNumber,
@@ -18,8 +18,6 @@ const postCustomerInvoice = async ({ invoice, user }) => {
     createdBy: getUserName(user),
     lines: templates.buildCustomerInvoiceLines({ amount }),
   });
-
-  return journalEntry;
 };
 
 const receiveInvoicePayment = async ({
@@ -28,9 +26,11 @@ const receiveInvoicePayment = async ({
   amount,
   user,
 }) => {
-  const paymentAmount = roundMoney(amount || invoice.balanceDue || invoice.finalTotal || 0);
+  const paymentAmount = roundMoney(
+    amount || invoice.balanceDue || invoice.finalTotal || 0
+  );
 
-  const journalEntry = await postJournalEntry({
+  return postJournalEntry({
     entryDate: todayYMD(),
     memo: `Invoice payment received from ${invoice.customerName}`,
     reference: invoice.invoiceNumber,
@@ -41,8 +41,52 @@ const receiveInvoicePayment = async ({
       amount: paymentAmount,
     }),
   });
+};
 
-  return journalEntry;
+const postVendorBill = async ({
+  payable,
+  expenseAccountCode,
+  amount,
+  user,
+}) => {
+  const billAmount = roundMoney(amount || payable.amount || 0);
+
+  return postJournalEntry({
+    entryDate: payable.payableDate || todayYMD(),
+    memo: `Vendor bill from ${payable.vendorName}`,
+    reference: payable.payableNumber,
+    sourceModule: "Accounts Payable",
+    createdBy: getUserName(user),
+    lines: templates.buildVendorBillLines({
+      expenseAccountCode,
+      amount: billAmount,
+      description: payable.description || `Vendor bill ${payable.payableNumber}`,
+    }),
+  });
+};
+
+const payVendorBill = async ({
+  payable,
+  paymentAccount,
+  amount,
+  paymentDate,
+  paymentReference,
+  user,
+}) => {
+  const paymentAmount = roundMoney(amount || payable.balanceDue || 0);
+
+  return postJournalEntry({
+    entryDate: paymentDate || todayYMD(),
+    memo: `Payment to ${payable.vendorName} for ${payable.payableNumber}`,
+    reference: paymentReference || payable.payableNumber,
+    sourceModule: "Accounts Payable",
+    createdBy: getUserName(user),
+    lines: templates.buildVendorPaymentLines({
+      paymentAccount,
+      amount: paymentAmount,
+      description: `AP payment ${payable.payableNumber}`,
+    }),
+  });
 };
 
 const postOwnerDeposit = async ({
@@ -97,7 +141,9 @@ const transferFunds = async ({
 }) => {
   return postJournalEntry({
     entryDate: todayYMD(),
-    memo: reference || `Transfer ${fromAccount.accountName} to ${toAccount.accountName}`,
+    memo:
+      reference ||
+      `Transfer ${fromAccount.accountName} to ${toAccount.accountName}`,
     reference: reference || "Account Transfer",
     sourceModule: "Banking",
     createdBy: getUserName(user),
@@ -133,11 +179,7 @@ const postExpensePayment = async ({
   });
 };
 
-const postPayrollPayment = async ({
-  paymentAccount,
-  payroll,
-  user,
-}) => {
+const postPayrollPayment = async ({ paymentAccount, payroll, user }) => {
   return postJournalEntry({
     entryDate: todayYMD(),
     memo: `Payroll payment for ${payroll.employeeName}`,
@@ -161,6 +203,8 @@ const postPayrollPayment = async ({
 module.exports = {
   postCustomerInvoice,
   receiveInvoicePayment,
+  postVendorBill,
+  payVendorBill,
   postOwnerDeposit,
   postOwnerDrawing,
   transferFunds,

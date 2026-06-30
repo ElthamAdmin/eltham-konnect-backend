@@ -56,6 +56,57 @@ const buildInvoicePaymentLines = ({ receivingAccount, amount }) => {
   ];
 };
 
+const buildVendorBillLines = ({
+  expenseAccountCode,
+  amount,
+  description = "",
+}) => {
+  const value = requirePositiveAmount(amount, "Vendor bill amount");
+
+  if (!expenseAccountCode) {
+    throw new Error("Expense account code is required for vendor bill.");
+  }
+
+  return [
+    {
+      accountCode: expenseAccountCode,
+      debit: value,
+      credit: 0,
+      description: description || "Vendor bill expense",
+    },
+    {
+      accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE,
+      debit: 0,
+      credit: value,
+      description: description || "Accounts payable liability",
+    },
+  ];
+};
+
+const buildVendorPaymentLines = ({
+  paymentAccount,
+  amount,
+  description = "",
+}) => {
+  const value = requirePositiveAmount(amount, "Vendor payment amount");
+  requireLinkedAccount(paymentAccount, "Payment account");
+
+  return [
+    {
+      accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_PAYABLE,
+      debit: value,
+      credit: 0,
+      description: description || "Accounts payable cleared",
+    },
+    {
+      accountCode: paymentAccount.linkedChartAccountCode,
+      debit: 0,
+      credit: value,
+      description: description || "Vendor payment",
+    },
+  ];
+};
+
 const buildOwnerDepositLines = ({ financialAccount, amount, notes = "" }) => {
   const value = requirePositiveAmount(amount, "Owner deposit amount");
   requireLinkedAccount(financialAccount);
@@ -181,6 +232,7 @@ const buildPayrollPaymentLines = ({
 
   liabilities.forEach(([accountCode, amount, label]) => {
     const value = roundMoney(amount);
+
     if (value > 0) {
       lines.push({
         accountCode,
@@ -206,6 +258,8 @@ module.exports = {
   requireLinkedAccount,
   buildCustomerInvoiceLines,
   buildInvoicePaymentLines,
+  buildVendorBillLines,
+  buildVendorPaymentLines,
   buildOwnerDepositLines,
   buildOwnerDrawingLines,
   buildTransferLines,
