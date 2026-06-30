@@ -6,11 +6,13 @@ const accountTransactionSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
 
     accountNumber: {
       type: String,
       required: true,
+      index: true,
     },
 
     accountName: {
@@ -21,11 +23,13 @@ const accountTransactionSchema = new mongoose.Schema(
     linkedChartAccountCode: {
       type: String,
       default: "",
+      index: true,
     },
 
     journalEntryNumber: {
       type: String,
       default: "",
+      index: true,
     },
 
     ledgerReference: {
@@ -34,22 +38,27 @@ const accountTransactionSchema = new mongoose.Schema(
     },
 
     transactionType: {
-  type: String,
-  enum: [
-    "Deposit",
-    "Owner Deposit",
-    "Withdrawal",
-    "Owner Drawing",
-    "Transfer In",
-    "Transfer Out",
-    "Invoice Payment",
-    "Expense Payment",
-    "Credit Card Payment",
-    "Credit Card Charge",
-    "Payroll Payment",
-  ],
-  required: true,
-},
+      type: String,
+      enum: [
+        "Deposit",
+        "Owner Deposit",
+        "Withdrawal",
+        "Owner Drawing",
+        "Transfer In",
+        "Transfer Out",
+        "Invoice Payment",
+        "Expense Payment",
+        "Credit Card Payment",
+        "Credit Card Charge",
+        "Payroll Payment",
+        "Bank Fee",
+        "Interest Income",
+        "Interest Expense",
+        "Adjustment",
+      ],
+      required: true,
+      index: true,
+    },
 
     amount: {
       type: Number,
@@ -57,23 +66,24 @@ const accountTransactionSchema = new mongoose.Schema(
     },
 
     paymentMethod: {
-  type: String,
-  default: "",
-},
+      type: String,
+      default: "",
+    },
 
-amountTendered: {
-  type: Number,
-  default: 0,
-},
+    amountTendered: {
+      type: Number,
+      default: 0,
+    },
 
-changeGiven: {
-  type: Number,
-  default: 0,
-},
+    changeGiven: {
+      type: Number,
+      default: 0,
+    },
 
     reference: {
       type: String,
       default: "",
+      index: true,
     },
 
     notes: {
@@ -84,6 +94,50 @@ changeGiven: {
     transactionDate: {
       type: Date,
       default: Date.now,
+      index: true,
+    },
+
+    cleared: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    clearedDate: {
+      type: String,
+      default: "",
+    },
+
+    reconciled: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    reconciliationNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    reconciliationDate: {
+      type: String,
+      default: "",
+    },
+
+    statementDate: {
+      type: String,
+      default: "",
+    },
+
+    reconciledBy: {
+      type: String,
+      default: "",
+    },
+
+    lockedByReconciliation: {
+      type: Boolean,
+      default: false,
     },
   },
   {

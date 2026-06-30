@@ -6,6 +6,7 @@ const financialAccountSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+      index: true,
     },
 
     accountName: {
@@ -17,6 +18,7 @@ const financialAccountSchema = new mongoose.Schema(
       type: String,
       enum: ["Bank", "Cash", "Credit Card"],
       required: true,
+      index: true,
     },
 
     linkedChartAccountCode: {
@@ -46,29 +48,68 @@ const financialAccountSchema = new mongoose.Schema(
     },
 
     exchangeRate: {
-  type: Number,
-  default: 1,
-},
+      type: Number,
+      default: 1,
+    },
 
-baseCurrency: {
-  type: String,
-  default: "JMD",
-},
+    baseCurrency: {
+      type: String,
+      default: "JMD",
+    },
 
-baseCurrencyOpeningBalance: {
-  type: Number,
-  default: 0,
-},
+    baseCurrencyOpeningBalance: {
+      type: Number,
+      default: 0,
+    },
 
-baseCurrencyBalance: {
-  type: Number,
-  default: 0,
-},
+    baseCurrencyBalance: {
+      type: Number,
+      default: 0,
+    },
+
+    lastReconciliationNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    lastReconciledDate: {
+      type: String,
+      default: "",
+    },
+
+    lastReconciledBalance: {
+      type: Number,
+      default: 0,
+    },
+
+    outstandingDeposits: {
+      type: Number,
+      default: 0,
+    },
+
+    outstandingWithdrawals: {
+      type: Number,
+      default: 0,
+    },
+
+    unreconciledDifference: {
+      type: Number,
+      default: 0,
+    },
+
+    reconciliationStatus: {
+      type: String,
+      enum: ["Never Reconciled", "In Progress", "Balanced", "Out of Balance"],
+      default: "Never Reconciled",
+      index: true,
+    },
 
     status: {
       type: String,
       enum: ["Active", "Inactive"],
       default: "Active",
+      index: true,
     },
   },
   {
