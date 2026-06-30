@@ -114,7 +114,20 @@ paymentHistory: [
 
 collectionsStatus: {
   type: String,
-  enum: ["Normal", "Follow Up", "Overdue", "Collections", "Written Off"],
+  enum: [
+    "Normal",
+    "Reminder Sent",
+    "Contacted",
+    "No Answer",
+    "Follow Up",
+    "Promise To Pay",
+    "Payment Arrangement",
+    "Overdue",
+    "Final Notice",
+    "Collections",
+    "Legal Review",
+    "Written Off",
+  ],
   default: "Normal",
 },
 

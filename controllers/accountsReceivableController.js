@@ -8,6 +8,8 @@ const {
   buildCollectionsWorkQueue,
   addInvoiceCollectionNote,
   updateInvoiceCollectionWorkflow,
+  buildReminderQueue,
+  logInvoiceReminder,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -91,6 +93,47 @@ const getCollectionsWorkQueue = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Could not load collections work queue",
+      error: error.message,
+    });
+  }
+};
+
+const getReminderQueue = async (req, res) => {
+  try {
+    const reminders = await buildReminderQueue();
+    res.json({ success: true, data: reminders });
+  } catch (error) {
+    console.error("Reminder queue error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load reminder queue",
+      error: error.message,
+    });
+  }
+};
+
+const sendInvoiceReminder = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const { reminderType, channel } = req.body;
+
+    const invoice = await logInvoiceReminder({
+      invoiceNumber,
+      reminderType,
+      channel,
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: "Reminder logged successfully",
+      data: invoice,
+    });
+  } catch (error) {
+    console.error("Send reminder error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not log reminder",
       error: error.message,
     });
   }
@@ -184,4 +227,6 @@ module.exports = {
   getCollectionsWorkQueue,
   addCollectionNote,
   updateCollectionWorkflow,
+  getReminderQueue,
+  sendInvoiceReminder,
 };

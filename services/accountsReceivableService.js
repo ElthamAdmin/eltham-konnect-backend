@@ -1065,6 +1065,74 @@ statusChangeRecommended:
   };
 };
 
+const getReminderType = ({ daysOutstanding = 0, promiseToPayStatus = "None" }) => {
+  if (promiseToPayStatus === "Broken") return "Broken Promise Reminder";
+  if (daysOutstanding >= 90) return "Final Notice";
+  if (daysOutstanding >= 60) return "Collections Reminder";
+  if (daysOutstanding >= 31) return "Overdue Reminder";
+  return "Friendly Reminder";
+};
+
+const buildReminderQueue = async () => {
+  const workQueue = await buildCollectionsWorkQueue();
+
+  const reminders = (workQueue.queue || []).map((item) => ({
+    ...item,
+    reminderType: getReminderType({
+      daysOutstanding: item.daysOutstanding,
+      promiseToPayStatus: item.promiseToPayStatus,
+    }),
+    reminderChannel: item.daysOutstanding >= 60 ? "Call + Email" : "Email",
+    reminderMessage:
+      item.daysOutstanding >= 90
+        ? "Final notice recommended before write-off review."
+        : item.promiseToPayStatus === "Broken"
+          ? "Broken promise follow-up required."
+          : item.daysOutstanding >= 31
+            ? "Customer should receive overdue payment reminder."
+            : "Friendly payment reminder recommended.",
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      totalReminders: reminders.length,
+      friendlyReminders: reminders.filter((r) => r.reminderType === "Friendly Reminder").length,
+      overdueReminders: reminders.filter((r) => r.reminderType === "Overdue Reminder").length,
+      collectionsReminders: reminders.filter((r) => r.reminderType === "Collections Reminder").length,
+      finalNotices: reminders.filter((r) => r.reminderType === "Final Notice").length,
+      brokenPromiseReminders: reminders.filter((r) => r.reminderType === "Broken Promise Reminder").length,
+    },
+    reminders,
+  };
+};
+
+const logInvoiceReminder = async ({ invoiceNumber, reminderType, channel, user }) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  const createdBy = user?.fullName || user?.name || user?.email || "System User";
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note: `${reminderType || "Payment Reminder"} sent via ${channel || "Manual"}.`,
+    createdBy,
+  });
+
+  invoice.lastCollectionContact = new Date();
+
+  if (invoice.collectionsStatus === "Normal") {
+    invoice.collectionsStatus = "Reminder Sent";
+  }
+
+  await invoice.save();
+
+  return invoice;
+};
+
 const addInvoiceCollectionNote = async ({
   invoiceNumber,
   note,
@@ -1125,4 +1193,6 @@ module.exports = {
   buildCollectionsWorkQueue,
   addInvoiceCollectionNote,
   updateInvoiceCollectionWorkflow,
+  buildReminderQueue,
+  logInvoiceReminder,
 };
