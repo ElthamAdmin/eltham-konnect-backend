@@ -1462,7 +1462,7 @@ const requestInvoiceWriteOff = async ({
   return invoice;
 };
 
-const approveInvoiceWriteOff = async ({ invoiceNumber, user }) => {
+const approveInvoiceWriteOff = async ({ invoiceNumber, journalEntryNumber, user }) => {
   const invoice = await Invoice.findOne({ invoiceNumber });
 
   if (!invoice) {
@@ -1478,13 +1478,15 @@ const approveInvoiceWriteOff = async ({ invoiceNumber, user }) => {
   invoice.writeOffStatus = "Written Off";
   invoice.writeOffApprovedBy = approvedBy;
   invoice.writeOffApprovedAt = new Date();
+  invoice.writeOffJournalEntryNumber = journalEntryNumber || "";
+
   invoice.status = "Written Off";
   invoice.collectionsStatus = "Written Off";
   invoice.balanceDue = 0;
 
   invoice.collectionNotes = invoice.collectionNotes || [];
   invoice.collectionNotes.push({
-    note: `Write-off approved for JMD ${roundMoney(invoice.writeOffAmount).toLocaleString()}. Journal entry pending.`,
+    note: `Write-off approved for JMD ${roundMoney(invoice.writeOffAmount).toLocaleString()}. Journal Entry: ${journalEntryNumber || "Pending"}.`,
     createdBy: approvedBy,
   });
 
