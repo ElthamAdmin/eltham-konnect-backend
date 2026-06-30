@@ -15,6 +15,7 @@ const {
   updateCollectionWorkflow,
   getReminderQueue,
   sendInvoiceReminder,
+  getCollectionPerformanceKPIs,
 } = require("../controllers/accountsReceivableController");
 
 router.get("/aging", protect, getARAging);
@@ -26,7 +27,7 @@ router.post("/collections/invoices/:invoiceNumber/notes", protect, addCollection
 router.put("/collections/invoices/:invoiceNumber/workflow", protect, updateCollectionWorkflow);
 router.get("/collections/work-queue", protect, getCollectionsWorkQueue);
 router.get("/collections-dashboard", protect, getCollectionsDashboard);
-router.get("/collections/work-queue", protect, getCollectionsWorkQueue);
 router.get("/collections/reminders", protect, getReminderQueue);
 router.post("/collections/invoices/:invoiceNumber/reminder", protect, sendInvoiceReminder);
+router.get("/collections/performance", protect, getCollectionPerformanceKPIs);
 module.exports = router;

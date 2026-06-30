@@ -10,6 +10,7 @@ const {
   updateInvoiceCollectionWorkflow,
   buildReminderQueue,
   logInvoiceReminder,
+  buildCollectionPerformanceKPIs,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -139,6 +140,20 @@ const sendInvoiceReminder = async (req, res) => {
   }
 };
 
+const getCollectionPerformanceKPIs = async (req, res) => {
+  try {
+    const performance = await buildCollectionPerformanceKPIs();
+    res.json({ success: true, data: performance });
+  } catch (error) {
+    console.error("Collection performance KPI error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load collection performance KPIs",
+      error: error.message,
+    });
+  }
+};
+
 const getCustomerCollectionsProfile = async (req, res) => {
   try {
     const { customerEkonId } = req.params;
@@ -229,4 +244,5 @@ module.exports = {
   updateCollectionWorkflow,
   getReminderQueue,
   sendInvoiceReminder,
+  getCollectionPerformanceKPIs,
 };

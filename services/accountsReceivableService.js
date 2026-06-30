@@ -1133,6 +1133,221 @@ const logInvoiceReminder = async ({ invoiceNumber, reminderType, channel, user }
   return invoice;
 };
 
+const buildCollectionPerformanceKPIs = async () => {
+  const invoices = await Invoice.find().sort({ createdAt: 1 });
+  const customers = await Customer.find();
+
+  const customerBranchMap = {};
+  customers.forEach((customer) => {
+    customerBranchMap[customer.ekonId] = customer.branch || "Unassigned";
+  });
+
+  const openInvoices = invoices.filter((invoice) =>
+    ["Unpaid", "Partially Paid"].includes(invoice.status)
+  );
+
+  const paidInvoices = invoices.filter((invoice) => invoice.status === "Paid");
+
+  const totalInvoiced = roundMoney(
+    invoices.reduce((sum, invoice) => sum + Number(invoice.finalTotal || 0), 0)
+  );
+
+  const totalCollected = roundMoney(
+    invoices.reduce((sum, invoice) => sum + Number(invoice.amountPaid || 0), 0)
+  );
+
+  const totalOutstanding = roundMoney(
+    openInvoices.reduce((sum, invoice) => sum + getInvoiceReportBalance(invoice), 0)
+  );
+
+  const promiseInvoices = invoices.filter(
+    (invoice) => invoice.promiseToPayStatus && invoice.promiseToPayStatus !== "None"
+  );
+
+  const fulfilledPromises = promiseInvoices.filter(
+    (invoice) => invoice.promiseToPayStatus === "Fulfilled"
+  );
+
+  const brokenPromises = promiseInvoices.filter(
+    (invoice) => invoice.promiseToPayStatus === "Broken"
+  );
+
+  const reminderActions = invoices.reduce((count, invoice) => {
+    const notes = invoice.collectionNotes || [];
+    return (
+      count +
+      notes.filter((note) =>
+        String(note.note || "").toLowerCase().includes("reminder")
+      ).length
+    );
+  }, 0);
+
+  const collectorMap = {};
+  const branchMap = {};
+
+  invoices.forEach((invoice) => {
+    const collector = invoice.assignedCollector || "Unassigned";
+    const branch = customerBranchMap[invoice.customerEkonId] || "Unassigned";
+    const balanceDue = getInvoiceReportBalance(invoice);
+    const isOpen = ["Unpaid", "Partially Paid"].includes(invoice.status);
+    const isPaid = invoice.status === "Paid";
+
+    if (!collectorMap[collector]) {
+      collectorMap[collector] = {
+        collector,
+        assignedInvoices: 0,
+        openInvoices: 0,
+        paidInvoices: 0,
+        outstandingBalance: 0,
+        collectedAmount: 0,
+        promiseCount: 0,
+        fulfilledPromises: 0,
+        brokenPromises: 0,
+        reminderActions: 0,
+      };
+    }
+
+    if (!branchMap[branch]) {
+      branchMap[branch] = {
+        branch,
+        invoiceCount: 0,
+        openInvoices: 0,
+        paidInvoices: 0,
+        totalInvoiced: 0,
+        collectedAmount: 0,
+        outstandingBalance: 0,
+        over30: 0,
+        over60: 0,
+        over90: 0,
+      };
+    }
+
+    collectorMap[collector].assignedInvoices += invoice.assignedCollector ? 1 : 0;
+    collectorMap[collector].openInvoices += isOpen ? 1 : 0;
+    collectorMap[collector].paidInvoices += isPaid ? 1 : 0;
+    collectorMap[collector].outstandingBalance = roundMoney(
+      collectorMap[collector].outstandingBalance + (isOpen ? balanceDue : 0)
+    );
+    collectorMap[collector].collectedAmount = roundMoney(
+      collectorMap[collector].collectedAmount + Number(invoice.amountPaid || 0)
+    );
+
+    if (invoice.promiseToPayStatus && invoice.promiseToPayStatus !== "None") {
+      collectorMap[collector].promiseCount += 1;
+    }
+
+    if (invoice.promiseToPayStatus === "Fulfilled") {
+      collectorMap[collector].fulfilledPromises += 1;
+    }
+
+    if (invoice.promiseToPayStatus === "Broken") {
+      collectorMap[collector].brokenPromises += 1;
+    }
+
+    collectorMap[collector].reminderActions += (invoice.collectionNotes || []).filter(
+      (note) => String(note.note || "").toLowerCase().includes("reminder")
+    ).length;
+
+    const daysOutstanding = getDaysOutstanding(invoice.dueDate || invoice.createdAt);
+
+    branchMap[branch].invoiceCount += 1;
+    branchMap[branch].openInvoices += isOpen ? 1 : 0;
+    branchMap[branch].paidInvoices += isPaid ? 1 : 0;
+    branchMap[branch].totalInvoiced = roundMoney(
+      branchMap[branch].totalInvoiced + Number(invoice.finalTotal || 0)
+    );
+    branchMap[branch].collectedAmount = roundMoney(
+      branchMap[branch].collectedAmount + Number(invoice.amountPaid || 0)
+    );
+    branchMap[branch].outstandingBalance = roundMoney(
+      branchMap[branch].outstandingBalance + (isOpen ? balanceDue : 0)
+    );
+
+    if (isOpen && daysOutstanding >= 31) branchMap[branch].over30 += 1;
+    if (isOpen && daysOutstanding >= 60) branchMap[branch].over60 += 1;
+    if (isOpen && daysOutstanding >= 90) branchMap[branch].over90 += 1;
+  });
+
+  const collectors = Object.values(collectorMap).map((collector) => {
+    const promiseFulfillmentRate =
+      collector.promiseCount > 0
+        ? roundMoney((collector.fulfilledPromises / collector.promiseCount) * 100)
+        : 0;
+
+    const collectionRate =
+      collector.collectedAmount + collector.outstandingBalance > 0
+        ? roundMoney(
+            (collector.collectedAmount /
+              (collector.collectedAmount + collector.outstandingBalance)) *
+              100
+          )
+        : 0;
+
+    const performanceScore = roundMoney(
+      Math.min(
+        100,
+        collectionRate * 0.55 +
+          promiseFulfillmentRate * 0.25 +
+          Math.min(20, collector.reminderActions)
+      )
+    );
+
+    return {
+      ...collector,
+      collectionRate,
+      promiseFulfillmentRate,
+      performanceScore,
+    };
+  });
+
+  const branches = Object.values(branchMap).map((branch) => ({
+    ...branch,
+    collectionRate:
+      branch.totalInvoiced > 0
+        ? roundMoney((branch.collectedAmount / branch.totalInvoiced) * 100)
+        : 0,
+  }));
+
+  const collectionRate =
+    totalInvoiced > 0 ? roundMoney((totalCollected / totalInvoiced) * 100) : 0;
+
+  const promiseFulfillmentRate =
+    promiseInvoices.length > 0
+      ? roundMoney((fulfilledPromises.length / promiseInvoices.length) * 100)
+      : 0;
+
+  const brokenPromiseRate =
+    promiseInvoices.length > 0
+      ? roundMoney((brokenPromises.length / promiseInvoices.length) * 100)
+      : 0;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    kpis: {
+      totalInvoiced,
+      totalCollected,
+      totalOutstanding,
+      collectionRate,
+      openInvoiceCount: openInvoices.length,
+      paidInvoiceCount: paidInvoices.length,
+      promiseCount: promiseInvoices.length,
+      fulfilledPromises: fulfilledPromises.length,
+      brokenPromises: brokenPromises.length,
+      promiseFulfillmentRate,
+      brokenPromiseRate,
+      reminderActions,
+      collectorCount: collectors.length,
+      branchCount: branches.length,
+    },
+    collectors: collectors.sort(
+      (a, b) => Number(b.performanceScore || 0) - Number(a.performanceScore || 0)
+    ),
+    branches: branches.sort(
+      (a, b) => Number(b.outstandingBalance || 0) - Number(a.outstandingBalance || 0)
+    ),
+  };
+};
+
 const addInvoiceCollectionNote = async ({
   invoiceNumber,
   note,
@@ -1195,4 +1410,5 @@ module.exports = {
   updateInvoiceCollectionWorkflow,
   buildReminderQueue,
   logInvoiceReminder,
+  buildCollectionPerformanceKPIs,
 };
