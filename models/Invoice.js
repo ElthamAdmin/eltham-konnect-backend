@@ -173,7 +173,63 @@ collectionNotes: [
   },
 ],
 
+writeOffStatus: {
+  type: String,
+  enum: ["None", "Pending Approval", "Approved", "Rejected", "Written Off", "Recovered"],
+  default: "None",
+},
+
+writeOffReason: {
+  type: String,
+  default: "",
+},
+
+writeOffNotes: {
+  type: String,
+  default: "",
+},
+
+writeOffAmount: {
+  type: Number,
+  default: 0,
+},
+
+writeOffRequestedBy: {
+  type: String,
+  default: "",
+},
+
+writeOffRequestedAt: {
+  type: Date,
+  default: null,
+},
+
+writeOffApprovedBy: {
+  type: String,
+  default: "",
+},
+
+writeOffApprovedAt: {
+  type: Date,
+  default: null,
+},
+
 writeOffJournalEntryNumber: {
+  type: String,
+  default: "",
+},
+
+writeOffRecoveredAmount: {
+  type: Number,
+  default: 0,
+},
+
+writeOffRecoveredAt: {
+  type: Date,
+  default: null,
+},
+
+recoveryJournalEntryNumber: {
   type: String,
   default: "",
 },

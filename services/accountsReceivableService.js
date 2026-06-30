@@ -1348,6 +1348,210 @@ const buildCollectionPerformanceKPIs = async () => {
   };
 };
 
+const buildWriteOffDashboard = async () => {
+  const invoices = await Invoice.find().sort({ createdAt: 1 });
+
+  const writeOffInvoices = invoices.filter(
+    (invoice) => invoice.writeOffStatus && invoice.writeOffStatus !== "None"
+  );
+
+  const pendingApproval = writeOffInvoices.filter(
+    (invoice) => invoice.writeOffStatus === "Pending Approval"
+  );
+
+  const approved = writeOffInvoices.filter(
+    (invoice) => invoice.writeOffStatus === "Approved"
+  );
+
+  const writtenOff = writeOffInvoices.filter(
+    (invoice) => invoice.writeOffStatus === "Written Off"
+  );
+
+  const recovered = writeOffInvoices.filter(
+    (invoice) => invoice.writeOffStatus === "Recovered"
+  );
+
+  const totalWrittenOff = roundMoney(
+    writeOffInvoices.reduce((sum, invoice) => sum + Number(invoice.writeOffAmount || 0), 0)
+  );
+
+  const totalRecovered = roundMoney(
+    writeOffInvoices.reduce((sum, invoice) => sum + Number(invoice.writeOffRecoveredAmount || 0), 0)
+  );
+
+  const register = writeOffInvoices.map((invoice) => ({
+    invoiceNumber: invoice.invoiceNumber,
+    customerEkonId: invoice.customerEkonId,
+    customerName: invoice.customerName,
+    invoiceDate: invoice.createdAt,
+    finalTotal: roundMoney(invoice.finalTotal),
+    amountPaid: roundMoney(invoice.amountPaid),
+    balanceDue: getInvoiceReportBalance(invoice),
+    writeOffStatus: invoice.writeOffStatus || "None",
+    writeOffReason: invoice.writeOffReason || "",
+    writeOffNotes: invoice.writeOffNotes || "",
+    writeOffAmount: roundMoney(invoice.writeOffAmount),
+    writeOffRequestedBy: invoice.writeOffRequestedBy || "",
+    writeOffRequestedAt: invoice.writeOffRequestedAt,
+    writeOffApprovedBy: invoice.writeOffApprovedBy || "",
+    writeOffApprovedAt: invoice.writeOffApprovedAt,
+    writeOffJournalEntryNumber: invoice.writeOffJournalEntryNumber || "",
+    writeOffRecoveredAmount: roundMoney(invoice.writeOffRecoveredAmount),
+    writeOffRecoveredAt: invoice.writeOffRecoveredAt,
+    recoveryJournalEntryNumber: invoice.recoveryJournalEntryNumber || "",
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    kpis: {
+      pendingApprovalCount: pendingApproval.length,
+      approvedCount: approved.length,
+      writtenOffCount: writtenOff.length,
+      recoveredCount: recovered.length,
+      totalWrittenOff,
+      totalRecovered,
+      netBadDebt: roundMoney(totalWrittenOff - totalRecovered),
+      recoveryRate:
+        totalWrittenOff > 0 ? roundMoney((totalRecovered / totalWrittenOff) * 100) : 0,
+    },
+    register,
+  };
+};
+
+const requestInvoiceWriteOff = async ({
+  invoiceNumber,
+  reason,
+  notes,
+  amount,
+  user,
+}) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  const balanceDue = getInvoiceReportBalance(invoice);
+  const writeOffAmount = roundMoney(amount || balanceDue);
+
+  if (writeOffAmount <= 0) {
+    throw new Error("Write-off amount must be greater than zero.");
+  }
+
+  if (writeOffAmount > balanceDue) {
+    throw new Error("Write-off amount cannot exceed invoice balance due.");
+  }
+
+  const requestedBy = user?.fullName || user?.name || user?.email || "System User";
+
+  invoice.writeOffStatus = "Pending Approval";
+  invoice.writeOffReason = reason || "Other";
+  invoice.writeOffNotes = notes || "";
+  invoice.writeOffAmount = writeOffAmount;
+  invoice.writeOffRequestedBy = requestedBy;
+  invoice.writeOffRequestedAt = new Date();
+  invoice.collectionsStatus = "Legal Review";
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note: `Write-off requested for JMD ${writeOffAmount.toLocaleString()}. Reason: ${invoice.writeOffReason}. ${notes || ""}`,
+    createdBy: requestedBy,
+  });
+
+  await invoice.save();
+  return invoice;
+};
+
+const approveInvoiceWriteOff = async ({ invoiceNumber, user }) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  if (invoice.writeOffStatus !== "Pending Approval") {
+    throw new Error("Only pending write-offs can be approved.");
+  }
+
+  const approvedBy = user?.fullName || user?.name || user?.email || "System User";
+
+  invoice.writeOffStatus = "Written Off";
+  invoice.writeOffApprovedBy = approvedBy;
+  invoice.writeOffApprovedAt = new Date();
+  invoice.status = "Written Off";
+  invoice.collectionsStatus = "Written Off";
+  invoice.balanceDue = 0;
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note: `Write-off approved for JMD ${roundMoney(invoice.writeOffAmount).toLocaleString()}. Journal entry pending.`,
+    createdBy: approvedBy,
+  });
+
+  await invoice.save();
+  return invoice;
+};
+
+const rejectInvoiceWriteOff = async ({ invoiceNumber, notes, user }) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  const rejectedBy = user?.fullName || user?.name || user?.email || "System User";
+
+  invoice.writeOffStatus = "Rejected";
+  invoice.writeOffNotes = notes || invoice.writeOffNotes || "";
+  invoice.collectionsStatus = "Collections";
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note: `Write-off rejected. ${notes || ""}`,
+    createdBy: rejectedBy,
+  });
+
+  await invoice.save();
+  return invoice;
+};
+
+const recordWriteOffRecovery = async ({
+  invoiceNumber,
+  amount,
+  recoveryJournalEntryNumber,
+  user,
+}) => {
+  const invoice = await Invoice.findOne({ invoiceNumber });
+
+  if (!invoice) {
+    throw new Error("Invoice not found.");
+  }
+
+  const recoveredAmount = roundMoney(amount);
+
+  if (recoveredAmount <= 0) {
+    throw new Error("Recovery amount must be greater than zero.");
+  }
+
+  const recordedBy = user?.fullName || user?.name || user?.email || "System User";
+
+  invoice.writeOffRecoveredAmount = roundMoney(
+    Number(invoice.writeOffRecoveredAmount || 0) + recoveredAmount
+  );
+  invoice.writeOffRecoveredAt = new Date();
+  invoice.recoveryJournalEntryNumber = recoveryJournalEntryNumber || "";
+  invoice.writeOffStatus = "Recovered";
+
+  invoice.collectionNotes = invoice.collectionNotes || [];
+  invoice.collectionNotes.push({
+    note: `Bad debt recovery recorded for JMD ${recoveredAmount.toLocaleString()}.`,
+    createdBy: recordedBy,
+  });
+
+  await invoice.save();
+  return invoice;
+};
+
 const addInvoiceCollectionNote = async ({
   invoiceNumber,
   note,
@@ -1411,4 +1615,9 @@ module.exports = {
   buildReminderQueue,
   logInvoiceReminder,
   buildCollectionPerformanceKPIs,
+  buildWriteOffDashboard,
+requestInvoiceWriteOff,
+approveInvoiceWriteOff,
+rejectInvoiceWriteOff,
+recordWriteOffRecovery,
 };

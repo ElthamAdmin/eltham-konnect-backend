@@ -11,6 +11,11 @@ const {
   buildReminderQueue,
   logInvoiceReminder,
   buildCollectionPerformanceKPIs,
+  buildWriteOffDashboard,
+requestInvoiceWriteOff,
+approveInvoiceWriteOff,
+rejectInvoiceWriteOff,
+recordWriteOffRecovery,
 } = require("../services/accountsReceivableService");
 
 const getARAging = async (req, res) => {
@@ -154,6 +159,99 @@ const getCollectionPerformanceKPIs = async (req, res) => {
   }
 };
 
+const getWriteOffDashboard = async (req, res) => {
+  try {
+    const dashboard = await buildWriteOffDashboard();
+    res.json({ success: true, data: dashboard });
+  } catch (error) {
+    console.error("Write-off dashboard error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not load write-off dashboard",
+      error: error.message,
+    });
+  }
+};
+
+const requestWriteOff = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const invoice = await requestInvoiceWriteOff({
+      invoiceNumber,
+      reason: req.body.reason,
+      notes: req.body.notes,
+      amount: req.body.amount,
+      user: req.user,
+    });
+
+    res.json({ success: true, message: "Write-off requested successfully", data: invoice });
+  } catch (error) {
+    console.error("Request write-off error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not request write-off",
+      error: error.message,
+    });
+  }
+};
+
+const approveWriteOff = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const invoice = await approveInvoiceWriteOff({ invoiceNumber, user: req.user });
+
+    res.json({ success: true, message: "Write-off approved successfully", data: invoice });
+  } catch (error) {
+    console.error("Approve write-off error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not approve write-off",
+      error: error.message,
+    });
+  }
+};
+
+const rejectWriteOff = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const invoice = await rejectInvoiceWriteOff({
+      invoiceNumber,
+      notes: req.body.notes,
+      user: req.user,
+    });
+
+    res.json({ success: true, message: "Write-off rejected successfully", data: invoice });
+  } catch (error) {
+    console.error("Reject write-off error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not reject write-off",
+      error: error.message,
+    });
+  }
+};
+
+const recordRecovery = async (req, res) => {
+  try {
+    const { invoiceNumber } = req.params;
+    const invoice = await recordWriteOffRecovery({
+      invoiceNumber,
+      amount: req.body.amount,
+      recoveryJournalEntryNumber: req.body.recoveryJournalEntryNumber,
+      user: req.user,
+    });
+
+    res.json({ success: true, message: "Recovery recorded successfully", data: invoice });
+  } catch (error) {
+    console.error("Record recovery error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not record recovery",
+      error: error.message,
+    });
+  }
+};
+
 const getCustomerCollectionsProfile = async (req, res) => {
   try {
     const { customerEkonId } = req.params;
@@ -245,4 +343,9 @@ module.exports = {
   getReminderQueue,
   sendInvoiceReminder,
   getCollectionPerformanceKPIs,
+  getWriteOffDashboard,
+requestWriteOff,
+approveWriteOff,
+rejectWriteOff,
+recordRecovery,
 };
