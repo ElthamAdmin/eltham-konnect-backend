@@ -7,7 +7,12 @@ const {
 const getAccounts = async (req, res) => {
   try {
     await ensureSystemAccounts();
-    await rebuildAllAccountBalancesFromLedger();
+
+    try {
+      await rebuildAllAccountBalancesFromLedger();
+    } catch (balanceError) {
+      console.error("Account balance rebuild warning:", balanceError.message);
+    }
 
     const accounts = await ChartOfAccount.find({
       status: "Active",
@@ -94,18 +99,24 @@ const createAccount = async (req, res) => {
 const getChartHealth = async (req, res) => {
   try {
     await ensureSystemAccounts();
-    await rebuildAllAccountBalancesFromLedger();
+
+    let balanceRebuildStatus = "Completed";
+    let balanceRebuildError = "";
+
+    try {
+      await rebuildAllAccountBalancesFromLedger();
+    } catch (balanceError) {
+      balanceRebuildStatus = "Warning";
+      balanceRebuildError = balanceError.message;
+      console.error("Chart health balance rebuild warning:", balanceError.message);
+    }
 
     const accounts = await ChartOfAccount.find();
 
     const inactiveAccounts = accounts.filter((account) => account.status === "Inactive");
-
     const systemAccounts = accounts.filter((account) => account.isSystemAccount);
-
     const manualBlocked = accounts.filter((account) => account.allowManualEntries === false);
-
     const missingNormalBalance = accounts.filter((account) => !account.normalBalance);
-
     const missingCategory = accounts.filter((account) => !account.accountCategory);
 
     const duplicateCodes = [];
@@ -116,9 +127,7 @@ const getChartHealth = async (req, res) => {
     });
 
     Object.entries(codeMap).forEach(([accountCode, count]) => {
-      if (count > 1) {
-        duplicateCodes.push(accountCode);
-      }
+      if (count > 1) duplicateCodes.push(accountCode);
     });
 
     const healthIssues =
@@ -141,7 +150,12 @@ const getChartHealth = async (req, res) => {
         duplicateCodes: duplicateCodes.length,
         duplicateAccountCodes: duplicateCodes,
         healthIssues,
-        healthStatus: healthIssues === 0 ? "Healthy" : "Needs Review",
+        balanceRebuildStatus,
+        balanceRebuildError,
+        healthStatus:
+          healthIssues === 0 && balanceRebuildStatus === "Completed"
+            ? "Healthy"
+            : "Needs Review",
       },
     });
   } catch (error) {
