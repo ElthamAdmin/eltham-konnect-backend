@@ -9,5 +9,6 @@ const {
 } = require("../controllers/generalLedgerController");
 
 router.get("/", protect, getGeneralLedger);
+router.get("/health", protect, getGeneralLedgerHealth);
 
 module.exports = router;
