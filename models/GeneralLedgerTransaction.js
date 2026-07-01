@@ -70,9 +70,64 @@ const generalLedgerTransactionSchema = new mongoose.Schema(
     },
 
     description: {
-      type: String,
-      default: "",
-    },
+  type: String,
+  default: "",
+},
+
+sourceDocumentType: {
+  type: String,
+  default: "",
+},
+
+sourceDocumentNumber: {
+  type: String,
+  default: "",
+},
+
+sourceDocumentId: {
+  type: String,
+  default: "",
+},
+
+fiscalYear: {
+  type: String,
+  default: "",
+},
+
+accountingPeriod: {
+  type: String,
+  default: "",
+},
+
+branch: {
+  type: String,
+  default: "",
+},
+
+postedBy: {
+  type: String,
+  default: "",
+},
+
+postedAt: {
+  type: Date,
+  default: null,
+},
+
+isReversal: {
+  type: Boolean,
+  default: false,
+},
+
+reversedLedgerNumber: {
+  type: String,
+  default: "",
+},
+
+locked: {
+  type: Boolean,
+  default: false,
+},
   },
   { timestamps: true }
 );

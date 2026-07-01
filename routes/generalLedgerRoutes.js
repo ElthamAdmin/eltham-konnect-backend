@@ -5,6 +5,7 @@ const { protect } = require("../middleware/authMiddleware");
 
 const {
   getGeneralLedger,
+  getGeneralLedgerHealth,
 } = require("../controllers/generalLedgerController");
 
 router.get("/", protect, getGeneralLedger);

@@ -66,10 +66,80 @@ const journalEntrySchema = new mongoose.Schema(
     },
 
     status: {
-      type: String,
-      enum: ["Posted", "Draft", "Reversed"],
-      default: "Posted",
-    },
+  type: String,
+  enum: ["Draft", "Pending Approval", "Approved", "Posted", "Reversed"],
+  default: "Posted",
+},
+
+sourceDocumentType: {
+  type: String,
+  default: "",
+},
+
+sourceDocumentNumber: {
+  type: String,
+  default: "",
+},
+
+sourceDocumentId: {
+  type: String,
+  default: "",
+},
+
+fiscalYear: {
+  type: String,
+  default: "",
+},
+
+accountingPeriod: {
+  type: String,
+  default: "",
+},
+
+postedBy: {
+  type: String,
+  default: "",
+},
+
+postedAt: {
+  type: Date,
+  default: null,
+},
+
+approvedBy: {
+  type: String,
+  default: "",
+},
+
+approvedAt: {
+  type: Date,
+  default: null,
+},
+
+reversedBy: {
+  type: String,
+  default: "",
+},
+
+reversedAt: {
+  type: Date,
+  default: null,
+},
+
+reversalEntryNumber: {
+  type: String,
+  default: "",
+},
+
+reversalReason: {
+  type: String,
+  default: "",
+},
+
+locked: {
+  type: Boolean,
+  default: false,
+},
 
     lines: [journalEntryLineSchema],
 
