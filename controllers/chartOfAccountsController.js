@@ -94,17 +94,6 @@ const getChartHealth = async (req, res) => {
   try {
     await ensureSystemAccounts();
 
-    let balanceRebuildStatus = "Completed";
-    let balanceRebuildError = "";
-
-    try {
-      await rebuildAllAccountBalancesFromLedger();
-    } catch (balanceError) {
-      balanceRebuildStatus = "Warning";
-      balanceRebuildError = balanceError.message;
-      console.error("Chart health balance rebuild warning:", balanceError.message);
-    }
-
     const accounts = await ChartOfAccount.find();
 
     const inactiveAccounts = accounts.filter((account) => account.status === "Inactive");
@@ -125,7 +114,6 @@ const getChartHealth = async (req, res) => {
     });
 
     const healthIssues =
-      inactiveAccounts.length +
       missingNormalBalance.length +
       missingCategory.length +
       duplicateCodes.length;
@@ -144,12 +132,7 @@ const getChartHealth = async (req, res) => {
         duplicateCodes: duplicateCodes.length,
         duplicateAccountCodes: duplicateCodes,
         healthIssues,
-        balanceRebuildStatus,
-        balanceRebuildError,
-        healthStatus:
-          healthIssues === 0 && balanceRebuildStatus === "Completed"
-            ? "Healthy"
-            : "Needs Review",
+        healthStatus: healthIssues === 0 ? "Healthy" : "Needs Review",
       },
     });
   } catch (error) {
