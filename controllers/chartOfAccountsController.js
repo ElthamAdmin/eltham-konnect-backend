@@ -8,12 +8,6 @@ const getAccounts = async (req, res) => {
   try {
     await ensureSystemAccounts();
 
-    try {
-      await rebuildAllAccountBalancesFromLedger();
-    } catch (balanceError) {
-      console.error("Account balance rebuild warning:", balanceError.message);
-    }
-
     const accounts = await ChartOfAccount.find({
       status: "Active",
     }).sort({
