@@ -1,6 +1,9 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
 
-const { postJournalEntry } = require("../services/accountingEngine/journalService");
+const {
+  postJournalEntry,
+  postApprovedJournalEntry,
+} = require("../services/accountingEngine/journalService");
 const {
   rebuildAccountBalanceFromLedger,
   rebuildAllAccountBalancesFromLedger,
@@ -72,6 +75,7 @@ const ensureSystemAccounts = async () => {
 
 module.exports = {
   postJournalEntry,
+  postApprovedJournalEntry,
   ensureSystemAccounts,
   rebuildAccountBalanceFromLedger,
   rebuildAllAccountBalancesFromLedger,

@@ -157,7 +157,115 @@ const postJournalEntry = async ({
   }
 };
 
+const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" }) => {
+  const session = await mongoose.startSession();
+
+  try {
+    let postedEntry = null;
+
+    await session.withTransaction(async () => {
+      const entry = await JournalEntry.findOne({ entryNumber }).session(session);
+
+      if (!entry) {
+        throw new Error("Journal entry not found.");
+      }
+
+      if (!["Approved", "Pending Approval", "Draft"].includes(entry.status)) {
+        throw new Error(`Journal entry cannot be posted from status ${entry.status}.`);
+      }
+
+      if (entry.locked) {
+        throw new Error("Journal entry is locked and cannot be posted again.");
+      }
+
+      const { totalDebit, totalCredit } = validateJournalLines(entry.lines || []);
+
+      await validateAccountingPeriodOpen(entry.entryDate);
+
+      const preparedLines = [];
+
+      for (const line of entry.lines || []) {
+        const account = await ChartOfAccount.findOne({
+          accountCode: line.accountCode,
+          status: "Active",
+        }).session(session);
+
+        if (!account) {
+          throw new Error(`Active chart account ${line.accountCode} not found.`);
+        }
+
+        const debit = roundMoney(line.debit);
+        const credit = roundMoney(line.credit);
+
+        const updatedBalance = calculateUpdatedBalance({
+          currentBalance: account.currentBalance,
+          normalBalance: account.normalBalance,
+          debit,
+          credit,
+        });
+
+        account.currentBalance = updatedBalance;
+        await account.save({ session });
+
+        preparedLines.push({
+          accountCode: account.accountCode,
+          accountName: account.accountName,
+          accountCategory: account.accountCategory,
+          normalBalance: account.normalBalance,
+          debit,
+          credit,
+          runningBalance: updatedBalance,
+          description: line.description || "",
+        });
+      }
+
+      for (const line of preparedLines) {
+        await GeneralLedgerTransaction.create(
+          [
+            {
+              ledgerNumber: generateLedgerNumber(),
+              entryNumber: entry.entryNumber,
+              entryDate: entry.entryDate,
+              accountCode: line.accountCode,
+              accountName: line.accountName,
+              accountCategory: line.accountCategory,
+              normalBalance: line.normalBalance,
+              debit: line.debit,
+              credit: line.credit,
+              runningBalance: line.runningBalance,
+              reference: entry.reference,
+              sourceModule: entry.sourceModule,
+              memo: entry.memo,
+              description: line.description,
+              postedBy,
+              postedAt: new Date(),
+              locked: true,
+            },
+          ],
+          { session }
+        );
+
+        await syncFinancialAccountsForChartAccount(line.accountCode, session);
+      }
+
+      entry.totalDebit = totalDebit;
+      entry.totalCredit = totalCredit;
+      entry.status = "Posted";
+      entry.postedBy = postedBy;
+      entry.postedAt = new Date();
+      entry.locked = true;
+
+      postedEntry = await entry.save({ session });
+    });
+
+    return postedEntry;
+  } finally {
+    session.endSession();
+  }
+};
+
 module.exports = {
   postJournalEntry,
+  postApprovedJournalEntry,
   validateAccountingPeriodOpen,
 };

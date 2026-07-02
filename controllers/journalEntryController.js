@@ -1,5 +1,8 @@
 const JournalEntry = require("../models/JournalEntry");
-const { postJournalEntry } = require("../utils/generalLedgerPoster");
+const {
+  postJournalEntry,
+  postApprovedJournalEntry,
+} = require("../utils/generalLedgerPoster");
 
 const getJournalEntries = async (req, res) => {
   try {
@@ -195,10 +198,200 @@ const reverseJournalEntry = async (req, res) => {
   }
 };
 
+const createDraftJournalEntry = async (req, res) => {
+  try {
+    const {
+      entryDate,
+      memo,
+      reference,
+      sourceModule,
+      lines = [],
+    } = req.body;
+
+    if (!entryDate || !memo) {
+      return res.status(400).json({
+        success: false,
+        message: "Entry date and memo are required.",
+      });
+    }
+
+    const preparedLines = lines
+      .filter((line) => line.accountCode)
+      .map((line) => ({
+        accountCode: line.accountCode,
+        accountName: line.accountName || "",
+        debit: Number(line.debit || 0),
+        credit: Number(line.credit || 0),
+        description: line.description || "",
+      }));
+
+    const totalDebit = preparedLines.reduce((sum, line) => sum + Number(line.debit || 0), 0);
+    const totalCredit = preparedLines.reduce((sum, line) => sum + Number(line.credit || 0), 0);
+
+    const entry = await JournalEntry.create({
+      entryNumber: `JE-DRAFT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      entryDate,
+      memo,
+      reference,
+      sourceModule: sourceModule || "Manual",
+      lines: preparedLines,
+      totalDebit,
+      totalCredit,
+      status: "Draft",
+      createdBy: req.user?.name || req.user?.email || "System User",
+      locked: false,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Draft journal entry saved successfully",
+      data: entry,
+    });
+  } catch (error) {
+    console.error("Create draft journal error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not save draft journal entry",
+      error: error.message,
+    });
+  }
+};
+
+const submitJournalEntryForApproval = async (req, res) => {
+  try {
+    const { entryNumber } = req.params;
+
+    const entry = await JournalEntry.findOne({ entryNumber });
+
+    if (!entry) {
+      return res.status(404).json({
+        success: false,
+        message: "Journal entry not found",
+      });
+    }
+
+    if (entry.status !== "Draft") {
+      return res.status(400).json({
+        success: false,
+        message: "Only draft journal entries can be submitted for approval.",
+      });
+    }
+
+    const debitTotal = (entry.lines || []).reduce((sum, line) => sum + Number(line.debit || 0), 0);
+    const creditTotal = (entry.lines || []).reduce((sum, line) => sum + Number(line.credit || 0), 0);
+
+    if ((entry.lines || []).length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: "At least two journal lines are required.",
+      });
+    }
+
+    if (Number(debitTotal.toFixed(2)) !== Number(creditTotal.toFixed(2))) {
+      return res.status(400).json({
+        success: false,
+        message: "Journal entry is not balanced.",
+      });
+    }
+
+    entry.totalDebit = debitTotal;
+    entry.totalCredit = creditTotal;
+    entry.status = "Pending Approval";
+
+    await entry.save();
+
+    res.json({
+      success: true,
+      message: "Journal entry submitted for approval",
+      data: entry,
+    });
+  } catch (error) {
+    console.error("Submit journal approval error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not submit journal entry for approval",
+      error: error.message,
+    });
+  }
+};
+
+const approveJournalEntry = async (req, res) => {
+  try {
+    const { entryNumber } = req.params;
+
+    const entry = await JournalEntry.findOne({ entryNumber });
+
+    if (!entry) {
+      return res.status(404).json({
+        success: false,
+        message: "Journal entry not found",
+      });
+    }
+
+    if (entry.status !== "Pending Approval") {
+      return res.status(400).json({
+        success: false,
+        message: "Only pending approval journal entries can be approved.",
+      });
+    }
+
+    entry.status = "Approved";
+    entry.approvedBy = req.user?.name || req.user?.email || "System User";
+    entry.approvedAt = new Date();
+
+    await entry.save();
+
+    res.json({
+      success: true,
+      message: "Journal entry approved successfully",
+      data: entry,
+    });
+  } catch (error) {
+    console.error("Approve journal error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not approve journal entry",
+      error: error.message,
+    });
+  }
+};
+
+const postApprovedJournal = async (req, res) => {
+  try {
+    const { entryNumber } = req.params;
+
+    const entry = await postApprovedJournalEntry({
+      entryNumber,
+      postedBy: req.user?.name || req.user?.email || "System User",
+    });
+
+    res.json({
+      success: true,
+      message: "Journal entry posted successfully",
+      data: entry,
+    });
+  } catch (error) {
+    console.error("Post approved journal error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not post journal entry",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getJournalEntries,
   createJournalEntry,
   getJournalEntryByNumber,
   getJournalEntryHealth,
   reverseJournalEntry,
+  createDraftJournalEntry,
+  submitJournalEntryForApproval,
+  approveJournalEntry,
+  postApprovedJournal,
 };
