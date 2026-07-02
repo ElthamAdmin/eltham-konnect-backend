@@ -1,4 +1,5 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 const { ensureSystemAccounts } = require("../utils/generalLedgerPoster");
 const {
   rebuildAllAccountBalancesFromLedger,
@@ -146,8 +147,94 @@ const getChartHealth = async (req, res) => {
   }
 };
 
+const getAccountTree = async (req, res) => {
+  try {
+    await ensureSystemAccounts();
+
+    const accounts = await ChartOfAccount.find({ status: "Active" }).sort({
+      accountCode: 1,
+    });
+
+    const ledgerUsage = await GeneralLedgerTransaction.aggregate([
+      {
+        $group: {
+          _id: "$accountCode",
+          transactionCount: { $sum: 1 },
+          totalDebit: { $sum: "$debit" },
+          totalCredit: { $sum: "$credit" },
+        },
+      },
+    ]);
+
+    const usageMap = {};
+    ledgerUsage.forEach((item) => {
+      usageMap[item._id] = item;
+    });
+
+    const accountMap = {};
+    const rootAccounts = [];
+
+    accounts.forEach((account) => {
+      const usage = usageMap[account.accountCode] || {};
+
+      accountMap[account.accountCode] = {
+        accountCode: account.accountCode,
+        accountName: account.accountName,
+        accountCategory: account.accountCategory,
+        accountType: account.accountType || "",
+        parentAccountCode: account.parentAccountCode || "",
+        currentBalance: Number(account.currentBalance || 0),
+        normalBalance: account.normalBalance,
+        isSystemAccount: account.isSystemAccount,
+        allowManualEntries: account.allowManualEntries,
+        transactionCount: Number(usage.transactionCount || 0),
+        totalDebit: Number(usage.totalDebit || 0),
+        totalCredit: Number(usage.totalCredit || 0),
+        children: [],
+      };
+    });
+
+    Object.values(accountMap).forEach((account) => {
+      if (account.parentAccountCode && accountMap[account.parentAccountCode]) {
+        accountMap[account.parentAccountCode].children.push(account);
+      } else {
+        rootAccounts.push(account);
+      }
+    });
+
+    const categories = [
+      "Asset",
+      "Liability",
+      "Equity",
+      "Revenue",
+      "Cost of Sales",
+      "Expense",
+    ].map((category) => ({
+      category,
+      accounts: rootAccounts.filter((account) => account.accountCategory === category),
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        generatedAt: new Date().toISOString(),
+        categories,
+      },
+    });
+  } catch (error) {
+    console.error("Account tree error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not load account tree",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getAccounts,
   createAccount,
   getChartHealth,
+  getAccountTree,
 };
