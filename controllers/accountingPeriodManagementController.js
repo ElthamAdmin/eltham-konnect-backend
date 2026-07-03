@@ -113,6 +113,32 @@ const validateAccountingPeriod = async (req, res) => {
   }
 };
 
+const getCloseChecklist = async (req, res) => {
+  try {
+    const { periodNumber } = req.params;
+
+    const checklist = await periodService.buildCloseChecklist({
+      periodNumber,
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: checklist.readyToClose
+        ? "Period is ready to close."
+        : "Period is not ready to close.",
+      data: checklist,
+    });
+  } catch (error) {
+    console.error("Close checklist error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not build close checklist",
+      error: error.message,
+    });
+  }
+};
+
 const closeAccountingManagementPeriod = async (req, res) => {
   try {
     const { periodNumber } = req.params;
@@ -196,6 +222,7 @@ module.exports = {
   getCurrentAccountingPeriod,
   createAccountingPeriod,
   validateAccountingPeriod,
+  getCloseChecklist,
   closeAccountingManagementPeriod,
   lockAccountingPeriod,
   reopenAccountingPeriod,

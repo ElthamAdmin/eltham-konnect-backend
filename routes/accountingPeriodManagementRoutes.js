@@ -8,7 +8,8 @@ const {
   getAccountingPeriods,
   getCurrentAccountingPeriod,
   createAccountingPeriod,
-  validateAccountingPeriod,
+    validateAccountingPeriod,
+  getCloseChecklist,
   closeAccountingManagementPeriod,
   lockAccountingPeriod,
   reopenAccountingPeriod,
@@ -20,6 +21,7 @@ router.get("/current", protect, getCurrentAccountingPeriod);
 router.post("/", protect, createAccountingPeriod);
 
 router.get("/:periodNumber/validate", protect, validateAccountingPeriod);
+router.get("/:periodNumber/checklist", protect, getCloseChecklist);
 
 router.put("/:periodNumber/close", protect, closeAccountingManagementPeriod);
 router.put("/:periodNumber/lock", protect, lockAccountingPeriod);

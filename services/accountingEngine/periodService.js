@@ -142,7 +142,79 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
   };
 };
 
+const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
+  const validation = await validatePeriod({ periodNumber, user });
+
+  const { period, checklist, errors, warnings, summary } = validation;
+
+  const closeChecklist = {
+    validationPassed: validation.passed,
+    trialBalanceBalanced: checklist.trialBalanceBalanced,
+    profitAndLossGenerated: checklist.profitAndLossGenerated,
+    balanceSheetGenerated: checklist.balanceSheetGenerated,
+    allJournalEntriesPosted: checklist.allJournalEntriesPosted,
+    noDraftJournals: checklist.noDraftJournals,
+    noUnreconciledBankAccounts: checklist.noUnreconciledBankAccounts,
+    depreciationPosted: checklist.depreciationPosted,
+    closingJournalCreated: checklist.closingJournalCreated,
+  };
+
+  const requiredChecksPassed =
+    closeChecklist.validationPassed &&
+    closeChecklist.trialBalanceBalanced &&
+    closeChecklist.profitAndLossGenerated &&
+    closeChecklist.balanceSheetGenerated &&
+    closeChecklist.allJournalEntriesPosted &&
+    closeChecklist.noDraftJournals;
+
+  period.status = requiredChecksPassed ? "Closing" : period.status;
+  period.checklist = {
+    ...period.checklist,
+    ...closeChecklist,
+  };
+
+  await period.save();
+
+  return {
+    period,
+    readyToClose: requiredChecksPassed,
+    checklist: closeChecklist,
+    errors,
+    warnings,
+    summary,
+  };
+};
+
 const closePeriod = async ({ periodNumber, notes = "", user }) => {
+  const checklistResult = await buildCloseChecklist({ periodNumber, user });
+
+  const { period, readyToClose } = checklistResult;
+
+  if (period.status === "Locked") {
+    throw new Error("Locked accounting periods cannot be closed.");
+  }
+
+  if (period.status === "Closed") {
+    throw new Error("Accounting period is already closed.");
+  }
+
+  if (!readyToClose) {
+    throw new Error("Period cannot be closed because the close checklist is incomplete.");
+  }
+
+  period.status = "Closed";
+  period.allowPosting = false;
+  period.validationStatus = "Passed";
+  period.closedAt = new Date();
+  period.closedBy = getUserName(user);
+  period.notes = notes || period.notes;
+
+  await period.save();
+
+  return period;
+};
+
+const lockPeriod = async ({ periodNumber, notes = "", user }) => {
   const validation = await validatePeriod({ periodNumber, user });
   const { period, passed } = validation;
 
@@ -219,6 +291,7 @@ module.exports = {
   getPeriodByDate,
   getCurrentPeriod,
   validatePeriod,
+  buildCloseChecklist,
   closePeriod,
   lockPeriod,
   reopenPeriod,
