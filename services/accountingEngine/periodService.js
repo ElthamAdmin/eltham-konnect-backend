@@ -242,28 +242,6 @@ const lockPeriod = async ({ periodNumber, notes = "", user }) => {
   return period;
 };
 
-const lockPeriod = async ({ periodNumber, notes = "", user }) => {
-  const period = await AccountingPeriod.findOne({ periodNumber });
-
-  if (!period) {
-    throw new Error("Accounting period not found.");
-  }
-
-  if (period.status === "Open") {
-    throw new Error("Accounting period must be closed before locking.");
-  }
-
-  period.status = "Locked";
-  period.allowPosting = false;
-  period.lockedAt = new Date();
-  period.lockedBy = getUserName(user);
-  period.notes = notes || period.notes;
-
-  await period.save();
-
-  return period;
-};
-
 const reopenPeriod = async ({ periodNumber, reason = "", user }) => {
   const period = await AccountingPeriod.findOne({ periodNumber });
 
