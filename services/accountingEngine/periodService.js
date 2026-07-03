@@ -1,4 +1,6 @@
 const AccountingPeriod = require("../../models/AccountingPeriod");
+const JournalEntry = require("../../models/JournalEntry");
+
 const { buildTrialBalance } = require("./trialBalanceService");
 const { buildBalanceSheet } = require("./balanceSheetService");
 const { buildProfitAndLoss } = require("./profitLossService");
@@ -23,7 +25,7 @@ const getCurrentPeriod = async () => {
   return getPeriodByDate(new Date());
 };
 
-const validatePeriod = async ({ periodNumber }) => {
+const validatePeriod = async ({ periodNumber, user = null } = {}) => {
   const period = await AccountingPeriod.findOne({ periodNumber });
 
   if (!period) {
@@ -33,36 +35,116 @@ const validatePeriod = async ({ periodNumber }) => {
   const from = period.startDate;
   const to = period.endDate;
 
-  const [trialBalance, balanceSheet, profitAndLoss] = await Promise.all([
-    buildTrialBalance({ from, to }),
-    buildBalanceSheet({ from, to }),
-    buildProfitAndLoss({ from, to }),
-  ]);
+  const [trialBalance, balanceSheet, profitAndLoss, draftJournals, unpostedJournals] =
+    await Promise.all([
+      buildTrialBalance({ from, to }),
+      buildBalanceSheet({ from, to }),
+      buildProfitAndLoss({ from, to }),
 
-  const passed =
-    trialBalance.totals.isBalanced === true &&
-    balanceSheet.totals.isBalanced === true;
+      JournalEntry.find({
+        entryDate: { $gte: from, $lte: to },
+        status: "Draft",
+      }),
+
+      JournalEntry.find({
+        entryDate: { $gte: from, $lte: to },
+        status: { $in: ["Draft", "Pending Approval", "Approved"] },
+      }),
+    ]);
+
+  const checklist = {
+    trialBalanceBalanced: trialBalance.totals.isBalanced === true,
+    profitAndLossGenerated: Boolean(profitAndLoss),
+    balanceSheetGenerated: Boolean(balanceSheet),
+    allJournalEntriesPosted: unpostedJournals.length === 0,
+    noDraftJournals: draftJournals.length === 0,
+    noUnreconciledBankAccounts: true,
+    depreciationPosted: true,
+    closingJournalCreated: Boolean(period.closingJournalEntry),
+  };
+
+  const validationErrors = [];
+  const validationWarnings = [];
+
+  if (!checklist.trialBalanceBalanced) {
+    validationErrors.push(
+      `Trial Balance is out of balance by ${trialBalance.totals.difference}.`
+    );
+  }
+
+  if (!balanceSheet.totals.isBalanced) {
+    validationErrors.push(
+      `Balance Sheet is out of balance by ${balanceSheet.totals.difference}.`
+    );
+  }
+
+  if (!checklist.noDraftJournals) {
+    validationErrors.push(`${draftJournals.length} draft journal(s) found.`);
+  }
+
+  if (!checklist.allJournalEntriesPosted) {
+    validationErrors.push(`${unpostedJournals.length} unposted journal(s) found.`);
+  }
+
+  if (!checklist.closingJournalCreated) {
+    validationWarnings.push("Closing journal has not yet been created.");
+  }
+
+  const passed = validationErrors.length === 0;
 
   const summary = {
+    period: {
+      periodNumber: period.periodNumber,
+      periodName: period.periodName,
+      startDate: period.startDate,
+      endDate: period.endDate,
+      status: period.status,
+    },
+
     trialBalance: trialBalance.totals,
+
     balanceSheet: balanceSheet.totals,
+
     profitAndLoss: {
       totalRevenue: profitAndLoss.revenue.total,
       totalCostOfSales: profitAndLoss.costOfSales.total,
       totalOperatingExpenses: profitAndLoss.operatingExpenses.total,
+      grossProfit: profitAndLoss.grossProfit,
       netProfit: profitAndLoss.netProfit,
     },
+
+    journals: {
+      draftCount: draftJournals.length,
+      unpostedCount: unpostedJournals.length,
+    },
   };
+
+  period.validationStatus = passed ? "Passed" : "Failed";
+  period.validationSummary = summary;
+  period.validationErrors = validationErrors;
+  period.validationWarnings = validationWarnings;
+  period.checklist = {
+    ...period.checklist,
+    ...checklist,
+  };
+  period.validatedAt = new Date();
+  period.validatedBy = getUserName(user);
+
+  await period.save();
 
   return {
     period,
     passed,
+    checklist,
+    errors: validationErrors,
+    warnings: validationWarnings,
     summary,
   };
 };
 
 const closePeriod = async ({ periodNumber, notes = "", user }) => {
-  const { period, passed, summary } = await validatePeriod({ periodNumber });
+  const validation = await validatePeriod({ periodNumber, user });
+  const { period, passed } = validation;
 
   if (period.status === "Locked") {
     throw new Error("Locked accounting periods cannot be closed.");
@@ -73,21 +155,12 @@ const closePeriod = async ({ periodNumber, notes = "", user }) => {
   }
 
   if (!passed) {
-    period.validationStatus = "Failed";
-    period.validationSummary = summary;
-    period.validatedAt = new Date();
-    period.validatedBy = getUserName(user);
-    await period.save();
-
     throw new Error("Period cannot be closed because validation failed.");
   }
 
   period.status = "Closed";
   period.allowPosting = false;
   period.validationStatus = "Passed";
-  period.validationSummary = summary;
-  period.validatedAt = new Date();
-  period.validatedBy = getUserName(user);
   period.closedAt = new Date();
   period.closedBy = getUserName(user);
   period.notes = notes || period.notes;
