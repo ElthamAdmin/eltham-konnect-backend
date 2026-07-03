@@ -1,13 +1,13 @@
-const { profitAndLossService } = require("../services/accountingEngine");
+const { profitLossService } = require("../services/accountingEngine");
 
 const getProfitAndLoss = async (req, res) => {
   try {
     const { from = "", to = "" } = req.query;
 
-    const report = await profitAndLossService.buildProfitAndLoss({
-      from,
-      to,
-    });
+    const report = await profitLossService.buildProfitAndLoss({
+  from,
+  to,
+});
 
     res.json({
       success: true,
