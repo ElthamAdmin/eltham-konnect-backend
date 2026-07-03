@@ -5,6 +5,14 @@ const { buildTrialBalance } = require("./trialBalanceService");
 const { buildBalanceSheet } = require("./balanceSheetService");
 const { buildProfitAndLoss } = require("./profitLossService");
 
+const {
+  postJournalEntry,
+} = require("./journalService");
+
+const {
+  SYSTEM_ACCOUNTS,
+} = require("./accountingConstants");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -99,6 +107,7 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
       startDate: period.startDate,
       endDate: period.endDate,
       status: period.status,
+      closingJournalCreated: true,
     },
 
     trialBalance: trialBalance.totals,
@@ -185,6 +194,129 @@ const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
   };
 };
 
+const createClosingJournal = async ({
+    period,
+    profitAndLoss,
+    user,
+}) => {
+
+    if (Number(profitAndLoss.netProfit) === 0) {
+        return null;
+    }
+
+    const entries = [];
+
+    //-----------------------------------
+    // Close Revenue
+    //-----------------------------------
+
+    profitAndLoss.revenue.accounts.forEach(account => {
+
+        if (Number(account.amount) > 0) {
+
+            entries.push({
+
+                accountCode: account.accountCode,
+
+                debit: account.amount,
+
+                credit: 0,
+
+            });
+
+        }
+
+    });
+
+    //-----------------------------------
+    // Close Cost of Sales
+    //-----------------------------------
+
+    profitAndLoss.costOfSales.accounts.forEach(account => {
+
+        if (Number(account.amount) > 0) {
+
+            entries.push({
+
+                accountCode: account.accountCode,
+
+                debit: 0,
+
+                credit: account.amount,
+
+            });
+
+        }
+
+    });
+
+    //-----------------------------------
+    // Close Expenses
+    //-----------------------------------
+
+    profitAndLoss.operatingExpenses.accounts.forEach(account => {
+
+        if (Number(account.amount) > 0) {
+
+            entries.push({
+
+                accountCode: account.accountCode,
+
+                debit: 0,
+
+                credit: account.amount,
+
+            });
+
+        }
+
+    });
+
+    //-----------------------------------
+    // Transfer Net Profit
+    //-----------------------------------
+
+    entries.push({
+
+        accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
+
+        debit:
+            profitAndLoss.netProfit < 0
+                ? Math.abs(profitAndLoss.netProfit)
+                : 0,
+
+        credit:
+            profitAndLoss.netProfit > 0
+                ? profitAndLoss.netProfit
+                : 0,
+
+    });
+
+    await postJournalEntry({
+
+        transactionType: "PERIOD_CLOSE",
+
+        referenceNumber: period.periodNumber,
+
+        transactionDate: period.endDate,
+
+        memo:
+            `Closing Journal - ${period.periodName}`,
+
+        description:
+            `Automatic Closing Journal for ${period.periodName}`,
+
+        entries,
+
+        createdBy:
+            getUserName(user),
+
+    });
+
+    return true;
+
+};
+
 const closePeriod = async ({ periodNumber, notes = "", user }) => {
   const checklistResult = await buildCloseChecklist({ periodNumber, user });
 
@@ -201,6 +333,24 @@ const closePeriod = async ({ periodNumber, notes = "", user }) => {
   if (!readyToClose) {
     throw new Error("Period cannot be closed because the close checklist is incomplete.");
   }
+
+  const profitAndLoss = await buildProfitAndLoss({
+
+    from: period.startDate,
+
+    to: period.endDate,
+
+});
+
+await createClosingJournal({
+
+    period,
+
+    profitAndLoss,
+
+    user,
+
+});
 
   period.status = "Closed";
   period.allowPosting = false;
