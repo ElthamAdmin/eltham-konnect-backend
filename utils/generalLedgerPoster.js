@@ -29,6 +29,7 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["3050", "Owner Drawings", "Equity", "Debit", "Owner Drawings"],
   ["3100", "Retained Earnings", "Equity", "Credit", "Retained Earnings"],
   ["3200", "Current Year Earnings", "Equity", "Credit", "Current Year Earnings"],
+  ["3900", "Income Summary", "Equity", "Credit", "Temporary Closing Account"],
 
   ["4000", "Shipping Revenue", "Revenue", "Credit", "Income"],
   ["4010", "Marketplace Revenue", "Revenue", "Credit", "Income"],

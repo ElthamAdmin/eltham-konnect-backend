@@ -194,127 +194,160 @@ const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
   };
 };
 
-const createClosingJournal = async ({
-    period,
-    profitAndLoss,
-    user,
-}) => {
+const createClosingJournal = async ({ period, profitAndLoss, user }) => {
+  if (period.closingJournalEntry) {
+    return {
+      entryNumber: period.closingJournalEntry,
+      alreadyCreated: true,
+    };
+  }
 
-    if (Number(profitAndLoss.netProfit) === 0) {
-        return null;
-    }
+  const incomeSummaryAccount = "3900";
+  const retainedEarningsAccount = "3100";
 
-    const entries = [];
+  const revenueTotal = Number(profitAndLoss.revenue.total || 0);
+  const costOfSalesTotal = Number(profitAndLoss.costOfSales.total || 0);
+  const expenseTotal = Number(profitAndLoss.operatingExpenses.total || 0);
+  const netProfit = Number(profitAndLoss.netProfit || 0);
 
-    //-----------------------------------
-    // Close Revenue
-    //-----------------------------------
+  const createdEntries = [];
 
-    profitAndLoss.revenue.accounts.forEach(account => {
+  if (revenueTotal > 0) {
+    const revenueLines = [];
 
-        if (Number(account.amount) > 0) {
-
-            entries.push({
-
-                accountCode: account.accountCode,
-
-                debit: account.amount,
-
-                credit: 0,
-
-            });
-
-        }
-
+    profitAndLoss.revenue.accounts.forEach((account) => {
+      if (Number(account.amount || 0) > 0) {
+        revenueLines.push({
+          accountCode: account.accountCode,
+          debit: Number(account.amount || 0),
+          credit: 0,
+          description: `Close revenue account ${account.accountName}`,
+        });
+      }
     });
 
-    //-----------------------------------
-    // Close Cost of Sales
-    //-----------------------------------
-
-    profitAndLoss.costOfSales.accounts.forEach(account => {
-
-        if (Number(account.amount) > 0) {
-
-            entries.push({
-
-                accountCode: account.accountCode,
-
-                debit: 0,
-
-                credit: account.amount,
-
-            });
-
-        }
-
+    revenueLines.push({
+      accountCode: incomeSummaryAccount,
+      debit: 0,
+      credit: revenueTotal,
+      description: `Transfer revenue to Income Summary for ${period.periodName}`,
     });
 
-    //-----------------------------------
-    // Close Expenses
-    //-----------------------------------
-
-    profitAndLoss.operatingExpenses.accounts.forEach(account => {
-
-        if (Number(account.amount) > 0) {
-
-            entries.push({
-
-                accountCode: account.accountCode,
-
-                debit: 0,
-
-                credit: account.amount,
-
-            });
-
-        }
-
+    const revenueCloseEntry = await postJournalEntry({
+      entryDate: period.endDate,
+      memo: `Revenue Closing Journal - ${period.periodName}`,
+      reference: `${period.periodNumber}-REV-CLOSE`,
+      sourceModule: "Period Closing",
+      lines: revenueLines,
+      createdBy: getUserName(user),
     });
 
-    //-----------------------------------
-    // Transfer Net Profit
-    //-----------------------------------
+    createdEntries.push(revenueCloseEntry.entryNumber);
+  }
 
-    entries.push({
+  const totalExpenses = costOfSalesTotal + expenseTotal;
 
-        accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
+  if (totalExpenses > 0) {
+    const expenseLines = [
+      {
+        accountCode: incomeSummaryAccount,
+        debit: totalExpenses,
+        credit: 0,
+        description: `Transfer expenses from Income Summary for ${period.periodName}`,
+      },
+    ];
 
-        debit:
-            profitAndLoss.netProfit < 0
-                ? Math.abs(profitAndLoss.netProfit)
-                : 0,
-
-        credit:
-            profitAndLoss.netProfit > 0
-                ? profitAndLoss.netProfit
-                : 0,
-
+    profitAndLoss.costOfSales.accounts.forEach((account) => {
+      if (Number(account.amount || 0) > 0) {
+        expenseLines.push({
+          accountCode: account.accountCode,
+          debit: 0,
+          credit: Number(account.amount || 0),
+          description: `Close cost of sales account ${account.accountName}`,
+        });
+      }
     });
 
-    await postJournalEntry({
-
-        transactionType: "PERIOD_CLOSE",
-
-        referenceNumber: period.periodNumber,
-
-        transactionDate: period.endDate,
-
-        memo:
-            `Closing Journal - ${period.periodName}`,
-
-        description:
-            `Automatic Closing Journal for ${period.periodName}`,
-
-        entries,
-
-        createdBy:
-            getUserName(user),
-
+    profitAndLoss.operatingExpenses.accounts.forEach((account) => {
+      if (Number(account.amount || 0) > 0) {
+        expenseLines.push({
+          accountCode: account.accountCode,
+          debit: 0,
+          credit: Number(account.amount || 0),
+          description: `Close expense account ${account.accountName}`,
+        });
+      }
     });
 
-    return true;
+    const expenseCloseEntry = await postJournalEntry({
+      entryDate: period.endDate,
+      memo: `Expense Closing Journal - ${period.periodName}`,
+      reference: `${period.periodNumber}-EXP-CLOSE`,
+      sourceModule: "Period Closing",
+      lines: expenseLines,
+      createdBy: getUserName(user),
+    });
 
+    createdEntries.push(expenseCloseEntry.entryNumber);
+  }
+
+  if (netProfit !== 0) {
+    const retainedEarningsLines =
+      netProfit > 0
+        ? [
+            {
+              accountCode: incomeSummaryAccount,
+              debit: netProfit,
+              credit: 0,
+              description: `Close net profit from Income Summary for ${period.periodName}`,
+            },
+            {
+              accountCode: retainedEarningsAccount,
+              debit: 0,
+              credit: netProfit,
+              description: `Transfer net profit to Retained Earnings for ${period.periodName}`,
+            },
+          ]
+        : [
+            {
+              accountCode: retainedEarningsAccount,
+              debit: Math.abs(netProfit),
+              credit: 0,
+              description: `Transfer net loss to Retained Earnings for ${period.periodName}`,
+            },
+            {
+              accountCode: incomeSummaryAccount,
+              debit: 0,
+              credit: Math.abs(netProfit),
+              description: `Close net loss from Income Summary for ${period.periodName}`,
+            },
+          ];
+
+    const retainedEarningsEntry = await postJournalEntry({
+      entryDate: period.endDate,
+      memo: `Retained Earnings Transfer - ${period.periodName}`,
+      reference: `${period.periodNumber}-RE-CLOSE`,
+      sourceModule: "Period Closing",
+      lines: retainedEarningsLines,
+      createdBy: getUserName(user),
+    });
+
+    createdEntries.push(retainedEarningsEntry.entryNumber);
+  }
+
+  period.closingJournalEntry = createdEntries.join(", ");
+  period.retainedEarningsJournal = createdEntries[createdEntries.length - 1] || "";
+  period.checklist = {
+    ...period.checklist,
+    closingJournalCreated: createdEntries.length > 0,
+  };
+
+  await period.save();
+
+  return {
+    entryNumber: period.closingJournalEntry,
+    createdEntries,
+  };
 };
 
 const closePeriod = async ({ periodNumber, notes = "", user }) => {
@@ -365,26 +398,24 @@ await createClosingJournal({
 };
 
 const lockPeriod = async ({ periodNumber, notes = "", user }) => {
-  const validation = await validatePeriod({ periodNumber, user });
-  const { period, passed } = validation;
+  const period = await AccountingPeriod.findOne({ periodNumber });
+
+  if (!period) {
+    throw new Error("Accounting period not found.");
+  }
+
+  if (period.status === "Open" || period.status === "Closing") {
+    throw new Error("Accounting period must be closed before locking.");
+  }
 
   if (period.status === "Locked") {
-    throw new Error("Locked accounting periods cannot be closed.");
+    throw new Error("Accounting period is already locked.");
   }
 
-  if (period.status === "Closed") {
-    throw new Error("Accounting period is already closed.");
-  }
-
-  if (!passed) {
-    throw new Error("Period cannot be closed because validation failed.");
-  }
-
-  period.status = "Closed";
+  period.status = "Locked";
   period.allowPosting = false;
-  period.validationStatus = "Passed";
-  period.closedAt = new Date();
-  period.closedBy = getUserName(user);
+  period.lockedAt = new Date();
+  period.lockedBy = getUserName(user);
   period.notes = notes || period.notes;
 
   await period.save();
