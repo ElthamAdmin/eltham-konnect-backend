@@ -1,5 +1,6 @@
 const AccountingPeriod = require("../../models/AccountingPeriod");
 const JournalEntry = require("../../models/JournalEntry");
+const ChartOfAccount = require("../../models/ChartOfAccount");
 
 const { buildTrialBalance } = require("./trialBalanceService");
 const { buildBalanceSheet } = require("./balanceSheetService");
@@ -194,7 +195,50 @@ const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
   };
 };
 
+const ensureClosingAccounts = async () => {
+  await ChartOfAccount.findOneAndUpdate(
+    { accountCode: "3900" },
+    {
+      $set: {
+        accountName: "Income Summary",
+        accountCategory: "Equity",
+        accountType: "Temporary Closing Account",
+        normalBalance: "Credit",
+        status: "Active",
+        isSystemAccount: true,
+        allowManualEntries: false,
+      },
+      $setOnInsert: {
+        openingBalance: 0,
+        currentBalance: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
+
+  await ChartOfAccount.findOneAndUpdate(
+    { accountCode: "3100" },
+    {
+      $set: {
+        accountName: "Retained Earnings",
+        accountCategory: "Equity",
+        accountType: "Retained Earnings",
+        normalBalance: "Credit",
+        status: "Active",
+        isSystemAccount: true,
+      },
+      $setOnInsert: {
+        openingBalance: 0,
+        currentBalance: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
+};
+
 const createClosingJournal = async ({ period, profitAndLoss, user }) => {
+  await ensureClosingAccounts();
+
   if (period.closingJournalEntry) {
     return {
       entryNumber: period.closingJournalEntry,
