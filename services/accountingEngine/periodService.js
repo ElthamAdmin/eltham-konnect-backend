@@ -1,18 +1,12 @@
 const AccountingPeriod = require("../../models/AccountingPeriod");
 const JournalEntry = require("../../models/JournalEntry");
 const ChartOfAccount = require("../../models/ChartOfAccount");
+const FiscalYear = require("../../models/FiscalYear");
 
 const { buildTrialBalance } = require("./trialBalanceService");
 const { buildBalanceSheet } = require("./balanceSheetService");
 const { buildProfitAndLoss } = require("./profitLossService");
-
-const {
-  postJournalEntry,
-} = require("./journalService");
-
-const {
-  SYSTEM_ACCOUNTS,
-} = require("./accountingConstants");
+const { postJournalEntry } = require("./journalService");
 
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
@@ -34,6 +28,70 @@ const getCurrentPeriod = async () => {
   return getPeriodByDate(new Date());
 };
 
+const syncFiscalYearCounters = async (fiscalYear) => {
+  const periods = await AccountingPeriod.find({
+    fiscalYear: Number(fiscalYear),
+  });
+
+  const openCount = periods.filter((p) =>
+    ["Open", "Closing"].includes(p.status)
+  ).length;
+
+  const closedCount = periods.filter((p) => p.status === "Closed").length;
+  const lockedCount = periods.filter((p) => p.status === "Locked").length;
+
+  await FiscalYear.findOneAndUpdate(
+    { fiscalYear: Number(fiscalYear) },
+    {
+      openPeriods: openCount,
+      closedPeriods: closedCount,
+      lockedPeriods: lockedCount,
+    },
+    { new: true }
+  );
+};
+
+const ensureClosingAccounts = async () => {
+  await ChartOfAccount.findOneAndUpdate(
+    { accountCode: "3900" },
+    {
+      $set: {
+        accountName: "Income Summary",
+        accountCategory: "Equity",
+        accountType: "Temporary Closing Account",
+        normalBalance: "Credit",
+        status: "Active",
+        isSystemAccount: true,
+        allowManualEntries: false,
+      },
+      $setOnInsert: {
+        openingBalance: 0,
+        currentBalance: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
+
+  await ChartOfAccount.findOneAndUpdate(
+    { accountCode: "3100" },
+    {
+      $set: {
+        accountName: "Retained Earnings",
+        accountCategory: "Equity",
+        accountType: "Retained Earnings",
+        normalBalance: "Credit",
+        status: "Active",
+        isSystemAccount: true,
+      },
+      $setOnInsert: {
+        openingBalance: 0,
+        currentBalance: 0,
+      },
+    },
+    { upsert: true, new: true }
+  );
+};
+
 const validatePeriod = async ({ periodNumber, user = null } = {}) => {
   const period = await AccountingPeriod.findOne({ periodNumber });
 
@@ -49,12 +107,10 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
       buildTrialBalance({ from, to }),
       buildBalanceSheet({ from, to }),
       buildProfitAndLoss({ from, to }),
-
       JournalEntry.find({
         entryDate: { $gte: from, $lte: to },
         status: "Draft",
       }),
-
       JournalEntry.find({
         entryDate: { $gte: from, $lte: to },
         status: { $in: ["Draft", "Pending Approval", "Approved"] },
@@ -108,13 +164,10 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
       startDate: period.startDate,
       endDate: period.endDate,
       status: period.status,
-      closingJournalCreated: true,
+      closingJournalCreated: checklist.closingJournalCreated,
     },
-
     trialBalance: trialBalance.totals,
-
     balanceSheet: balanceSheet.totals,
-
     profitAndLoss: {
       totalRevenue: profitAndLoss.revenue.total,
       totalCostOfSales: profitAndLoss.costOfSales.total,
@@ -122,7 +175,6 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
       grossProfit: profitAndLoss.grossProfit,
       netProfit: profitAndLoss.netProfit,
     },
-
     journals: {
       draftCount: draftJournals.length,
       unpostedCount: unpostedJournals.length,
@@ -154,7 +206,6 @@ const validatePeriod = async ({ periodNumber, user = null } = {}) => {
 
 const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
   const validation = await validatePeriod({ periodNumber, user });
-
   const { period, checklist, errors, warnings, summary } = validation;
 
   const closeChecklist = {
@@ -169,7 +220,7 @@ const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
     closingJournalCreated: checklist.closingJournalCreated,
   };
 
-  const requiredChecksPassed =
+  const readyToStartClose =
     closeChecklist.validationPassed &&
     closeChecklist.trialBalanceBalanced &&
     closeChecklist.profitAndLossGenerated &&
@@ -177,63 +228,26 @@ const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
     closeChecklist.allJournalEntriesPosted &&
     closeChecklist.noDraftJournals;
 
-  period.status = requiredChecksPassed ? "Closing" : period.status;
+  if (readyToStartClose && period.status === "Open") {
+    period.status = "Closing";
+  }
+
   period.checklist = {
     ...period.checklist,
     ...closeChecklist,
   };
 
   await period.save();
+  await syncFiscalYearCounters(period.fiscalYear);
 
   return {
     period,
-    readyToClose: requiredChecksPassed,
+    readyToClose: readyToStartClose,
     checklist: closeChecklist,
     errors,
     warnings,
     summary,
   };
-};
-
-const ensureClosingAccounts = async () => {
-  await ChartOfAccount.findOneAndUpdate(
-    { accountCode: "3900" },
-    {
-      $set: {
-        accountName: "Income Summary",
-        accountCategory: "Equity",
-        accountType: "Temporary Closing Account",
-        normalBalance: "Credit",
-        status: "Active",
-        isSystemAccount: true,
-        allowManualEntries: false,
-      },
-      $setOnInsert: {
-        openingBalance: 0,
-        currentBalance: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
-
-  await ChartOfAccount.findOneAndUpdate(
-    { accountCode: "3100" },
-    {
-      $set: {
-        accountName: "Retained Earnings",
-        accountCategory: "Equity",
-        accountType: "Retained Earnings",
-        normalBalance: "Credit",
-        status: "Active",
-        isSystemAccount: true,
-      },
-      $setOnInsert: {
-        openingBalance: 0,
-        currentBalance: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
 };
 
 const createClosingJournal = async ({ period, profitAndLoss, user }) => {
@@ -243,6 +257,10 @@ const createClosingJournal = async ({ period, profitAndLoss, user }) => {
     return {
       entryNumber: period.closingJournalEntry,
       alreadyCreated: true,
+      createdEntries: String(period.closingJournalEntry)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
     };
   }
 
@@ -277,16 +295,18 @@ const createClosingJournal = async ({ period, profitAndLoss, user }) => {
       description: `Transfer revenue to Income Summary for ${period.periodName}`,
     });
 
-    const revenueCloseEntry = await postJournalEntry({
-      entryDate: period.endDate,
-      memo: `Revenue Closing Journal - ${period.periodName}`,
-      reference: `${period.periodNumber}-REV-CLOSE`,
-      sourceModule: "Period Closing",
-      lines: revenueLines,
-      createdBy: getUserName(user),
-    });
+    if (revenueLines.length >= 2) {
+      const revenueCloseEntry = await postJournalEntry({
+        entryDate: period.endDate,
+        memo: `Revenue Closing Journal - ${period.periodName}`,
+        reference: `${period.periodNumber}-REV-CLOSE`,
+        sourceModule: "Period Closing",
+        lines: revenueLines,
+        createdBy: getUserName(user),
+      });
 
-    createdEntries.push(revenueCloseEntry.entryNumber);
+      createdEntries.push(revenueCloseEntry.entryNumber);
+    }
   }
 
   const totalExpenses = costOfSalesTotal + expenseTotal;
@@ -323,16 +343,18 @@ const createClosingJournal = async ({ period, profitAndLoss, user }) => {
       }
     });
 
-    const expenseCloseEntry = await postJournalEntry({
-      entryDate: period.endDate,
-      memo: `Expense Closing Journal - ${period.periodName}`,
-      reference: `${period.periodNumber}-EXP-CLOSE`,
-      sourceModule: "Period Closing",
-      lines: expenseLines,
-      createdBy: getUserName(user),
-    });
+    if (expenseLines.length >= 2) {
+      const expenseCloseEntry = await postJournalEntry({
+        entryDate: period.endDate,
+        memo: `Expense Closing Journal - ${period.periodName}`,
+        reference: `${period.periodNumber}-EXP-CLOSE`,
+        sourceModule: "Period Closing",
+        lines: expenseLines,
+        createdBy: getUserName(user),
+      });
 
-    createdEntries.push(expenseCloseEntry.entryNumber);
+      createdEntries.push(expenseCloseEntry.entryNumber);
+    }
   }
 
   if (netProfit !== 0) {
@@ -379,11 +401,15 @@ const createClosingJournal = async ({ period, profitAndLoss, user }) => {
     createdEntries.push(retainedEarningsEntry.entryNumber);
   }
 
+  if (createdEntries.length === 0) {
+    throw new Error("No closing journals were created. The period may have no revenue, expense, or net income activity.");
+  }
+
   period.closingJournalEntry = createdEntries.join(", ");
   period.retainedEarningsJournal = createdEntries[createdEntries.length - 1] || "";
   period.checklist = {
     ...period.checklist,
-    closingJournalCreated: createdEntries.length > 0,
+    closingJournalCreated: true,
   };
 
   await period.save();
@@ -394,9 +420,49 @@ const createClosingJournal = async ({ period, profitAndLoss, user }) => {
   };
 };
 
+const verifyPostCloseIntegrity = async ({ period }) => {
+  const [trialBalance, balanceSheet, draftJournals, unpostedJournals] =
+    await Promise.all([
+      buildTrialBalance({ from: period.startDate, to: period.endDate }),
+      buildBalanceSheet({ from: period.startDate, to: period.endDate }),
+      JournalEntry.find({
+        entryDate: { $gte: period.startDate, $lte: period.endDate },
+        status: "Draft",
+      }),
+      JournalEntry.find({
+        entryDate: { $gte: period.startDate, $lte: period.endDate },
+        status: { $in: ["Draft", "Pending Approval", "Approved"] },
+      }),
+    ]);
+
+  const errors = [];
+
+  if (!trialBalance.totals.isBalanced) {
+    errors.push(`Post-close Trial Balance is out of balance by ${trialBalance.totals.difference}.`);
+  }
+
+  if (!balanceSheet.totals.isBalanced) {
+    errors.push(`Post-close Balance Sheet is out of balance by ${balanceSheet.totals.difference}.`);
+  }
+
+  if (draftJournals.length > 0) {
+    errors.push(`${draftJournals.length} draft journal(s) found after closing.`);
+  }
+
+  if (unpostedJournals.length > 0) {
+    errors.push(`${unpostedJournals.length} unposted journal(s) found after closing.`);
+  }
+
+  return {
+    passed: errors.length === 0,
+    errors,
+    trialBalance: trialBalance.totals,
+    balanceSheet: balanceSheet.totals,
+  };
+};
+
 const closePeriod = async ({ periodNumber, notes = "", user }) => {
   const checklistResult = await buildCloseChecklist({ periodNumber, user });
-
   const { period, readyToClose } = checklistResult;
 
   if (period.status === "Locked") {
@@ -408,37 +474,66 @@ const closePeriod = async ({ periodNumber, notes = "", user }) => {
   }
 
   if (!readyToClose) {
-    throw new Error("Period cannot be closed because the close checklist is incomplete.");
+    throw new Error("Period cannot be closed because the pre-close checklist is incomplete.");
   }
 
   const profitAndLoss = await buildProfitAndLoss({
-
     from: period.startDate,
-
     to: period.endDate,
+  });
 
-});
-
-await createClosingJournal({
-
+  const closingJournalResult = await createClosingJournal({
     period,
-
     profitAndLoss,
-
     user,
+  });
 
-});
+  if (!closingJournalResult?.entryNumber) {
+    throw new Error("Closing journal was not created. Period cannot be closed.");
+  }
 
-  period.status = "Closed";
-  period.allowPosting = false;
-  period.validationStatus = "Passed";
-  period.closedAt = new Date();
-  period.closedBy = getUserName(user);
-  period.notes = notes || period.notes;
+  const refreshedPeriod = await AccountingPeriod.findOne({ periodNumber });
 
-  await period.save();
+  const postCloseVerification = await verifyPostCloseIntegrity({
+    period: refreshedPeriod,
+  });
 
-  return period;
+  if (!postCloseVerification.passed) {
+    refreshedPeriod.validationStatus = "Failed";
+    refreshedPeriod.validationErrors = postCloseVerification.errors;
+    refreshedPeriod.validationSummary = {
+      ...refreshedPeriod.validationSummary,
+      postCloseVerification,
+    };
+    await refreshedPeriod.save();
+
+    throw new Error(
+      `Post-close verification failed: ${postCloseVerification.errors.join(" ")}`
+    );
+  }
+
+  refreshedPeriod.status = "Closed";
+  refreshedPeriod.allowPosting = false;
+  refreshedPeriod.validationStatus = "Passed";
+  refreshedPeriod.validationErrors = [];
+  refreshedPeriod.validationWarnings = [];
+  refreshedPeriod.closedAt = new Date();
+  refreshedPeriod.closedBy = getUserName(user);
+  refreshedPeriod.notes = notes || refreshedPeriod.notes;
+  refreshedPeriod.checklist = {
+    ...refreshedPeriod.checklist,
+    closingJournalCreated: true,
+    postCloseVerified: true,
+  };
+  refreshedPeriod.validationSummary = {
+    ...refreshedPeriod.validationSummary,
+    postCloseVerification,
+  };
+
+  await refreshedPeriod.save();
+  await syncFiscalYearCounters(refreshedPeriod.fiscalYear);
+
+  return refreshedPeriod;
 };
 
 const lockPeriod = async ({ periodNumber, notes = "", user }) => {
@@ -463,6 +558,7 @@ const lockPeriod = async ({ periodNumber, notes = "", user }) => {
   period.notes = notes || period.notes;
 
   await period.save();
+  await syncFiscalYearCounters(period.fiscalYear);
 
   return period;
 };
@@ -486,6 +582,7 @@ const reopenPeriod = async ({ periodNumber, reason = "", user }) => {
   period.notes = reason || period.notes;
 
   await period.save();
+  await syncFiscalYearCounters(period.fiscalYear);
 
   return period;
 };
