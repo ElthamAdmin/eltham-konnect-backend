@@ -42,7 +42,7 @@ const buildFiscalYearStats = async (fiscalYear) => {
   };
 };
 
-const validateFiscalYear = async ({ fiscalYear, user = null }) => {
+const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  }) => {
   const year = await FiscalYear.findOne({
     fiscalYear: Number(fiscalYear),
   });
@@ -67,7 +67,7 @@ const validateFiscalYear = async ({ fiscalYear, user = null }) => {
   const errors = [];
   const warnings = [];
 
-  if (stats.totalPeriodsFound < Number(year.totalPeriods || 12)) {
+  if (stats.totalPeriodsFound < expectedPeriodsForValidation) {
     errors.push(
       `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} accounting periods exist.`
     );
@@ -244,7 +244,11 @@ const createAccountingPeriodsForYear = async ({ fiscalYear, user = null }) => {
 };
 
 const closeFiscalYear = async ({ fiscalYear, user = null }) => {
-  const validation = await validateFiscalYear({ fiscalYear, user });
+  const validation = await validateFiscalYear({
+  fiscalYear,
+  user,
+  mode: "yearEndClose",
+});
   const { year, passed } = validation;
 
   if (year.status === "Locked") {

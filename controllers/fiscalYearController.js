@@ -56,6 +56,7 @@ const validateFiscalYear = async (req, res) => {
     const validation = await fiscalYearService.validateFiscalYear({
       fiscalYear: req.params.fiscalYear,
       user: req.user,
+        mode: req.query.mode || "progress",
     });
 
     res.json({
