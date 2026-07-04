@@ -7,11 +7,23 @@ const getUserName = (user) =>
 
 const todayYMD = () => new Date().toISOString().slice(0, 10);
 
+const normalizePostingDate = (dateValue) => {
+  if (!dateValue) return todayYMD();
+
+  const date = new Date(dateValue);
+
+  if (Number.isNaN(date.getTime())) {
+    return todayYMD();
+  }
+
+  return date.toISOString().slice(0, 10);
+};
+
 const postCustomerInvoice = async ({ invoice, user }) => {
   const amount = roundMoney(invoice.finalTotal || invoice.balanceDue || 0);
 
   return postJournalEntry({
-    entryDate: invoice.createdAt || todayYMD(),
+    entryDate: normalizePostingDate(invoice.createdAt || invoice.invoiceDate),
     memo: `Invoice created for ${invoice.customerName}`,
     reference: invoice.invoiceNumber,
     sourceModule: "Invoices",
@@ -24,6 +36,7 @@ const receiveInvoicePayment = async ({
   invoice,
   receivingAccount,
   amount,
+  paymentDate,
   user,
 }) => {
   const paymentAmount = roundMoney(
@@ -31,7 +44,7 @@ const receiveInvoicePayment = async ({
   );
 
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(paymentDate || new Date()),
     memo: `Invoice payment received from ${invoice.customerName}`,
     reference: invoice.invoiceNumber,
     sourceModule: "Invoices",
@@ -52,7 +65,7 @@ const postVendorBill = async ({
   const billAmount = roundMoney(amount || payable.amount || 0);
 
   return postJournalEntry({
-    entryDate: payable.payableDate || todayYMD(),
+    entryDate: normalizePostingDate(payable.payableDate),
     memo: `Vendor bill from ${payable.vendorName}`,
     reference: payable.payableNumber,
     sourceModule: "Accounts Payable",
@@ -76,7 +89,7 @@ const payVendorBill = async ({
   const paymentAmount = roundMoney(amount || payable.balanceDue || 0);
 
   return postJournalEntry({
-    entryDate: paymentDate || todayYMD(),
+    entryDate: normalizePostingDate(paymentDate),
     memo: `Payment to ${payable.vendorName} for ${payable.payableNumber}`,
     reference: paymentReference || payable.payableNumber,
     sourceModule: "Accounts Payable",
@@ -94,10 +107,11 @@ const postOwnerDeposit = async ({
   amount,
   reference,
   notes,
+  transactionDate,
   user,
 }) => {
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(transactionDate),
     memo: `Owner deposit into ${financialAccount.accountName}`,
     reference: reference || "Owner Deposit",
     sourceModule: "Banking",
@@ -115,10 +129,11 @@ const postOwnerDrawing = async ({
   amount,
   reference,
   notes,
+  transactionDate,
   user,
 }) => {
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(transactionDate),
     memo: `Owner drawing from ${financialAccount.accountName}`,
     reference: reference || "Owner Drawing",
     sourceModule: "Banking",
@@ -137,10 +152,11 @@ const transferFunds = async ({
   amount,
   reference,
   notes,
+  transactionDate,
   user,
 }) => {
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(transactionDate),
     memo:
       reference ||
       `Transfer ${fromAccount.accountName} to ${toAccount.accountName}`,
@@ -162,10 +178,12 @@ const postExpensePayment = async ({
   amount,
   description,
   reference,
+  expenseDate,
+  transactionDate,
   user,
 }) => {
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(expenseDate || transactionDate),
     memo: description || "Expense payment",
     reference: reference || "Expense",
     sourceModule: "Expenses",
@@ -179,9 +197,14 @@ const postExpensePayment = async ({
   });
 };
 
-const postPayrollPayment = async ({ paymentAccount, payroll, user }) => {
+const postPayrollPayment = async ({
+  paymentAccount,
+  payroll,
+  paymentDate,
+  user,
+}) => {
   return postJournalEntry({
-    entryDate: todayYMD(),
+    entryDate: normalizePostingDate(paymentDate || payroll.paymentDate || payroll.payDate),
     memo: `Payroll payment for ${payroll.employeeName}`,
     reference: `Payroll ${payroll.payPeriod}`,
     sourceModule: "Payroll",
