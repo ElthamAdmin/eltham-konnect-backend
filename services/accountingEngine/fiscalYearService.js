@@ -9,6 +9,13 @@ const { buildBalanceSheet } = require("./balanceSheetService");
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
+const padMonth = (month) => String(month).padStart(2, "0");
+
+const getMonthName = (year, month) =>
+  new Date(Number(year), Number(month) - 1, 1).toLocaleString("en-US", {
+    month: "long",
+  });
+
 const buildFiscalYearStats = async (fiscalYear) => {
   const periods = await AccountingPeriod.find({
     fiscalYear: Number(fiscalYear),
@@ -19,6 +26,10 @@ const buildFiscalYearStats = async (fiscalYear) => {
   const closedPeriods = periods.filter((period) => period.status === "Closed");
   const lockedPeriods = periods.filter((period) => period.status === "Locked");
 
+  const periodsMissingClosingJournal = periods.filter(
+    (period) => !period.closingJournalEntry
+  );
+
   return {
     periods,
     totalPeriodsFound: periods.length,
@@ -27,6 +38,7 @@ const buildFiscalYearStats = async (fiscalYear) => {
     closedPeriods: closedPeriods.length,
     lockedPeriods: lockedPeriods.length,
     incompletePeriods: [...openPeriods, ...closingPeriods],
+    periodsMissingClosingJournal,
   };
 };
 
@@ -55,9 +67,21 @@ const validateFiscalYear = async ({ fiscalYear, user = null }) => {
   const errors = [];
   const warnings = [];
 
+  if (stats.totalPeriodsFound < Number(year.totalPeriods || 12)) {
+    errors.push(
+      `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} accounting periods exist.`
+    );
+  }
+
   if (stats.incompletePeriods.length > 0) {
     errors.push(
       `${stats.incompletePeriods.length} accounting period(s) are still open or closing.`
+    );
+  }
+
+  if (stats.periodsMissingClosingJournal.length > 0) {
+    errors.push(
+      `${stats.periodsMissingClosingJournal.length} accounting period(s) are missing closing journals.`
     );
   }
 
@@ -77,12 +101,6 @@ const validateFiscalYear = async ({ fiscalYear, user = null }) => {
     errors.push(`${unpostedJournals.length} unposted journal(s) found.`);
   }
 
-  if (stats.totalPeriodsFound < Number(year.totalPeriods || 12)) {
-    warnings.push(
-      `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} accounting periods exist.`
-    );
-  }
-
   const passed = errors.length === 0;
 
   const summary = {
@@ -97,6 +115,7 @@ const validateFiscalYear = async ({ fiscalYear, user = null }) => {
       closingPeriods: stats.closingPeriods,
       closedPeriods: stats.closedPeriods,
       lockedPeriods: stats.lockedPeriods,
+      periodsMissingClosingJournal: stats.periodsMissingClosingJournal.length,
     },
     trialBalance: trialBalance.totals,
     balanceSheet: balanceSheet.totals,
@@ -183,6 +202,47 @@ const createFiscalYear = async ({
   return year;
 };
 
+const createAccountingPeriodsForYear = async ({ fiscalYear, user = null }) => {
+  const year = await FiscalYear.findOne({
+    fiscalYear: Number(fiscalYear),
+  });
+
+  if (!year) {
+    throw new Error("Fiscal year not found.");
+  }
+
+  const createdPeriods = [];
+
+  for (let month = 1; month <= Number(year.totalPeriods || 12); month += 1) {
+    const periodNumber = `PER-${year.fiscalYear}-${padMonth(month)}`;
+    const existing = await AccountingPeriod.findOne({ periodNumber });
+
+    if (existing) continue;
+
+    const startDate = `${year.fiscalYear}-${padMonth(month)}-01`;
+    const endDate = new Date(year.fiscalYear, month, 0)
+      .toISOString()
+      .slice(0, 10);
+
+    const period = await AccountingPeriod.create({
+      periodNumber,
+      fiscalYear: year.fiscalYear,
+      periodMonth: month,
+      periodName: `${getMonthName(year.fiscalYear, month)} ${year.fiscalYear}`,
+      startDate,
+      endDate,
+      status: "Open",
+      allowPosting: true,
+      notes: `Created automatically for ${year.yearName}`,
+      createdBy: getUserName(user),
+    });
+
+    createdPeriods.push(period);
+  }
+
+  return createdPeriods;
+};
+
 const closeFiscalYear = async ({ fiscalYear, user = null }) => {
   const validation = await validateFiscalYear({ fiscalYear, user });
   const { year, passed } = validation;
@@ -246,21 +306,24 @@ const createNextFiscalYear = async ({ fiscalYear, user = null }) => {
 
   const nextYearValue = Number(fiscalYear) + 1;
 
-  const existingNextYear = await FiscalYear.findOne({
+  let nextYear = await FiscalYear.findOne({
     fiscalYear: nextYearValue,
   });
 
-  if (existingNextYear) {
-    return existingNextYear;
+  if (!nextYear) {
+    nextYear = await createFiscalYear({
+      fiscalYear: nextYearValue,
+      startDate: `${nextYearValue}-01-01`,
+      endDate: `${nextYearValue}-12-31`,
+      totalPeriods: year.totalPeriods || 12,
+      notes: `Automatically created from FY ${fiscalYear}`,
+      isCurrentYear: false,
+      user,
+    });
   }
 
-  const nextYear = await createFiscalYear({
+  await createAccountingPeriodsForYear({
     fiscalYear: nextYearValue,
-    startDate: `${nextYearValue}-01-01`,
-    endDate: `${nextYearValue}-12-31`,
-    totalPeriods: year.totalPeriods || 12,
-    notes: `Automatically created from FY ${fiscalYear}`,
-    isCurrentYear: false,
     user,
   });
 
@@ -274,6 +337,7 @@ module.exports = {
   buildFiscalYearStats,
   validateFiscalYear,
   createFiscalYear,
+  createAccountingPeriodsForYear,
   closeFiscalYear,
   lockFiscalYear,
   createNextFiscalYear,
