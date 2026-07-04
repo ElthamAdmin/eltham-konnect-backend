@@ -1,6 +1,7 @@
 const FiscalYear = require("../models/FiscalYear");
 
 const fiscalYearService = require("../services/accountingEngine/fiscalYearService");
+const yearEndService = require("../services/accountingEngine/yearEndService");
 
 const getFiscalYears = async (req, res) => {
   try {
@@ -146,6 +147,52 @@ const createNextFiscalYear = async (req, res) => {
   }
 };
 
+const executeYearEndClose = async (req, res) => {
+  try {
+    const result = await yearEndService.executeYearEndClose({
+      fiscalYear: req.params.fiscalYear,
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: "Year-end close completed successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Year-end close error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message || "Could not execute year-end close",
+      error: error.message,
+    });
+  }
+};
+
+const generateOpeningBalances = async (req, res) => {
+  try {
+    const result = await yearEndService.generateOpeningBalances({
+      fiscalYear: req.params.fiscalYear,
+      user: req.user,
+    });
+
+    res.json({
+      success: true,
+      message: "Opening balances generated successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Generate opening balances error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message || "Could not generate opening balances",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getFiscalYears,
   createFiscalYear,
@@ -153,4 +200,6 @@ module.exports = {
   closeFiscalYear,
   lockFiscalYear,
   createNextFiscalYear,
+  executeYearEndClose,
+  generateOpeningBalances,
 };
