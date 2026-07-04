@@ -4,6 +4,7 @@ const JournalEntry = require("../../models/JournalEntry");
 const ChartOfAccount = require("../../models/ChartOfAccount");
 const GeneralLedgerTransaction = require("../../models/GeneralLedgerTransaction");
 const AccountingPeriod = require("../../models/AccountingPeriod");
+const FiscalYear = require("../../models/FiscalYear");
 
 const { roundMoney } = require("./money");
 const { validateJournalLines } = require("./validationService");
@@ -33,12 +34,36 @@ const validateAccountingPeriodOpen = async (entryDate) => {
     periodMonth,
   });
 
-  if (!accountingPeriod) return;
+  if (accountingPeriod) {
+    if (accountingPeriod.allowPosting === false) {
+      throw new Error(
+        `Accounting period ${accountingPeriod.periodName} is blocked for posting.`
+      );
+    }
 
-  if (["Closed", "Locked"].includes(accountingPeriod.status)) {
-    throw new Error(
-      `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
-    );
+    if (["Closing", "Closed", "Locked"].includes(accountingPeriod.status)) {
+      throw new Error(
+        `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
+      );
+    }
+  }
+
+  const fiscalYearRecord = await FiscalYear.findOne({
+    fiscalYear,
+  });
+
+  if (fiscalYearRecord) {
+    if (fiscalYearRecord.allowPosting === false) {
+      throw new Error(
+        `Fiscal year ${fiscalYearRecord.yearName} is blocked for posting.`
+      );
+    }
+
+    if (["Closing", "Closed", "Locked"].includes(fiscalYearRecord.status)) {
+      throw new Error(
+        `Fiscal year ${fiscalYearRecord.yearName} is ${fiscalYearRecord.status}. Posting is not allowed.`
+      );
+    }
   }
 };
 
