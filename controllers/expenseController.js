@@ -139,12 +139,14 @@ const createExpense = async (req, res) => {
     const expenseAccountCode =
       accountMappingService.getExpenseAccountCode(category);
 
-    const journalEntry = await postExpensePayment({
+        const journalEntry = await postExpensePayment({
       expenseAccountCode,
       paymentAccount: selectedFinancialAccount,
       amount: numericAmount,
       description: `${category}: ${description}`,
       reference: category,
+      expenseDate: date,
+      transactionDate: date,
       user: req.user,
     });
 
@@ -214,9 +216,9 @@ const createExpense = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating expense:", error);
-    res.status(500).json({
+        res.status(500).json({
       success: false,
-      message: "Failed to create expense",
+      message: error.message || "Failed to create expense",
       error: error.message,
     });
   }
