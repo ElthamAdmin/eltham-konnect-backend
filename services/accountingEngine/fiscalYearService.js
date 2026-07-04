@@ -64,12 +64,17 @@ const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  
       }),
     ]);
 
-  const errors = [];
+    const errors = [];
   const warnings = [];
+
+  const expectedPeriodsForValidation =
+    mode === "yearEndClose"
+      ? Number(year.totalPeriods || 12)
+      : stats.totalPeriodsFound;
 
   if (stats.totalPeriodsFound < expectedPeriodsForValidation) {
     errors.push(
-      `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} accounting periods exist.`
+      `Only ${stats.totalPeriodsFound} of ${expectedPeriodsForValidation} required accounting periods exist.`
     );
   }
 
@@ -109,7 +114,7 @@ const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  
     startDate: year.startDate,
     endDate: year.endDate,
     periodStats: {
-      totalPeriodsExpected: year.totalPeriods,
+      totalPeriodsExpected: expectedPeriodsForValidation,
       totalPeriodsFound: stats.totalPeriodsFound,
       openPeriods: stats.openPeriods,
       closingPeriods: stats.closingPeriods,
