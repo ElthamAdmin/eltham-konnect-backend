@@ -105,13 +105,29 @@ const postOpeningBalance = async ({
 const createAccount = async (req, res) => {
   try {
     const {
-  accountName,
-  accountType,
-  bankName,
-  openingBalance,
-  currency,
-  exchangeRate,
-} = req.body;
+      accountName,
+      accountType,
+      bankName,
+      openingBalance,
+      currency,
+      exchangeRate,
+      accountPurpose,
+      financialInstitution,
+      branchName,
+      accountNickname,
+      isDefaultDepositAccount,
+      isDefaultExpenseAccount,
+      isDefaultPayrollAccount,
+      isDefaultCustomerReceiptAccount,
+      isBusinessSavings,
+      creditLimit,
+      availableCredit,
+      statementDate,
+      paymentDueDate,
+      minimumPayment,
+      interestRate,
+      lastStatementBalance,
+    } = req.body;
 
     if (!accountName || !accountType) {
       return res.status(400).json({
@@ -123,18 +139,18 @@ const createAccount = async (req, res) => {
     await ensureSystemAccounts();
 
     const accountCurrency = String(currency || "JMD").toUpperCase();
-const accountExchangeRate =
-  accountCurrency === "JMD" ? 1 : Number(exchangeRate || 1);
+    const accountExchangeRate =
+      accountCurrency === "JMD" ? 1 : Number(exchangeRate || 1);
 
-const numericOpeningBalance = roundMoney(openingBalance);
+    const numericOpeningBalance = roundMoney(openingBalance);
 
-const baseCurrencyOpeningBalance = calculateBaseCurrencyAmount({
-  amount: numericOpeningBalance,
-  currency: accountCurrency,
-  exchangeRate: accountExchangeRate,
-});
+    const baseCurrencyOpeningBalance = calculateBaseCurrencyAmount({
+      amount: numericOpeningBalance,
+      currency: accountCurrency,
+      exchangeRate: accountExchangeRate,
+    });
 
-const accountNumber = `ACC-${Date.now()}`;
+    const accountNumber = `ACC-${Date.now()}`;
 
     await createLinkedChartAccount({
       accountNumber,
@@ -143,6 +159,14 @@ const accountNumber = `ACC-${Date.now()}`;
       openingBalance: baseCurrencyOpeningBalance,
     });
 
+    const finalPurpose =
+      accountPurpose ||
+      (accountType === "Credit Card"
+        ? "Credit Card"
+        : accountCurrency !== "JMD"
+        ? "Savings"
+        : "Operating");
+
     const account = await FinancialAccount.create({
       accountNumber,
       accountName,
@@ -150,18 +174,36 @@ const accountNumber = `ACC-${Date.now()}`;
       linkedChartAccountCode: accountNumber,
       bankName,
       openingBalance: numericOpeningBalance,
-currentBalance: numericOpeningBalance,
-currency: accountCurrency,
-exchangeRate: accountExchangeRate,
-baseCurrency: "JMD",
-baseCurrencyOpeningBalance,
-baseCurrencyBalance: baseCurrencyOpeningBalance,
+      currentBalance: numericOpeningBalance,
+      currency: accountCurrency,
+      exchangeRate: accountExchangeRate,
+      baseCurrency: "JMD",
+      baseCurrencyOpeningBalance,
+      baseCurrencyBalance: baseCurrencyOpeningBalance,
+
+      accountPurpose: finalPurpose,
+      financialInstitution: financialInstitution || bankName || "",
+      branchName: branchName || "",
+      accountNickname: accountNickname || "",
+      isDefaultDepositAccount: isDefaultDepositAccount === true,
+      isDefaultExpenseAccount: isDefaultExpenseAccount === true,
+      isDefaultPayrollAccount: isDefaultPayrollAccount === true,
+      isDefaultCustomerReceiptAccount: isDefaultCustomerReceiptAccount === true,
+      isBusinessSavings: isBusinessSavings === true || finalPurpose === "Savings",
+
+      creditLimit: roundMoney(creditLimit),
+      availableCredit: roundMoney(availableCredit),
+      statementDate: Number(statementDate || 0),
+      paymentDueDate: Number(paymentDueDate || 0),
+      minimumPayment: roundMoney(minimumPayment),
+      interestRate: Number(interestRate || 0),
+      lastStatementBalance: roundMoney(lastStatementBalance),
     });
 
     await postOpeningBalance({
       account,
       openingBalance: baseCurrencyOpeningBalance,
-createdBy: req.user?.fullName || "System User",
+      createdBy: req.user?.fullName || "System User",
     });
 
     res.json({
@@ -214,11 +256,50 @@ const baseCurrencyBalance =
     ? currentBalance
     : ledgerBalance;
 
+const outstandingBalance =
+  plain.accountType === "Credit Card" ? baseCurrencyBalance : 0;
+
+const creditLimit = roundMoney(plain.creditLimit || 0);
+
+const calculatedAvailableCredit =
+  plain.accountType === "Credit Card" && creditLimit > 0
+    ? roundMoney(creditLimit - outstandingBalance)
+    : roundMoney(plain.availableCredit || 0);
+
+const creditUtilization =
+  plain.accountType === "Credit Card" && creditLimit > 0
+    ? roundMoney((outstandingBalance / creditLimit) * 100)
+    : 0;
+
+let accountHealth = "Healthy";
+
+if (plain.status !== "Active") {
+  accountHealth = "Inactive";
+} else if (plain.reconciliationStatus === "Out of Balance") {
+  accountHealth = "Needs Reconciliation";
+} else if (
+  plain.accountType === "Credit Card" &&
+  creditLimit > 0 &&
+  creditUtilization >= 90
+) {
+  accountHealth = "Near Limit";
+} else if (
+  plain.accountType === "Credit Card" &&
+  creditLimit > 0 &&
+  creditUtilization >= 75
+) {
+  accountHealth = "High Utilization";
+}
+
 return {
   ...plain,
   currentBalance,
   baseCurrencyBalance,
   linkedChartAccount,
+  outstandingBalance,
+  calculatedAvailableCredit,
+  creditUtilization,
+  accountHealth,
 };
     });
 
@@ -246,6 +327,22 @@ const updateAccount = async (req, res) => {
   currency,
   exchangeRate,
   currentBalance,
+  accountPurpose,
+  financialInstitution,
+  branchName,
+  accountNickname,
+  isDefaultDepositAccount,
+  isDefaultExpenseAccount,
+  isDefaultPayrollAccount,
+  isDefaultCustomerReceiptAccount,
+  isBusinessSavings,
+  creditLimit,
+  availableCredit,
+  statementDate,
+  paymentDueDate,
+  minimumPayment,
+  interestRate,
+  lastStatementBalance,
 } = req.body;
 
     const account = await FinancialAccount.findOne({ accountNumber });
@@ -260,9 +357,45 @@ const updateAccount = async (req, res) => {
     if (accountName !== undefined) account.accountName = accountName;
     if (accountType !== undefined) account.accountType = accountType;
     if (bankName !== undefined) account.bankName = bankName;
-    if (status !== undefined) account.status = status;
+        if (status !== undefined) account.status = status;
     if (currency !== undefined) account.currency = String(currency || "JMD").toUpperCase();
-if (exchangeRate !== undefined) account.exchangeRate = Number(exchangeRate || 1);
+    if (exchangeRate !== undefined) account.exchangeRate = Number(exchangeRate || 1);
+
+    if (accountPurpose !== undefined) account.accountPurpose = accountPurpose;
+    if (financialInstitution !== undefined) account.financialInstitution = financialInstitution;
+    if (branchName !== undefined) account.branchName = branchName;
+    if (accountNickname !== undefined) account.accountNickname = accountNickname;
+
+    if (isDefaultDepositAccount !== undefined) {
+      account.isDefaultDepositAccount = isDefaultDepositAccount === true;
+    }
+
+    if (isDefaultExpenseAccount !== undefined) {
+      account.isDefaultExpenseAccount = isDefaultExpenseAccount === true;
+    }
+
+    if (isDefaultPayrollAccount !== undefined) {
+      account.isDefaultPayrollAccount = isDefaultPayrollAccount === true;
+    }
+
+    if (isDefaultCustomerReceiptAccount !== undefined) {
+      account.isDefaultCustomerReceiptAccount =
+        isDefaultCustomerReceiptAccount === true;
+    }
+
+    if (isBusinessSavings !== undefined) {
+      account.isBusinessSavings = isBusinessSavings === true;
+    }
+
+    if (creditLimit !== undefined) account.creditLimit = roundMoney(creditLimit);
+    if (availableCredit !== undefined) account.availableCredit = roundMoney(availableCredit);
+    if (statementDate !== undefined) account.statementDate = Number(statementDate || 0);
+    if (paymentDueDate !== undefined) account.paymentDueDate = Number(paymentDueDate || 0);
+    if (minimumPayment !== undefined) account.minimumPayment = roundMoney(minimumPayment);
+    if (interestRate !== undefined) account.interestRate = Number(interestRate || 0);
+    if (lastStatementBalance !== undefined) {
+      account.lastStatementBalance = roundMoney(lastStatementBalance);
+    }
 
 const linkedChartAccount =
   await ChartOfAccount.findOne({

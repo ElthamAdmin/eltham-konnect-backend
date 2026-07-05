@@ -111,9 +111,103 @@ const financialAccountSchema = new mongoose.Schema(
       index: true,
     },
 
-    lastAdjustmentDate: {
+        lastAdjustmentDate: {
       type: String,
       default: "",
+    },
+
+    accountPurpose: {
+      type: String,
+      enum: [
+        "Operating",
+        "Savings",
+        "Payroll",
+        "Tax",
+        "Petty Cash",
+        "Float",
+        "Dropbox",
+        "Investment",
+        "Reserve",
+        "Credit Card",
+      ],
+      default: "Operating",
+      index: true,
+    },
+
+    financialInstitution: {
+      type: String,
+      default: "",
+    },
+
+    branchName: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    accountNickname: {
+      type: String,
+      default: "",
+    },
+
+    isDefaultDepositAccount: {
+      type: Boolean,
+      default: false,
+    },
+
+    isDefaultExpenseAccount: {
+      type: Boolean,
+      default: false,
+    },
+
+    isDefaultPayrollAccount: {
+      type: Boolean,
+      default: false,
+    },
+
+    isDefaultCustomerReceiptAccount: {
+      type: Boolean,
+      default: false,
+    },
+
+    isBusinessSavings: {
+      type: Boolean,
+      default: false,
+    },
+
+    creditLimit: {
+      type: Number,
+      default: 0,
+    },
+
+    availableCredit: {
+      type: Number,
+      default: 0,
+    },
+
+    statementDate: {
+      type: Number,
+      default: 0,
+    },
+
+    paymentDueDate: {
+      type: Number,
+      default: 0,
+    },
+
+    minimumPayment: {
+      type: Number,
+      default: 0,
+    },
+
+    interestRate: {
+      type: Number,
+      default: 0,
+    },
+
+    lastStatementBalance: {
+      type: Number,
+      default: 0,
     },
 
     status: {
