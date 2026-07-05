@@ -42,7 +42,7 @@ const buildFiscalYearStats = async (fiscalYear) => {
   };
 };
 
-const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  }) => {
+const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress" }) => {
   const year = await FiscalYear.findOne({
     fiscalYear: Number(fiscalYear),
   });
@@ -64,30 +64,53 @@ const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  
       }),
     ]);
 
-    const errors = [];
+  const errors = [];
   const warnings = [];
 
-  const expectedPeriodsForValidation =
-    mode === "yearEndClose"
-      ? Number(year.totalPeriods || 12)
-      : stats.totalPeriodsFound;
+  const isYearEndClose = mode === "yearEndClose";
 
-  if (stats.totalPeriodsFound < expectedPeriodsForValidation) {
-    errors.push(
-      `Only ${stats.totalPeriodsFound} of ${expectedPeriodsForValidation} required accounting periods exist.`
-    );
-  }
+  if (isYearEndClose) {
+    if (stats.totalPeriodsFound < Number(year.totalPeriods || 12)) {
+      errors.push(
+        `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} required accounting periods exist.`
+      );
+    }
 
-  if (stats.incompletePeriods.length > 0) {
-    errors.push(
-      `${stats.incompletePeriods.length} accounting period(s) are still open or closing.`
-    );
-  }
+    if (stats.incompletePeriods.length > 0) {
+      errors.push(
+        `${stats.incompletePeriods.length} accounting period(s) are still open or closing.`
+      );
+    }
 
-  if (stats.periodsMissingClosingJournal.length > 0) {
-    errors.push(
-      `${stats.periodsMissingClosingJournal.length} accounting period(s) are missing closing journals.`
+    if (stats.periodsMissingClosingJournal.length > 0) {
+      errors.push(
+        `${stats.periodsMissingClosingJournal.length} accounting period(s) are missing closing journals.`
+      );
+    }
+  } else {
+    const closedPeriodsMissingClosingJournal = stats.periods.filter(
+      (period) =>
+        ["Closed", "Locked"].includes(period.status) &&
+        !period.closingJournalEntry
     );
+
+    if (closedPeriodsMissingClosingJournal.length > 0) {
+      warnings.push(
+        `${closedPeriodsMissingClosingJournal.length} closed accounting period(s) are missing closing journal references.`
+      );
+    }
+
+    if (stats.incompletePeriods.length > 0) {
+      warnings.push(
+        `${stats.incompletePeriods.length} accounting period(s) are currently open or closing. This is normal during the active fiscal year.`
+      );
+    }
+
+    if (stats.totalPeriodsFound < Number(year.totalPeriods || 12)) {
+      warnings.push(
+        `Only ${stats.totalPeriodsFound} of ${year.totalPeriods || 12} accounting periods exist so far. This is acceptable for in-year validation.`
+      );
+    }
   }
 
   if (!trialBalance.totals.isBalanced) {
@@ -109,12 +132,13 @@ const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  
   const passed = errors.length === 0;
 
   const summary = {
+    validationMode: mode,
     fiscalYear: year.fiscalYear,
     yearName: year.yearName,
     startDate: year.startDate,
     endDate: year.endDate,
     periodStats: {
-      totalPeriodsExpected: expectedPeriodsForValidation,
+      totalPeriodsExpected: year.totalPeriods,
       totalPeriodsFound: stats.totalPeriodsFound,
       openPeriods: stats.openPeriods,
       closingPeriods: stats.closingPeriods,
@@ -151,7 +175,8 @@ const validateFiscalYear = async ({ fiscalYear, user = null, mode = "progress"  
   return {
     year,
     passed,
-    readyForYearEndClose: passed,
+    readyForYearEndClose: isYearEndClose && passed,
+    operationalValidationPassed: !isYearEndClose && passed,
     errors,
     warnings,
     summary,
