@@ -12,6 +12,7 @@ const {
   createNextFiscalYear,
   executeYearEndClose,
   generateOpeningBalances,
+    runEnterpriseYearEnd,
 } = require("../controllers/fiscalYearController");
 
 router.get("/", protect, getFiscalYears);
@@ -29,5 +30,7 @@ router.post("/:fiscalYear/create-next", protect, createNextFiscalYear);
 router.post("/:fiscalYear/year-end-close", protect, executeYearEndClose);
 
 router.post("/:fiscalYear/opening-balances", protect, generateOpeningBalances);
+
+router.post("/:fiscalYear/run-enterprise-year-end", protect, runEnterpriseYearEnd);
 
 module.exports = router;

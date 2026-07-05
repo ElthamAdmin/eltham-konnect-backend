@@ -2,6 +2,7 @@ const FiscalYear = require("../models/FiscalYear");
 
 const fiscalYearService = require("../services/accountingEngine/fiscalYearService");
 const yearEndService = require("../services/accountingEngine/yearEndService");
+const yearEndAutomationService = require("../services/accountingEngine/yearEndAutomationService");
 
 const getFiscalYears = async (req, res) => {
   try {
@@ -193,6 +194,29 @@ const generateOpeningBalances = async (req, res) => {
   }
 };
 
+const runEnterpriseYearEnd = async (req, res) => {
+  try {
+    const result = await yearEndAutomationService.runEnterpriseYearEnd({
+      fiscalYear: req.params.fiscalYear,
+      user: req.user,
+    });
+
+    res.json({
+      success: result.success,
+      message: result.message || "Enterprise year-end automation completed.",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Enterprise year-end automation error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: error.message || "Could not run enterprise year-end automation",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getFiscalYears,
   createFiscalYear,
@@ -202,4 +226,6 @@ module.exports = {
   createNextFiscalYear,
   executeYearEndClose,
   generateOpeningBalances,
+    runEnterpriseYearEnd,
+
 };
