@@ -13,6 +13,8 @@ const {
   syncFinancialAccountsForChartAccount,
 } = require("./balanceService");
 
+const { writeFinanceAuditLog } = require("../../utils/financeAuditHelper");
+
 const generateEntryNumber = () =>
   `JE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
@@ -84,6 +86,8 @@ const postJournalEntry = async ({
   try {
     let createdEntry = null;
 
+        const createdLedgerNumbers = [];
+
     await session.withTransaction(async () => {
       const entryNumber = generateEntryNumber();
       const preparedLines = [];
@@ -150,10 +154,13 @@ const postJournalEntry = async ({
       createdEntry = entries[0];
 
       for (const line of preparedLines) {
+        const ledgerNumber = generateLedgerNumber();
+        createdLedgerNumbers.push(ledgerNumber);
+
         await GeneralLedgerTransaction.create(
           [
             {
-              ledgerNumber: generateLedgerNumber(),
+              ledgerNumber,
               entryNumber,
               entryDate,
               accountCode: line.accountCode,
@@ -176,6 +183,25 @@ const postJournalEntry = async ({
       }
     });
 
+    await writeFinanceAuditLog({
+      action: "JOURNAL_POSTED",
+      description: `Journal entry ${createdEntry.entryNumber} posted from ${sourceModule || "Manual"}`,
+      targetType: "JournalEntry",
+      targetId: createdEntry.entryNumber,
+      postingDate: entryDate,
+      journalEntry: createdEntry,
+      performedByName: createdBy,
+      metadata: {
+        memo,
+        reference,
+        sourceModule,
+        totalDebit,
+        totalCredit,
+        ledgerNumbers: createdLedgerNumbers,
+        lineCount: lines.length,
+      },
+    });
+
     return createdEntry;
   } finally {
     session.endSession();
@@ -187,6 +213,8 @@ const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" 
 
   try {
     let postedEntry = null;
+
+        const createdLedgerNumbers = [];
 
     await session.withTransaction(async () => {
       const entry = await JournalEntry.findOne({ entryNumber }).session(session);
@@ -245,10 +273,13 @@ const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" 
       }
 
       for (const line of preparedLines) {
+        const ledgerNumber = generateLedgerNumber();
+        createdLedgerNumbers.push(ledgerNumber);
+
         await GeneralLedgerTransaction.create(
           [
             {
-              ledgerNumber: generateLedgerNumber(),
+              ledgerNumber,
               entryNumber: entry.entryNumber,
               entryDate: entry.entryDate,
               accountCode: line.accountCode,
@@ -281,6 +312,25 @@ const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" 
       entry.locked = true;
 
       postedEntry = await entry.save({ session });
+    });
+
+    await writeFinanceAuditLog({
+      action: "APPROVED_JOURNAL_POSTED",
+      description: `Approved journal entry ${postedEntry.entryNumber} posted`,
+      targetType: "JournalEntry",
+      targetId: postedEntry.entryNumber,
+      postingDate: postedEntry.entryDate,
+      journalEntry: postedEntry,
+      performedByName: postedBy,
+      metadata: {
+        memo: postedEntry.memo,
+        reference: postedEntry.reference,
+        sourceModule: postedEntry.sourceModule,
+        totalDebit: postedEntry.totalDebit,
+        totalCredit: postedEntry.totalCredit,
+        ledgerNumbers: createdLedgerNumbers,
+        lineCount: postedEntry.lines?.length || 0,
+      },
     });
 
     return postedEntry;

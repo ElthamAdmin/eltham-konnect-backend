@@ -57,6 +57,9 @@ const writeAuditLog = async ({
   accountName = "",
   reconciliationNumber = "",
   status = "Success",
+  performedByName = "",
+  performedByUserId = "",
+  performedByRole = "",
 }) => {
   try {
     const user = req?.user || {};
@@ -67,9 +70,10 @@ const writeAuditLog = async ({
       action,
       module,
       description,
-      performedByUserId: user.userId || user._id || "",
-      performedByName: user.fullName || user.name || user.email || "System",
-      performedByRole: user.role || "",
+      performedByUserId: performedByUserId || user.userId || user._id || "",
+      performedByName:
+        performedByName || user.fullName || user.name || user.email || "System",
+      performedByRole: performedByRole || user.role || "",
       targetType,
       targetId,
       metadata,

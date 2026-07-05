@@ -28,7 +28,7 @@ const resolvePeriodInfo = async (postingDate) => {
 };
 
 const writeFinanceAuditLog = async ({
-  req,
+  req = null,
   action,
   description,
   targetType = "",
@@ -41,6 +41,7 @@ const writeFinanceAuditLog = async ({
   accountNumber = "",
   accountName = "",
   status = "Success",
+  performedByName = "",
 }) => {
   const periodInfo = await resolvePeriodInfo(
     postingDate || journalEntry?.entryDate || new Date()
@@ -56,12 +57,14 @@ const writeFinanceAuditLog = async ({
     beforeValues,
     afterValues,
     financeReference: targetId || journalEntry?.reference || "",
-    journalEntryNumber: journalEntry?.entryNumber || metadata?.journalEntryNumber || "",
+    journalEntryNumber:
+      journalEntry?.entryNumber || metadata?.journalEntryNumber || "",
     accountingPeriod: periodInfo.accountingPeriod,
     fiscalYear: periodInfo.fiscalYear,
     accountNumber,
     accountName,
     status,
+    performedByName,
     metadata: {
       ...metadata,
       periodName: periodInfo.periodName,
