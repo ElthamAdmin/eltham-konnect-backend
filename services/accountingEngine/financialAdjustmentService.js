@@ -45,6 +45,53 @@ const calculateBaseAmount = ({ amount, currency, exchangeRate }) => {
   return roundMoney(Number(amount || 0) * Number(exchangeRate || 1));
 };
 
+const getAccountCategory = (accountType) => {
+  if (accountType === "Credit Card") return "Liability";
+  return "Asset";
+};
+
+const getNormalBalance = (accountType) => {
+  if (accountType === "Credit Card") return "Credit";
+  return "Debit";
+};
+
+const ensureLinkedChartAccount = async (financialAccount) => {
+  const linkedCode =
+    financialAccount.linkedChartAccountCode || financialAccount.accountNumber;
+
+  let chartAccount = await ChartOfAccount.findOne({
+    accountCode: linkedCode,
+  });
+
+  if (!chartAccount) {
+    chartAccount = await ChartOfAccount.create({
+      accountCode: linkedCode,
+      accountName: financialAccount.accountName,
+      accountCategory: getAccountCategory(financialAccount.accountType),
+      accountType: financialAccount.accountType,
+      openingBalance: roundMoney(financialAccount.baseCurrencyOpeningBalance || 0),
+      currentBalance: roundMoney(financialAccount.baseCurrencyBalance || 0),
+      normalBalance: getNormalBalance(financialAccount.accountType),
+      description: `Auto-repaired linked financial account for ${financialAccount.accountName}`,
+      isSystemAccount: false,
+      allowManualEntries: false,
+      status: "Active",
+    });
+  }
+
+  if (chartAccount.status !== "Active") {
+    chartAccount.status = "Active";
+    await chartAccount.save();
+  }
+
+  if (!financialAccount.linkedChartAccountCode) {
+    financialAccount.linkedChartAccountCode = linkedCode;
+    await financialAccount.save();
+  }
+
+  return chartAccount;
+};
+
 const buildPositionPreview = async ({ actualBalances = [] }) => {
   const actualMap = {};
   actualBalances.forEach((item) => {
@@ -55,8 +102,12 @@ const buildPositionPreview = async ({ actualBalances = [] }) => {
     accountName: 1,
   });
 
+    for (const account of accounts) {
+    await ensureLinkedChartAccount(account);
+  }
+
   const linkedCodes = accounts
-    .map((account) => account.linkedChartAccountCode)
+    .map((account) => account.linkedChartAccountCode || account.accountNumber)
     .filter(Boolean);
 
   const chartAccounts = await ChartOfAccount.find({
@@ -246,6 +297,16 @@ const postAdjustmentBatch = async ({ batchNumber, user = null, req = null }) => 
 
   if (batch.status !== "Draft") {
     throw new Error(`Adjustment batch is already ${batch.status}.`);
+  }
+
+    for (const line of batch.lines) {
+    const account = await FinancialAccount.findOne({
+      accountNumber: line.accountNumber,
+    });
+
+    if (account) {
+      await ensureLinkedChartAccount(account);
+    }
   }
 
   const journalLines = await buildJournalLinesForBatch(batch);
