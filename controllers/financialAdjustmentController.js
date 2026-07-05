@@ -86,9 +86,31 @@ const getAdjustmentBatches = async (req, res) => {
   }
 };
 
+const deleteDraftAdjustmentBatch = async (req, res) => {
+  try {
+    const batch = await financialAdjustmentService.deleteDraftAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+    });
+
+    res.json({
+      success: true,
+      message: "Draft adjustment batch deleted successfully",
+      data: batch,
+    });
+  } catch (error) {
+    console.error("Delete adjustment batch error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Could not delete adjustment batch",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   previewFinancialPosition,
   createAdjustmentBatch,
   postAdjustmentBatch,
   getAdjustmentBatches,
+  deleteDraftAdjustmentBatch,
 };

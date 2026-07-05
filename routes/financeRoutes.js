@@ -22,6 +22,8 @@ const {
   createAdjustmentBatch,
   postAdjustmentBatch,
   getAdjustmentBatches,
+    deleteDraftAdjustmentBatch,
+
 } = require("../controllers/financialAdjustmentController");
 
 const router = express.Router();
@@ -83,6 +85,12 @@ router.post(
   "/adjustment-batches/:batchNumber/post",
   protect,
   postAdjustmentBatch
+);
+
+router.delete(
+  "/adjustment-batches/:batchNumber",
+  protect,
+  deleteDraftAdjustmentBatch
 );
 
 router.get("/expenses", protect, getExpenses);

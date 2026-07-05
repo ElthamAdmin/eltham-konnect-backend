@@ -388,9 +388,26 @@ const postAdjustmentBatch = async ({ batchNumber, user = null, req = null }) => 
 const getAdjustmentBatches = async () =>
   FinancialAdjustmentBatch.find().sort({ createdAt: -1 });
 
+const deleteDraftAdjustmentBatch = async ({ batchNumber }) => {
+  const batch = await FinancialAdjustmentBatch.findOne({ batchNumber });
+
+  if (!batch) {
+    throw new Error("Adjustment batch not found.");
+  }
+
+  if (batch.status !== "Draft") {
+    throw new Error("Only draft adjustment batches can be deleted.");
+  }
+
+  await FinancialAdjustmentBatch.deleteOne({ batchNumber });
+
+  return batch;
+};
+
 module.exports = {
   buildPositionPreview,
   createAdjustmentBatch,
   postAdjustmentBatch,
   getAdjustmentBatches,
+deleteDraftAdjustmentBatch,
 };
