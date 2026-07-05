@@ -98,11 +98,22 @@ const financialAccountSchema = new mongoose.Schema(
       default: 0,
     },
 
-    reconciliationStatus: {
+        reconciliationStatus: {
       type: String,
       enum: ["Never Reconciled", "In Progress", "Balanced", "Out of Balance"],
       default: "Never Reconciled",
       index: true,
+    },
+
+    lastAdjustmentBatch: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    lastAdjustmentDate: {
+      type: String,
+      default: "",
     },
 
     status: {

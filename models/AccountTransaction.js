@@ -135,9 +135,25 @@ const accountTransactionSchema = new mongoose.Schema(
       default: "",
     },
 
-    lockedByReconciliation: {
+        lockedByReconciliation: {
       type: Boolean,
       default: false,
+    },
+
+    adjustmentBatchNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    adjustmentReason: {
+      type: String,
+      default: "",
+    },
+
+    adjustmentType: {
+      type: String,
+      default: "",
     },
   },
   {

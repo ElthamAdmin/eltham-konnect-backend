@@ -17,6 +17,13 @@ const {
   auditTrialBalance,
 } = require("../controllers/accountingAuditController");
 
+const {
+  previewFinancialPosition,
+  createAdjustmentBatch,
+  postAdjustmentBatch,
+  getAdjustmentBatches,
+} = require("../controllers/financialAdjustmentController");
+
 const router = express.Router();
 
 const {
@@ -68,6 +75,15 @@ router.get("/reports", protect, getFinancialReports);
 router.get("/monthly-chart", protect, getMonthlyIncomeVsExpenses);
 router.post("/rebuild-balances", protect, rebuildFinanceBalances);
 router.get("/audit/trial-balance", protect, auditTrialBalance);
+
+router.post("/financial-position/preview", protect, previewFinancialPosition);
+router.get("/adjustment-batches", protect, getAdjustmentBatches);
+router.post("/adjustment-batches", protect, createAdjustmentBatch);
+router.post(
+  "/adjustment-batches/:batchNumber/post",
+  protect,
+  postAdjustmentBatch
+);
 
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);

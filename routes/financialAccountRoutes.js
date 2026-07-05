@@ -8,10 +8,12 @@ const {
   updateAccount,
 } = require("../controllers/financialAccountController");
 
+const { protect } = require("../middleware/authMiddleware");
 
-router.post("/", createAccount);
-router.get("/", getAccounts);
-router.put("/:accountNumber", updateAccount);
+
+router.post("/", protect, createAccount);
+router.get("/", protect, getAccounts);
+router.put("/:accountNumber", protect, updateAccount);
 
 
 module.exports = router;
