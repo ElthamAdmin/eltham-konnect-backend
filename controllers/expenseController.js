@@ -136,10 +136,12 @@ const createExpense = async (req, res) => {
       paidFromAccountName = selectedFinancialAccount.accountName;
     }
 
-    const expenseAccountCode =
-      accountMappingService.getExpenseAccountCode(category);
+        const categoryMeta =
+      accountMappingService.getExpenseCategoryMeta(category);
 
-        const journalEntry = await postExpensePayment({
+    const expenseAccountCode = categoryMeta.accountCode;
+
+    const journalEntry = await postExpensePayment({
       expenseAccountCode,
       paymentAccount: selectedFinancialAccount,
       amount: numericAmount,
@@ -154,10 +156,15 @@ const createExpense = async (req, res) => {
       ? `/uploads/expense-receipts/${req.file.filename}`
       : "";
 
-    const newExpense = await Expense.create({
+        const newExpense = await Expense.create({
       expenseNumber: `EXP-${Date.now()}`,
       date,
       category,
+      expenseClassification: categoryMeta.classification,
+      expenseGroup: categoryMeta.group,
+      linkedChartAccountCode: categoryMeta.accountCode,
+      linkedChartAccountName: categoryMeta.accountName,
+      isCOGS: categoryMeta.isCOGS,
       description,
       amount: numericAmount,
       status: status || "Paid",
@@ -200,7 +207,12 @@ const createExpense = async (req, res) => {
             paidFromAccountNumber: newExpense.paidFromAccountNumber,
             paidFromAccountName: newExpense.paidFromAccountName,
             receiptUrl: newExpense.receiptUrl,
-            journalEntryNumber: journalEntry.entryNumber,
+                        journalEntryNumber: journalEntry.entryNumber,
+            expenseClassification: newExpense.expenseClassification,
+            expenseGroup: newExpense.expenseGroup,
+            linkedChartAccountCode: newExpense.linkedChartAccountCode,
+            linkedChartAccountName: newExpense.linkedChartAccountName,
+            isCOGS: newExpense.isCOGS,
           },
         });
       }

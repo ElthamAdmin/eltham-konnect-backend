@@ -10,10 +10,41 @@ const ExpenseSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  category: {
+    category: {
     type: String,
     required: true,
   },
+
+  expenseClassification: {
+    type: String,
+    enum: ["Cost of Goods Sold", "Operating Expense"],
+    default: "Operating Expense",
+    index: true,
+  },
+
+  expenseGroup: {
+    type: String,
+    default: "",
+    index: true,
+  },
+
+  linkedChartAccountCode: {
+    type: String,
+    default: "",
+    index: true,
+  },
+
+  linkedChartAccountName: {
+    type: String,
+    default: "",
+  },
+
+  isCOGS: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+
   description: {
     type: String,
     required: true,
