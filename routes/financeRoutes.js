@@ -3,6 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const {
+    getExpenseCategories,
   getExpenses,
   createExpense,
 } = require("../controllers/expenseController");
@@ -92,7 +93,7 @@ router.delete(
   protect,
   deleteDraftAdjustmentBatch
 );
-
+router.get("/expense-categories", protect, getExpenseCategories);
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);
 

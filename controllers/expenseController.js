@@ -31,6 +31,25 @@ const getReceiptFileExists = (receiptUrl = "") => {
   return fs.existsSync(filePath);
 };
 
+const getExpenseCategories = async (req, res) => {
+  try {
+    const categories = accountMappingService.getExpenseCategories();
+
+    res.json({
+      success: true,
+      message: "Expense categories retrieved successfully",
+      data: categories,
+    });
+  } catch (error) {
+    console.error("Error getting expense categories:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve expense categories",
+      error: error.message,
+    });
+  }
+};
+
 const getExpenses = async (req, res) => {
   try {
     const page = Number(req.query.page || 1);
@@ -237,6 +256,7 @@ const createExpense = async (req, res) => {
 };
 
 module.exports = {
+    getExpenseCategories,
   getExpenses,
   createExpense,
 };
