@@ -45,6 +45,18 @@ const ExpenseSchema = new mongoose.Schema({
     index: true,
   },
 
+    branch: {
+    type: String,
+    default: "All Branches",
+    index: true,
+  },
+
+  costCenter: {
+    type: String,
+    default: "General",
+    index: true,
+  },
+
   description: {
     type: String,
     required: true,

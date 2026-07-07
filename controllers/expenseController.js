@@ -8,6 +8,8 @@ const {
   accountMappingService,
 } = require("../services/accountingEngine");
 
+const budgetEngine = require("../services/budgetEngine");
+
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -98,7 +100,9 @@ const createExpense = async (req, res) => {
       description,
       amount,
       status,
-      paidFromAccountNumber,
+            paidFromAccountNumber,
+      branch,
+      costCenter,
     } = req.body;
 
     if (!date || !category || !description || !amount) {
@@ -183,7 +187,9 @@ const createExpense = async (req, res) => {
       expenseGroup: categoryMeta.group,
       linkedChartAccountCode: categoryMeta.accountCode,
       linkedChartAccountName: categoryMeta.accountName,
-      isCOGS: categoryMeta.isCOGS,
+            isCOGS: categoryMeta.isCOGS,
+      branch: branch || "All Branches",
+      costCenter: costCenter || "General",
       description,
       amount: numericAmount,
       status: status || "Paid",
@@ -231,12 +237,27 @@ const createExpense = async (req, res) => {
             expenseGroup: newExpense.expenseGroup,
             linkedChartAccountCode: newExpense.linkedChartAccountCode,
             linkedChartAccountName: newExpense.linkedChartAccountName,
-            isCOGS: newExpense.isCOGS,
+                        isCOGS: newExpense.isCOGS,
+            branch: newExpense.branch,
+            costCenter: newExpense.costCenter,
           },
         });
       }
     } catch (auditError) {
       console.error("Audit log error while creating expense:", auditError);
+    }
+
+        try {
+      await budgetEngine.applyActualToBudgets({
+        accountCode: categoryMeta.accountCode,
+        category,
+        amount: numericAmount,
+        branch: newExpense.branch,
+        costCenter: newExpense.costCenter,
+        postingDate: date,
+      });
+    } catch (budgetError) {
+      console.error("Budget sync error while creating expense:", budgetError);
     }
 
     res.status(201).json({
