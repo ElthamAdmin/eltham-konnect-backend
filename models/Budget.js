@@ -47,6 +47,36 @@ const budgetSchema = new mongoose.Schema(
       default: "All Branches",
     },
 
+        costCenter: {
+      type: String,
+      default: "General",
+      index: true,
+    },
+
+    linkedChartAccountCode: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    linkedChartAccountName: {
+      type: String,
+      default: "",
+    },
+
+    budgetType: {
+      type: String,
+      enum: ["Operating", "Capital", "Cash Flow", "Revenue"],
+      default: "Operating",
+      index: true,
+    },
+
+    frequency: {
+      type: String,
+      enum: ["Monthly", "Quarterly", "Yearly"],
+      default: "Monthly",
+    },
+
     plannedAmount: {
       type: Number,
       required: true,

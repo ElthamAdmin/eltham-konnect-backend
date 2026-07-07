@@ -2,6 +2,8 @@ const Budget = require("../models/Budget");
 const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 const Payroll = require("../models/Payroll");
+const ChartOfAccount = require("../models/ChartOfAccount");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -23,13 +25,46 @@ const isWithinMonth = (value, year, month) => {
   return date >= start && date <= end;
 };
 
-const calculateActualAmount = async ({ category, budgetYear, budgetMonth }) => {
+const calculateActualAmount = async ({
+  category,
+  budgetYear,
+  budgetMonth,
+  linkedChartAccountCode = "",
+  branch = "All Branches",
+}) => {
+  const { start, end } = getMonthRange(budgetYear, budgetMonth);
+
+  if (linkedChartAccountCode) {
+    const ledgerRows = await GeneralLedgerTransaction.find({
+      accountCode: linkedChartAccountCode,
+      entryDate: {
+        $gte: start,
+        $lte: end,
+      },
+    });
+
+    return ledgerRows.reduce((sum, row) => {
+      const debit = Number(row.debit || 0);
+      const credit = Number(row.credit || 0);
+
+      if (row.accountCategory === "Revenue") {
+        return sum + credit - debit;
+      }
+
+      return sum + debit - credit;
+    }, 0);
+  }
+
   if (category === "Revenue") {
     const invoices = await Invoice.find({ status: "Paid" });
 
     return invoices
       .filter((invoice) =>
-        isWithinMonth(invoice.paidAt || invoice.paidDate || invoice.createdAt, budgetYear, budgetMonth)
+        isWithinMonth(
+          invoice.paidAt || invoice.paidDate || invoice.createdAt,
+          budgetYear,
+          budgetMonth
+        )
       )
       .reduce((sum, invoice) => sum + Number(invoice.finalTotal || 0), 0);
   }
@@ -48,15 +83,36 @@ const calculateActualAmount = async ({ category, budgetYear, budgetMonth }) => {
 
   return expenses
     .filter((expense) => {
-      const sameMonth = isWithinMonth(expense.date || expense.createdAt, budgetYear, budgetMonth);
+      const sameMonth = isWithinMonth(
+        expense.date || expense.createdAt,
+        budgetYear,
+        budgetMonth
+      );
 
       if (!sameMonth) return false;
 
+      if (
+        branch &&
+        branch !== "All Branches" &&
+        expense.branch &&
+        expense.branch !== branch
+      ) {
+        return false;
+      }
+
       if (category === "Other") return true;
 
-      return String(expense.category || "")
-        .toLowerCase()
-        .includes(String(category || "").toLowerCase());
+      return (
+        String(expense.category || "")
+          .toLowerCase()
+          .includes(String(category || "").toLowerCase()) ||
+        String(expense.expenseGroup || "")
+          .toLowerCase()
+          .includes(String(category || "").toLowerCase()) ||
+        String(expense.expenseClassification || "")
+          .toLowerCase()
+          .includes(String(category || "").toLowerCase())
+      );
     })
     .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 };
@@ -64,9 +120,11 @@ const calculateActualAmount = async ({ category, budgetYear, budgetMonth }) => {
 const refreshBudgetActuals = async (budget) => {
   const actualAmount = roundMoney(
     await calculateActualAmount({
-      category: budget.category,
+            category: budget.category,
       budgetYear: budget.budgetYear,
       budgetMonth: budget.budgetMonth,
+      linkedChartAccountCode: budget.linkedChartAccountCode,
+      branch: budget.branch,
     })
   );
 
@@ -117,13 +175,23 @@ const getBudgets = async (req, res) => {
       0
     );
 
+        const overBudgetCount = refreshed.filter(
+      (item) => Number(item.variance || 0) < 0
+    ).length;
+
+    const underBudgetCount = refreshed.filter(
+      (item) => Number(item.variance || 0) >= 0
+    ).length;
+
     res.json({
       success: true,
       summary: {
         totalBudgets: refreshed.length,
         totalPlanned,
         totalActual,
-        totalVariance,
+                totalVariance,
+        overBudgetCount,
+        underBudgetCount,
       },
       data: refreshed,
     });
@@ -144,10 +212,32 @@ const createBudget = async (req, res) => {
       budgetYear,
       budgetMonth,
       category,
-      branch,
+            branch,
+      costCenter,
+      linkedChartAccountCode,
+      budgetType,
+      frequency,
       plannedAmount,
       notes,
     } = req.body;
+
+        let linkedChartAccountName = "";
+
+    if (linkedChartAccountCode) {
+      const chartAccount = await ChartOfAccount.findOne({
+        accountCode: linkedChartAccountCode,
+        status: "Active",
+      });
+
+      if (!chartAccount) {
+        return res.status(404).json({
+          success: false,
+          message: "Selected Chart of Account was not found.",
+        });
+      }
+
+      linkedChartAccountName = chartAccount.accountName;
+    }
 
     const budget = await Budget.create({
       budgetNumber: `BUD-${Date.now()}`,
@@ -155,7 +245,12 @@ const createBudget = async (req, res) => {
       budgetYear: Number(budgetYear),
       budgetMonth: Number(budgetMonth),
       category,
-      branch: branch || "All Branches",
+            branch: branch || "All Branches",
+      costCenter: costCenter || branch || "General",
+      linkedChartAccountCode: linkedChartAccountCode || "",
+      linkedChartAccountName,
+      budgetType: budgetType || (category === "Revenue" ? "Revenue" : "Operating"),
+      frequency: frequency || "Monthly",
       plannedAmount: Number(plannedAmount || 0),
       actualAmount: 0,
       variance: 0,
