@@ -175,13 +175,35 @@ const getBudgets = async (req, res) => {
       0
     );
 
-        const overBudgetCount = refreshed.filter(
+            const overBudgetCount = refreshed.filter(
       (item) => Number(item.variance || 0) < 0
     ).length;
 
     const underBudgetCount = refreshed.filter(
       (item) => Number(item.variance || 0) >= 0
     ).length;
+
+    const needsAttentionCount = refreshed.filter(
+      (item) =>
+        Number(item.variance || 0) < 0 &&
+        Math.abs(Number(item.variancePercent || 0)) >= 10
+    ).length;
+
+    const onTargetCount = refreshed.filter(
+      (item) => Math.abs(Number(item.variancePercent || 0)) <= 5
+    ).length;
+
+    const revenueAboveTargetCount = refreshed.filter(
+      (item) =>
+        item.category === "Revenue" && Number(item.variance || 0) > 0
+    ).length;
+
+    const budgetHealthScore =
+      refreshed.length > 0
+        ? roundMoney(
+            ((refreshed.length - needsAttentionCount) / refreshed.length) * 100
+          )
+        : 100;
 
     res.json({
       success: true,
@@ -192,6 +214,10 @@ const getBudgets = async (req, res) => {
                 totalVariance,
         overBudgetCount,
         underBudgetCount,
+        needsAttentionCount,
+        onTargetCount,
+        revenueAboveTargetCount,
+        budgetHealthScore,
       },
       data: refreshed,
     });
