@@ -34,25 +34,25 @@ const calculateActualAmount = async ({
 }) => {
   const { start, end } = getMonthRange(budgetYear, budgetMonth);
 
-  if (linkedChartAccountCode) {
+    if (linkedChartAccountCode) {
     const ledgerRows = await GeneralLedgerTransaction.find({
       accountCode: linkedChartAccountCode,
-      entryDate: {
-        $gte: start,
-        $lte: end,
-      },
     });
 
-    return ledgerRows.reduce((sum, row) => {
-      const debit = Number(row.debit || 0);
-      const credit = Number(row.credit || 0);
+    return ledgerRows
+      .filter((row) =>
+        isWithinMonth(row.entryDate || row.createdAt, budgetYear, budgetMonth)
+      )
+      .reduce((sum, row) => {
+        const debit = Number(row.debit || 0);
+        const credit = Number(row.credit || 0);
 
-      if (row.accountCategory === "Revenue") {
-        return sum + credit - debit;
-      }
+        if (row.accountCategory === "Revenue") {
+          return sum + credit - debit;
+        }
 
-      return sum + debit - credit;
-    }, 0);
+        return sum + debit - credit;
+      }, 0);
   }
 
   if (category === "Revenue") {
