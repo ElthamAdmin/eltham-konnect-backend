@@ -1,6 +1,7 @@
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const BankReconciliation = require("../models/BankReconciliation");
+const BankStatementImport = require("../models/BankStatementImport");
 const ChartOfAccount = require("../models/ChartOfAccount");
 
 const roundMoney = (value) =>
@@ -13,6 +14,9 @@ const todayYMD = () => new Date().toISOString().slice(0, 10);
 
 const generateReconciliationNumber = () =>
   `REC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+const generateImportNumber = () =>
+  `BST-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
 const isDepositTransaction = (transactionType = "") =>
   [
@@ -133,6 +137,283 @@ const calculateReconciliationTotals = ({
     reconciledTransactionCount,
     unreconciledTransactionCount,
   };
+};
+
+const normalizeStatementLines = (lines = []) =>
+  lines
+    .map((line, index) => {
+      const amount = roundMoney(line.amount);
+      const direction =
+        line.transactionDirection ||
+        line.direction ||
+        (Number(line.deposit || 0) > 0 ? "Deposit" : "Withdrawal");
+
+      return {
+        lineNumber: index + 1,
+        transactionDate: line.transactionDate || line.date || new Date(),
+        description: line.description || line.memo || "",
+        reference: line.reference || line.ref || "",
+        transactionDirection:
+          direction === "Deposit" ? "Deposit" : "Withdrawal",
+        amount,
+        runningBalance: roundMoney(line.runningBalance || line.balance || 0),
+        notes: line.notes || "",
+      };
+    })
+    .filter((line) => Number(line.amount || 0) > 0);
+
+const getDateDifferenceInDays = (dateA, dateB) => {
+  const a = new Date(dateA);
+  const b = new Date(dateB);
+
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 999;
+
+  const diff = Math.abs(a.getTime() - b.getTime());
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
+};
+
+const calculateMatchConfidence = ({ statementLine, transaction }) => {
+  let score = 0;
+
+  if (roundMoney(statementLine.amount) === roundMoney(transaction.amount)) {
+    score += 50;
+  }
+
+  const dateDifference = getDateDifferenceInDays(
+    statementLine.transactionDate,
+    transaction.transactionDate
+  );
+
+  if (dateDifference === 0) score += 30;
+  if (dateDifference === 1) score += 20;
+  if (dateDifference > 1 && dateDifference <= 3) score += 10;
+
+  const statementReference = String(statementLine.reference || "").toLowerCase();
+  const transactionReference = String(transaction.reference || "").toLowerCase();
+
+  if (
+    statementReference &&
+    transactionReference &&
+    (statementReference.includes(transactionReference) ||
+      transactionReference.includes(statementReference))
+  ) {
+    score += 20;
+  }
+
+  return Math.min(score, 100);
+};
+
+const importBankStatement = async (req, res) => {
+  try {
+    const {
+      accountNumber,
+      statementStartDate,
+      statementDate,
+      statementOpeningBalance,
+      statementClosingBalance,
+      sourceType,
+      sourceFileName,
+      notes,
+      statementLines = [],
+    } = req.body;
+
+    if (!accountNumber || !statementDate) {
+      return res.status(400).json({
+        success: false,
+        message: "Account number and statement date are required.",
+      });
+    }
+
+    const account = await FinancialAccount.findOne({
+      accountNumber,
+      status: "Active",
+    });
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: "Active financial account not found.",
+      });
+    }
+
+    const normalizedLines = normalizeStatementLines(statementLines);
+
+    if (normalizedLines.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one valid statement line is required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.create({
+      importNumber: generateImportNumber(),
+      accountNumber: account.accountNumber,
+      accountName: account.accountName,
+      statementStartDate: statementStartDate || "",
+      statementDate,
+      statementOpeningBalance: roundMoney(statementOpeningBalance || 0),
+      statementClosingBalance: roundMoney(statementClosingBalance || 0),
+      sourceType: sourceType || "Manual",
+      sourceFileName: sourceFileName || "",
+      totalLines: normalizedLines.length,
+      unmatchedLines: normalizedLines.length,
+      importedBy: getUserName(req.user),
+      notes: notes || "",
+      statementLines: normalizedLines,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Bank statement imported successfully.",
+      data: importedStatement,
+    });
+  } catch (error) {
+    console.error("Bank statement import error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not import bank statement.",
+      error: error.message,
+    });
+  }
+};
+
+const autoMatchBankStatement = async (req, res) => {
+  try {
+    const { importNumber } = req.body;
+
+    if (!importNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Import number is required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!importedStatement) {
+      return res.status(404).json({
+        success: false,
+        message: "Imported statement not found.",
+      });
+    }
+
+    const ledgerTransactions = await AccountTransaction.find({
+      accountNumber: importedStatement.accountNumber,
+      reconciled: { $ne: true },
+      lockedByReconciliation: { $ne: true },
+    });
+
+    let matchedLines = 0;
+    let suggestedLines = 0;
+    let unmatchedLines = 0;
+
+    importedStatement.statementLines.forEach((line) => {
+      const candidates = ledgerTransactions
+        .filter((transaction) => {
+          const sameAmount =
+            roundMoney(transaction.amount) === roundMoney(line.amount);
+
+          const sameDirection =
+            getTransactionDirection(transaction.transactionType) ===
+            line.transactionDirection;
+
+          const withinDateRange =
+            getDateDifferenceInDays(
+              line.transactionDate,
+              transaction.transactionDate
+            ) <= 3;
+
+          return sameAmount && sameDirection && withinDateRange;
+        })
+        .map((transaction) => ({
+          transaction,
+          confidence: calculateMatchConfidence({
+            statementLine: line,
+            transaction,
+          }),
+        }))
+        .sort((a, b) => b.confidence - a.confidence);
+
+      const bestMatch = candidates[0];
+
+      if (!bestMatch) {
+        line.matchStatus = "Unmatched";
+        line.matchConfidence = 0;
+        line.matchingMethod = "";
+        unmatchedLines += 1;
+        return;
+      }
+
+      line.matchedTransactionNumber = bestMatch.transaction.transactionNumber;
+      line.matchedJournalEntryNumber =
+        bestMatch.transaction.journalEntryNumber || "";
+      line.matchConfidence = bestMatch.confidence;
+
+      if (bestMatch.confidence >= 95) {
+        line.matchStatus = "Matched";
+        line.matchingMethod = "Automatic Exact Match";
+        matchedLines += 1;
+      } else if (bestMatch.confidence >= 70) {
+        line.matchStatus = "Suggested";
+        line.matchingMethod = "Suggested Match";
+        suggestedLines += 1;
+      } else {
+        line.matchStatus = "Unmatched";
+        line.matchingMethod = "";
+        unmatchedLines += 1;
+      }
+    });
+
+    importedStatement.matchedLines = matchedLines;
+    importedStatement.suggestedLines = suggestedLines;
+    importedStatement.unmatchedLines = unmatchedLines;
+    importedStatement.status =
+      matchedLines === importedStatement.totalLines
+        ? "Matched"
+        : matchedLines > 0 || suggestedLines > 0
+        ? "Partially Matched"
+        : "Imported";
+
+    await importedStatement.save();
+
+    res.json({
+      success: true,
+      message: "Bank statement auto-match completed.",
+      data: importedStatement,
+    });
+  } catch (error) {
+    console.error("Bank statement auto-match error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not auto-match bank statement.",
+      error: error.message,
+    });
+  }
+};
+
+const getImportedStatements = async (req, res) => {
+  try {
+    const importedStatements = await BankStatementImport.find().sort({
+      createdAt: -1,
+    });
+
+    res.json({
+      success: true,
+      data: importedStatements,
+    });
+  } catch (error) {
+    console.error("Imported statements error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not load imported statements.",
+      error: error.message,
+    });
+  }
 };
 
 const getBankingDashboard = async (req, res) => {
@@ -540,4 +821,7 @@ module.exports = {
   createBankReconciliation,
   finalizeBankReconciliation,
   reopenBankReconciliation,
+  importBankStatement,
+  autoMatchBankStatement,
+  getImportedStatements,
 };

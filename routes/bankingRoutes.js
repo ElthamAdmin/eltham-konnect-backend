@@ -12,6 +12,9 @@ const {
   createBankReconciliation,
   finalizeBankReconciliation,
   reopenBankReconciliation,
+  importBankStatement,
+  autoMatchBankStatement,
+  getImportedStatements,
 } = require("../controllers/bankingController");
 
 /*
@@ -60,6 +63,30 @@ router.put(
   "/reconciliation/:reconciliationNumber/reopen",
   protect,
   reopenBankReconciliation
+);
+
+/*
+|--------------------------------------------------------------------------
+| Bank Statement Import
+|--------------------------------------------------------------------------
+*/
+
+router.post(
+  "/reconciliation/import",
+  protect,
+  importBankStatement
+);
+
+router.post(
+  "/reconciliation/auto-match",
+  protect,
+  autoMatchBankStatement
+);
+
+router.get(
+  "/reconciliation/import/history",
+  protect,
+  getImportedStatements
 );
 
 module.exports = router;
