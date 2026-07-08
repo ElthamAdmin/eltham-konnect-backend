@@ -15,6 +15,8 @@ const {
   importBankStatement,
   autoMatchBankStatement,
   getImportedStatements,
+  startReconciliationWizard,
+loadReconciliationWorkspace,
 } = require("../controllers/bankingController");
 
 /*
@@ -75,6 +77,18 @@ router.post(
   "/reconciliation/import",
   protect,
   importBankStatement
+);
+
+router.post(
+  "/reconciliation/wizard/start",
+  protect,
+  startReconciliationWizard
+);
+
+router.get(
+  "/reconciliation/workspace/:importNumber",
+  protect,
+  loadReconciliationWorkspace
 );
 
 router.post(

@@ -849,6 +849,78 @@ const reopenBankReconciliation = async (req, res) => {
   }
 };
 
+const startReconciliationWizard = async (req, res) => {
+  try {
+    const { accountNumber, importNumber } = req.body;
+
+    const statement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!statement) {
+      return res.status(404).json({
+        success: false,
+        message: "Statement not found.",
+      });
+    }
+
+    const transactions = await AccountTransaction.find({
+      accountNumber,
+      reconciled: false,
+    }).sort({
+      transactionDate: 1,
+    });
+
+    res.json({
+      success: true,
+      step: 1,
+
+      accountNumber,
+
+      statement,
+
+      transactions,
+
+      totals: {
+        ledgerTransactions: transactions.length,
+        statementLines: statement.statementLines.length,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
+const loadReconciliationWorkspace = async (req, res) => {
+  try {
+    const { importNumber } = req.params;
+
+    const statement =
+      await BankStatementImport.findOne({
+        importNumber,
+      });
+
+    if (!statement) {
+      return res.status(404).json({
+        success: false,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: statement,
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: err.message,
+    });
+  }
+};
+
 module.exports = {
   getBankingDashboard,
   getBankRegister,
@@ -860,4 +932,6 @@ module.exports = {
   importBankStatement,
   autoMatchBankStatement,
   getImportedStatements,
+  startReconciliationWizard,
+loadReconciliationWorkspace,
 };
