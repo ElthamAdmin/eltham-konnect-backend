@@ -429,9 +429,40 @@ const getBankingDashboard = async (req, res) => {
       createdAt: -1,
     });
 
-    const totalCash = accountsWithLedgerBalances.reduce(
-      (sum, account) => sum + Number(account.currentBalance || 0),
-      0
+        const treasurySummary = accountsWithLedgerBalances.reduce(
+      (summary, account) => {
+        const balance = Number(account.currentBalance || 0);
+        const creditLimit = Number(account.creditLimit || 0);
+
+        if (account.accountType === "Bank" || account.accountType === "Cash") {
+          summary.cashAndBank = roundMoney(summary.cashAndBank + balance);
+        }
+
+        if (account.accountType === "Credit Card") {
+          summary.creditCardOutstanding = roundMoney(
+            summary.creditCardOutstanding + balance
+          );
+
+          summary.totalCreditLimit = roundMoney(
+            summary.totalCreditLimit + creditLimit
+          );
+        }
+
+        return summary;
+      },
+      {
+        cashAndBank: 0,
+        creditCardOutstanding: 0,
+        totalCreditLimit: 0,
+      }
+    );
+
+    treasurySummary.availableCredit = roundMoney(
+      treasurySummary.totalCreditLimit - treasurySummary.creditCardOutstanding
+    );
+
+    treasurySummary.netTreasuryPosition = roundMoney(
+      treasurySummary.cashAndBank - treasurySummary.creditCardOutstanding
     );
 
     const unreconciledTransactions = transactions.filter(
@@ -440,7 +471,12 @@ const getBankingDashboard = async (req, res) => {
 
     res.json({
       success: true,
-      totalCash: roundMoney(totalCash),
+            totalCash: treasurySummary.cashAndBank,
+      cashAndBank: treasurySummary.cashAndBank,
+      creditCardOutstanding: treasurySummary.creditCardOutstanding,
+      totalCreditLimit: treasurySummary.totalCreditLimit,
+      availableCredit: treasurySummary.availableCredit,
+      netTreasuryPosition: treasurySummary.netTreasuryPosition,
       unreconciledCount: unreconciledTransactions.length,
       accounts: accountsWithLedgerBalances,
       transactions,
