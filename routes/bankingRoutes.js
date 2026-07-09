@@ -17,6 +17,8 @@ const {
   getImportedStatements,
   startReconciliationWizard,
 loadReconciliationWorkspace,
+  acceptStatementMatch,
+  rejectStatementMatch,
 } = require("../controllers/bankingController");
 
 /*
@@ -101,6 +103,18 @@ router.get(
   "/reconciliation/import/history",
   protect,
   getImportedStatements
+);
+
+router.post(
+  "/reconciliation/import/accept-match",
+  protect,
+  acceptStatementMatch
+);
+
+router.post(
+  "/reconciliation/import/reject-match",
+  protect,
+  rejectStatementMatch
 );
 
 module.exports = router;

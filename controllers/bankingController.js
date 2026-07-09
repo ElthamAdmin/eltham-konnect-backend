@@ -203,6 +203,34 @@ const calculateMatchConfidence = ({ statementLine, transaction }) => {
   return Math.min(score, 100);
 };
 
+const refreshImportMatchCounts = (importedStatement) => {
+  let matchedLines = 0;
+  let suggestedLines = 0;
+  let unmatchedLines = 0;
+  let duplicateLines = 0;
+
+  importedStatement.statementLines.forEach((line) => {
+    if (line.matchStatus === "Matched") matchedLines += 1;
+    else if (line.matchStatus === "Suggested") suggestedLines += 1;
+    else if (line.matchStatus === "Duplicate") duplicateLines += 1;
+    else unmatchedLines += 1;
+  });
+
+  importedStatement.matchedLines = matchedLines;
+  importedStatement.suggestedLines = suggestedLines;
+  importedStatement.unmatchedLines = unmatchedLines;
+  importedStatement.duplicateLines = duplicateLines;
+
+  importedStatement.status =
+    matchedLines === importedStatement.totalLines
+      ? "Matched"
+      : matchedLines > 0 || suggestedLines > 0
+      ? "Partially Matched"
+      : "Imported";
+
+  return importedStatement;
+};
+
 const importBankStatement = async (req, res) => {
   try {
     const {
@@ -411,6 +439,149 @@ const getImportedStatements = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Could not load imported statements.",
+      error: error.message,
+    });
+  }
+};
+
+const acceptStatementMatch = async (req, res) => {
+  try {
+    const { importNumber, lineId, transactionNumber } = req.body;
+
+    if (!importNumber || !lineId) {
+      return res.status(400).json({
+        success: false,
+        message: "Import number and statement line ID are required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!importedStatement) {
+      return res.status(404).json({
+        success: false,
+        message: "Imported statement not found.",
+      });
+    }
+
+    const statementLine = importedStatement.statementLines.id(lineId);
+
+    if (!statementLine) {
+      return res.status(404).json({
+        success: false,
+        message: "Statement line not found.",
+      });
+    }
+
+    const finalTransactionNumber =
+      transactionNumber || statementLine.matchedTransactionNumber;
+
+    if (!finalTransactionNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "A matched transaction number is required.",
+      });
+    }
+
+    const transaction = await AccountTransaction.findOne({
+      transactionNumber: finalTransactionNumber,
+      accountNumber: importedStatement.accountNumber,
+      lockedByReconciliation: { $ne: true },
+      reconciled: { $ne: true },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: "Available ledger transaction not found for this match.",
+      });
+    }
+
+    statementLine.matchedTransactionNumber = transaction.transactionNumber;
+    statementLine.matchedJournalEntryNumber =
+      transaction.journalEntryNumber || "";
+    statementLine.matchStatus = "Matched";
+    statementLine.matchConfidence = 100;
+    statementLine.matchingMethod = "Manual Match Approved";
+    statementLine.reviewStatus = "Approved";
+    statementLine.notes = statementLine.notes || "Match approved manually.";
+
+    refreshImportMatchCounts(importedStatement);
+
+    await importedStatement.save();
+
+    res.json({
+      success: true,
+      message: "Statement match accepted successfully.",
+      data: importedStatement,
+    });
+  } catch (error) {
+    console.error("Accept statement match error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not accept statement match.",
+      error: error.message,
+    });
+  }
+};
+
+const rejectStatementMatch = async (req, res) => {
+  try {
+    const { importNumber, lineId, notes } = req.body;
+
+    if (!importNumber || !lineId) {
+      return res.status(400).json({
+        success: false,
+        message: "Import number and statement line ID are required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!importedStatement) {
+      return res.status(404).json({
+        success: false,
+        message: "Imported statement not found.",
+      });
+    }
+
+    const statementLine = importedStatement.statementLines.id(lineId);
+
+    if (!statementLine) {
+      return res.status(404).json({
+        success: false,
+        message: "Statement line not found.",
+      });
+    }
+
+    statementLine.matchStatus = "Unmatched";
+    statementLine.matchedTransactionNumber = "";
+    statementLine.matchedJournalEntryNumber = "";
+    statementLine.matchConfidence = 0;
+    statementLine.matchingMethod = "";
+    statementLine.reviewStatus = "Pending Review";
+    statementLine.notes = notes || "Match rejected manually.";
+
+    refreshImportMatchCounts(importedStatement);
+
+    await importedStatement.save();
+
+    res.json({
+      success: true,
+      message: "Statement match rejected successfully.",
+      data: importedStatement,
+    });
+  } catch (error) {
+    console.error("Reject statement match error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not reject statement match.",
       error: error.message,
     });
   }
@@ -934,4 +1105,6 @@ module.exports = {
   getImportedStatements,
   startReconciliationWizard,
 loadReconciliationWorkspace,
+acceptStatementMatch,
+  rejectStatementMatch,
 };
