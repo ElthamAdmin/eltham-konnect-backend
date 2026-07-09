@@ -3,8 +3,8 @@ const AccountTransaction = require("../models/AccountTransaction");
 const BankReconciliation = require("../models/BankReconciliation");
 const BankStatementImport = require("../models/BankStatementImport");
 const ChartOfAccount = require("../models/ChartOfAccount");
-const { postJournalEntry } = require("../services/journalService");
-const { SYSTEM_ACCOUNTS } = require("../services/accountingConstants");
+const { postJournalEntry } = require("../services/accountingEngine/journalService");
+const { SYSTEM_ACCOUNTS } = require("../services/accountingEngine/accountingConstants");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
