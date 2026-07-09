@@ -587,6 +587,82 @@ const rejectStatementMatch = async (req, res) => {
   }
 };
 
+const searchLedgerTransactionsForMatch = async (req, res) => {
+  try {
+    const {
+      accountNumber,
+      amount,
+      transactionDirection,
+      reference = "",
+      from = "",
+      to = "",
+    } = req.query;
+
+    if (!accountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Account number is required.",
+      });
+    }
+
+    const query = {
+      accountNumber,
+      reconciled: { $ne: true },
+      lockedByReconciliation: { $ne: true },
+    };
+
+    if (amount) {
+      query.amount = roundMoney(amount);
+    }
+
+    if (from || to) {
+      query.transactionDate = {};
+
+      if (from) {
+        query.transactionDate.$gte = new Date(from);
+      }
+
+      if (to) {
+        query.transactionDate.$lte = new Date(to);
+      }
+    }
+
+    if (reference) {
+      query.$or = [
+        { reference: { $regex: reference, $options: "i" } },
+        { notes: { $regex: reference, $options: "i" } },
+        { transactionNumber: { $regex: reference, $options: "i" } },
+        { journalEntryNumber: { $regex: reference, $options: "i" } },
+      ];
+    }
+
+    const transactions = await AccountTransaction.find(query)
+      .sort({ transactionDate: -1, createdAt: -1 })
+      .limit(100);
+
+    const filteredTransactions = transactionDirection
+      ? transactions.filter(
+          (transaction) =>
+            getTransactionDirection(transaction.transactionType) ===
+            transactionDirection
+        )
+      : transactions;
+
+    res.json({
+      success: true,
+      data: filteredTransactions,
+    });
+  } catch (error) {
+    console.error("Ledger match search error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not search ledger transactions.",
+      error: error.message,
+    });
+  }
+};
+
 const getBankingDashboard = async (req, res) => {
   try {
     const accountsWithLedgerBalances = await getAccountsWithLedgerBalances();
@@ -1107,4 +1183,5 @@ module.exports = {
 loadReconciliationWorkspace,
 acceptStatementMatch,
   rejectStatementMatch,
+    searchLedgerTransactionsForMatch,
 };

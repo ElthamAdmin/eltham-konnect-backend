@@ -19,6 +19,7 @@ const {
 loadReconciliationWorkspace,
   acceptStatementMatch,
   rejectStatementMatch,
+    searchLedgerTransactionsForMatch,
 } = require("../controllers/bankingController");
 
 /*
@@ -115,6 +116,12 @@ router.post(
   "/reconciliation/import/reject-match",
   protect,
   rejectStatementMatch
+);
+
+router.get(
+  "/reconciliation/import/search-ledger",
+  protect,
+  searchLedgerTransactionsForMatch
 );
 
 module.exports = router;
