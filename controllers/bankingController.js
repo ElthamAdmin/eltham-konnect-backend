@@ -663,6 +663,132 @@ const searchLedgerTransactionsForMatch = async (req, res) => {
   }
 };
 
+const splitMatchStatementLine = async (req, res) => {
+  try {
+    const { importNumber, lineId, transactionNumbers = [] } = req.body;
+
+    if (!importNumber || !lineId || transactionNumbers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Import number, statement line ID, and transaction numbers are required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!importedStatement) {
+      return res.status(404).json({
+        success: false,
+        message: "Imported statement not found.",
+      });
+    }
+
+    const statementLine = importedStatement.statementLines.id(lineId);
+
+    if (!statementLine) {
+      return res.status(404).json({
+        success: false,
+        message: "Statement line not found.",
+      });
+    }
+
+    const ledgerTransactions = await AccountTransaction.find({
+      transactionNumber: { $in: transactionNumbers },
+      accountNumber: importedStatement.accountNumber,
+      lockedByReconciliation: { $ne: true },
+      reconciled: { $ne: true },
+    });
+
+    if (ledgerTransactions.length !== transactionNumbers.length) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "One or more selected ledger transactions could not be found or are already reconciled.",
+      });
+    }
+
+    const invalidDirection = ledgerTransactions.find(
+      (transaction) =>
+        getTransactionDirection(transaction.transactionType) !==
+        statementLine.transactionDirection
+    );
+
+    if (invalidDirection) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "All split transactions must have the same deposit/withdrawal direction as the statement line.",
+      });
+    }
+
+    const splitTotal = roundMoney(
+      ledgerTransactions.reduce(
+        (sum, transaction) => sum + Number(transaction.amount || 0),
+        0
+      )
+    );
+
+    const statementAmount = roundMoney(statementLine.amount || 0);
+    const splitDifference = roundMoney(statementAmount - splitTotal);
+
+    statementLine.isSplitMatch = true;
+    statementLine.splitMatches = ledgerTransactions.map((transaction) => ({
+      transactionNumber: transaction.transactionNumber,
+      journalEntryNumber: transaction.journalEntryNumber || "",
+      amount: roundMoney(transaction.amount || 0),
+      transactionType: transaction.transactionType,
+      reference: transaction.reference || "",
+      notes: transaction.notes || "",
+    }));
+
+    statementLine.splitDifference = splitDifference;
+    statementLine.matchedTransactionNumber = ledgerTransactions
+      .map((transaction) => transaction.transactionNumber)
+      .join(", ");
+    statementLine.matchedJournalEntryNumber = ledgerTransactions
+      .map((transaction) => transaction.journalEntryNumber || "")
+      .filter(Boolean)
+      .join(", ");
+
+    statementLine.matchStatus =
+      splitDifference === 0 ? "Matched" : "Suggested";
+
+    statementLine.matchConfidence = splitDifference === 0 ? 100 : 80;
+    statementLine.matchingMethod =
+      splitDifference === 0
+        ? "Manual Split Match"
+        : "Manual Split Match - Difference Requires Review";
+    statementLine.reviewStatus =
+      splitDifference === 0 ? "Approved" : "Pending Review";
+
+    refreshImportMatchCounts(importedStatement);
+
+    await importedStatement.save();
+
+    res.json({
+      success: true,
+      message:
+        splitDifference === 0
+          ? "Statement line split matched successfully."
+          : "Split match saved with a difference that requires review.",
+      data: importedStatement,
+      splitTotal,
+      splitDifference,
+    });
+  } catch (error) {
+    console.error("Split statement match error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not split match statement line.",
+      error: error.message,
+    });
+  }
+};
+
 const getBankingDashboard = async (req, res) => {
   try {
     const accountsWithLedgerBalances = await getAccountsWithLedgerBalances();
@@ -1184,4 +1310,5 @@ loadReconciliationWorkspace,
 acceptStatementMatch,
   rejectStatementMatch,
     searchLedgerTransactionsForMatch,
+      splitMatchStatementLine,
 };

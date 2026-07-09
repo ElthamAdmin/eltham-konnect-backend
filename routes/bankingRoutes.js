@@ -20,6 +20,7 @@ loadReconciliationWorkspace,
   acceptStatementMatch,
   rejectStatementMatch,
     searchLedgerTransactionsForMatch,
+      splitMatchStatementLine,
 } = require("../controllers/bankingController");
 
 /*
@@ -124,4 +125,9 @@ router.get(
   searchLedgerTransactionsForMatch
 );
 
+router.post(
+  "/reconciliation/import/split-match",
+  protect,
+  splitMatchStatementLine
+);
 module.exports = router;

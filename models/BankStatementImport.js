@@ -178,6 +178,50 @@ const bankStatementImportSchema = new mongoose.Schema(
       default: "",
     },
 
+        isSplitMatch: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    splitMatches: {
+      type: [
+        {
+          transactionNumber: {
+            type: String,
+            default: "",
+            index: true,
+          },
+          journalEntryNumber: {
+            type: String,
+            default: "",
+          },
+          amount: {
+            type: Number,
+            default: 0,
+          },
+          transactionType: {
+            type: String,
+            default: "",
+          },
+          reference: {
+            type: String,
+            default: "",
+          },
+          notes: {
+            type: String,
+            default: "",
+          },
+        },
+      ],
+      default: [],
+    },
+
+    splitDifference: {
+      type: Number,
+      default: 0,
+    },
+
     statementLines: {
       type: [bankStatementLineSchema],
       default: [],
