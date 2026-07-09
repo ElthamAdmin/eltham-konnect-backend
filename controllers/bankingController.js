@@ -3,6 +3,8 @@ const AccountTransaction = require("../models/AccountTransaction");
 const BankReconciliation = require("../models/BankReconciliation");
 const BankStatementImport = require("../models/BankStatementImport");
 const ChartOfAccount = require("../models/ChartOfAccount");
+const { postJournalEntry } = require("../services/journalService");
+const { SYSTEM_ACCOUNTS } = require("../services/accountingConstants");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -789,6 +791,190 @@ const splitMatchStatementLine = async (req, res) => {
   }
 };
 
+const createReconciliationAdjustment = async (req, res) => {
+  try {
+    const {
+      importNumber,
+      lineId,
+      adjustmentType,
+      description,
+      amount,
+      transactionDate,
+      adjustmentAccountCode,
+    } = req.body;
+
+    if (!importNumber || !lineId || !adjustmentType || !amount) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Import number, statement line ID, adjustment type, and amount are required.",
+      });
+    }
+
+    const importedStatement = await BankStatementImport.findOne({
+      importNumber,
+    });
+
+    if (!importedStatement) {
+      return res.status(404).json({
+        success: false,
+        message: "Imported statement not found.",
+      });
+    }
+
+    const statementLine = importedStatement.statementLines.id(lineId);
+
+    if (!statementLine) {
+      return res.status(404).json({
+        success: false,
+        message: "Statement line not found.",
+      });
+    }
+
+    const account = await FinancialAccount.findOne({
+      accountNumber: importedStatement.accountNumber,
+      status: "Active",
+    });
+
+    if (!account) {
+      return res.status(404).json({
+        success: false,
+        message: "Active financial account not found.",
+      });
+    }
+
+    if (!account.linkedChartAccountCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Selected financial account is not linked to the Chart of Accounts.",
+      });
+    }
+
+    const numericAmount = roundMoney(amount);
+
+    if (numericAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Adjustment amount must be greater than zero.",
+      });
+    }
+
+    const isDeposit = statementLine.transactionDirection === "Deposit";
+
+    const defaultAdjustmentAccountCode =
+      adjustmentType === "Interest Earned"
+        ? SYSTEM_ACCOUNTS.MARKETPLACE_REVENUE
+        : SYSTEM_ACCOUNTS.OPERATING_EXPENSE;
+
+    const finalAdjustmentAccountCode =
+      adjustmentAccountCode || defaultAdjustmentAccountCode;
+
+    const journalLines = isDeposit
+      ? [
+          {
+            accountCode: account.linkedChartAccountCode,
+            debit: numericAmount,
+            credit: 0,
+            description: description || adjustmentType,
+          },
+          {
+            accountCode: finalAdjustmentAccountCode,
+            debit: 0,
+            credit: numericAmount,
+            description: description || adjustmentType,
+          },
+        ]
+      : [
+          {
+            accountCode: finalAdjustmentAccountCode,
+            debit: numericAmount,
+            credit: 0,
+            description: description || adjustmentType,
+          },
+          {
+            accountCode: account.linkedChartAccountCode,
+            debit: 0,
+            credit: numericAmount,
+            description: description || adjustmentType,
+          },
+        ];
+
+    const journalEntry = await postJournalEntry({
+      entryDate:
+        transactionDate ||
+        statementLine.transactionDate ||
+        importedStatement.statementDate,
+      memo: `Bank reconciliation adjustment - ${adjustmentType}`,
+      reference: importedStatement.importNumber,
+      sourceModule: "Bank Reconciliation",
+      createdBy: getUserName(req.user),
+      lines: journalLines,
+    });
+
+    const transactionNumber = `TRN-${Date.now()}`;
+
+    const transactionType =
+      adjustmentType === "Bank Fee"
+        ? "Bank Fee"
+        : adjustmentType === "Interest Earned"
+        ? "Interest Income"
+        : adjustmentType === "Interest Charged"
+        ? "Interest Expense"
+        : "Adjustment";
+
+    const accountTransaction = await AccountTransaction.create({
+      transactionNumber,
+      accountNumber: account.accountNumber,
+      accountName: account.accountName,
+      linkedChartAccountCode: account.linkedChartAccountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
+      transactionType,
+      amount: numericAmount,
+      reference: adjustmentType,
+      notes: description || `Reconciliation adjustment - ${adjustmentType}`,
+      transactionDate:
+        transactionDate ||
+        statementLine.transactionDate ||
+        importedStatement.statementDate,
+      adjustmentReason: description || adjustmentType,
+      adjustmentType,
+    });
+
+    statementLine.matchStatus = "Matched";
+    statementLine.matchedTransactionNumber = accountTransaction.transactionNumber;
+    statementLine.matchedJournalEntryNumber = journalEntry.entryNumber;
+    statementLine.matchConfidence = 100;
+    statementLine.matchingMethod = "Reconciliation Adjustment";
+    statementLine.reviewStatus = "Approved";
+    statementLine.notes =
+      description || `Adjustment created for ${adjustmentType}`;
+
+    refreshImportMatchCounts(importedStatement);
+
+    await importedStatement.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Reconciliation adjustment created successfully.",
+      data: {
+        importedStatement,
+        journalEntry,
+        accountTransaction,
+      },
+    });
+  } catch (error) {
+    console.error("Reconciliation adjustment error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not create reconciliation adjustment.",
+      error: error.message,
+    });
+  }
+};
+
 const getBankingDashboard = async (req, res) => {
   try {
     const accountsWithLedgerBalances = await getAccountsWithLedgerBalances();
@@ -1308,7 +1494,8 @@ module.exports = {
   startReconciliationWizard,
 loadReconciliationWorkspace,
 acceptStatementMatch,
-  rejectStatementMatch,
-    searchLedgerTransactionsForMatch,
-      splitMatchStatementLine,
+rejectStatementMatch,
+searchLedgerTransactionsForMatch,
+splitMatchStatementLine,
+createReconciliationAdjustment,
 };
