@@ -55,6 +55,9 @@ const accountTransactionSchema = new mongoose.Schema(
         "Interest Income",
         "Interest Expense",
         "Adjustment",
+        "Customer Purchase",
+        "Customer Purchase Refund",
+        "Customer Purchase Reversal",
       ],
       required: true,
       index: true,
@@ -151,9 +154,58 @@ const accountTransactionSchema = new mongoose.Schema(
       default: "",
     },
 
-    adjustmentType: {
+        adjustmentType: {
       type: String,
       default: "",
+    },
+
+    customerPurchaseNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    customerEkonId: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    customerName: {
+      type: String,
+      default: "",
+    },
+
+    invoiceNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    trackingNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    merchant: {
+      type: String,
+      default: "",
+    },
+
+    transactionCurrency: {
+      type: String,
+      default: "JMD",
+    },
+
+    foreignCurrencyAmount: {
+      type: Number,
+      default: 0,
+    },
+
+    exchangeRate: {
+      type: Number,
+      default: 1,
     },
   },
   {

@@ -223,6 +223,83 @@ const postPayrollPayment = async ({
   });
 };
 
+const postCustomerPurchase = async ({
+  purchase,
+  paymentAccount,
+  user,
+}) => {
+  const baseCurrencyAmount = roundMoney(
+    purchase.baseCurrencyAmount ||
+      Number(purchase.purchaseAmount || 0) *
+        Number(purchase.exchangeRate || 1)
+  );
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(purchase.purchaseDate),
+    memo: `Customer purchase for ${purchase.customerName} from ${purchase.merchant}`,
+    reference: purchase.purchaseNumber,
+    sourceModule: "Customer Purchases",
+    createdBy: getUserName(user),
+    lines: templates.buildCustomerPurchaseFundingLines({
+      paymentAccount,
+      amount: baseCurrencyAmount,
+      description: `${purchase.purchaseNumber} - ${purchase.customerName} - ${purchase.merchant}`,
+    }),
+  });
+};
+
+const refundCustomerPurchase = async ({
+  purchase,
+  paymentAccount,
+  refundAmount,
+  refundDate,
+  user,
+}) => {
+  const amount = roundMoney(
+    refundAmount || purchase.baseCurrencyAmount || 0
+  );
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(refundDate || new Date()),
+    memo: `Customer purchase refund for ${purchase.customerName}`,
+    reference: purchase.purchaseNumber,
+    sourceModule: "Customer Purchases",
+    createdBy: getUserName(user),
+    lines: templates.buildCustomerPurchaseRefundLines({
+      paymentAccount,
+      amount,
+      description: `${purchase.purchaseNumber} refund from ${purchase.merchant}`,
+    }),
+  });
+};
+
+const postCustomerPurchaseRecoveryInvoice = async ({
+  purchase,
+  invoiceNumber,
+  recoverableAmount,
+  shoppingServiceFee,
+  shippingRevenue,
+  deliveryRevenue,
+  otherServiceRevenue,
+  invoiceDate,
+  user,
+}) => {
+  return postJournalEntry({
+    entryDate: normalizePostingDate(invoiceDate || new Date()),
+    memo: `Customer purchase recovery invoice for ${purchase.customerName}`,
+    reference: invoiceNumber || purchase.purchaseNumber,
+    sourceModule: "Customer Purchases",
+    createdBy: getUserName(user),
+    lines: templates.buildCustomerPurchaseRecoveryInvoiceLines({
+      recoverableAmount,
+      shoppingServiceFee,
+      shippingRevenue,
+      deliveryRevenue,
+      otherServiceRevenue,
+    }),
+  });
+};
+
 module.exports = {
   postCustomerInvoice,
   receiveInvoicePayment,
@@ -233,4 +310,7 @@ module.exports = {
   transferFunds,
   postExpensePayment,
   postPayrollPayment,
+  postCustomerPurchase,
+  refundCustomerPurchase,
+  postCustomerPurchaseRecoveryInvoice,
 };

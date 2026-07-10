@@ -253,6 +253,145 @@ const buildPayrollPaymentLines = ({
   return lines;
 };
 
+const buildCustomerPurchaseFundingLines = ({
+  paymentAccount,
+  amount,
+  description = "",
+}) => {
+  const value = requirePositiveAmount(
+    amount,
+    "Customer purchase base-currency amount"
+  );
+
+  requireLinkedAccount(paymentAccount, "Customer purchase payment account");
+
+  return [
+    {
+      accountCode: SYSTEM_ACCOUNTS.CUSTOMER_PURCHASE_RECOVERABLE,
+      debit: value,
+      credit: 0,
+      description:
+        description || "Amount paid on behalf of customer",
+    },
+    {
+      accountCode: paymentAccount.linkedChartAccountCode,
+      debit: 0,
+      credit: value,
+      description:
+        description || "Customer purchase funded from financial account",
+    },
+  ];
+};
+
+const buildCustomerPurchaseRefundLines = ({
+  paymentAccount,
+  amount,
+  description = "",
+}) => {
+  const value = requirePositiveAmount(
+    amount,
+    "Customer purchase refund amount"
+  );
+
+  requireLinkedAccount(paymentAccount, "Customer purchase refund account");
+
+  return [
+    {
+      accountCode: paymentAccount.linkedChartAccountCode,
+      debit: value,
+      credit: 0,
+      description:
+        description || "Refund received to original payment account",
+    },
+    {
+      accountCode: SYSTEM_ACCOUNTS.CUSTOMER_PURCHASE_RECOVERABLE,
+      debit: 0,
+      credit: value,
+      description:
+        description || "Customer purchase recoverable reduced by refund",
+    },
+  ];
+};
+
+const buildCustomerPurchaseRecoveryInvoiceLines = ({
+  recoverableAmount = 0,
+  shoppingServiceFee = 0,
+  shippingRevenue = 0,
+  deliveryRevenue = 0,
+  otherServiceRevenue = 0,
+}) => {
+  const recovery = roundMoney(recoverableAmount);
+  const shoppingFee = roundMoney(shoppingServiceFee);
+  const shipping = roundMoney(shippingRevenue);
+  const delivery = roundMoney(deliveryRevenue);
+  const otherRevenue = roundMoney(otherServiceRevenue);
+
+  const totalInvoiceAmount = roundMoney(
+    recovery + shoppingFee + shipping + delivery + otherRevenue
+  );
+
+  requirePositiveAmount(
+    totalInvoiceAmount,
+    "Customer purchase recovery invoice amount"
+  );
+
+  const lines = [
+    {
+      accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+      debit: totalInvoiceAmount,
+      credit: 0,
+      description: "Customer purchase recovery invoice receivable",
+    },
+  ];
+
+  if (recovery > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.CUSTOMER_PURCHASE_RECOVERABLE,
+      debit: 0,
+      credit: recovery,
+      description: "Customer purchase recoverable cleared through invoice",
+    });
+  }
+
+  if (shoppingFee > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.SHOPPING_SERVICE_REVENUE,
+      debit: 0,
+      credit: shoppingFee,
+      description: "Shopping assistance service revenue",
+    });
+  }
+
+  if (shipping > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.SHIPPING_REVENUE,
+      debit: 0,
+      credit: shipping,
+      description: "Shipping revenue",
+    });
+  }
+
+  if (delivery > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.DELIVERY_REVENUE,
+      debit: 0,
+      credit: delivery,
+      description: "Delivery revenue",
+    });
+  }
+
+  if (otherRevenue > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.MARKETPLACE_REVENUE,
+      debit: 0,
+      credit: otherRevenue,
+      description: "Other shopping assistance revenue",
+    });
+  }
+
+  return lines;
+};
+
 module.exports = {
   requirePositiveAmount,
   requireLinkedAccount,
@@ -265,4 +404,7 @@ module.exports = {
   buildTransferLines,
   buildExpensePaymentLines,
   buildPayrollPaymentLines,
+  buildCustomerPurchaseFundingLines,
+  buildCustomerPurchaseRefundLines,
+  buildCustomerPurchaseRecoveryInvoiceLines,
 };
