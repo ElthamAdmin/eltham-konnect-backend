@@ -1,6 +1,7 @@
 const Customer = require("../models/Customer");
 const Package = require("../models/Package");
 const Invoice = require("../models/Invoice");
+const CustomerPurchase = require("../models/CustomerPurchase");
 const HREmployee = require("../models/HREmployee");
 const Payroll = require("../models/Payroll");
 const ShippingRate = require("../models/ShippingRate");
@@ -13,7 +14,14 @@ const { writeAuditLog } = require("../utils/auditLogger");
 const {
   postCustomerInvoice,
   receiveInvoicePayment,
+  postCustomerPurchaseRecoveryInvoice,
 } = require("../services/accountingService");
+
+const {
+  getRecoveryInvoiceData,
+  markPurchasesInvoiced,
+  allocateInvoicePaymentToPurchases,
+} = require("../services/customerPurchaseIntegrationService");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -496,6 +504,262 @@ await invoice.save();
   }
 };
 
+const generateCustomerPurchaseInvoice = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      customerEkonId,
+      customerPurchaseNumbers,
+    } = req.body;
+
+    if (!customerEkonId) {
+      return res.status(400).json({
+        success: false,
+        message: "Customer EKON ID is required.",
+      });
+    }
+
+    if (
+      !Array.isArray(customerPurchaseNumbers) ||
+      customerPurchaseNumbers.length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Select at least one customer purchase.",
+      });
+    }
+
+    const customer = await Customer.findOne({
+      ekonId: customerEkonId,
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found.",
+      });
+    }
+
+    const recoveryData =
+      await getRecoveryInvoiceData({
+        customerEkonId,
+        purchaseNumbers:
+          customerPurchaseNumbers,
+      });
+
+    const {
+      purchases,
+      packages: linkedPackages,
+      totals,
+      invoicePurchaseLines,
+      invoicePackageLines,
+    } = recoveryData;
+
+    if (
+      totals.totalCustomerPurchaseAmount <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The selected purchases do not contain invoiceable recovery charges.",
+      });
+    }
+
+    const invoiceNumber = `INV-${Date.now()}`;
+    const createdDate =
+      getJamaicaDateString();
+
+    const invoice = await Invoice.create({
+      invoiceNumber,
+      customerEkonId: customer.ekonId,
+      customerName: customer.name,
+      packageCount:
+        invoicePackageLines.length,
+      packages: invoicePackageLines,
+      invoiceSource: "Customer Purchases",
+      customerPurchaseCount:
+        invoicePurchaseLines.length,
+      customerPurchases:
+        invoicePurchaseLines,
+      customerPurchaseRecoveryAmount:
+        totals.recoverableAmount,
+      shoppingAssistanceFee:
+        totals.shoppingServiceFee,
+      customerPurchaseWeightCharge:
+        totals.weightCharge,
+      customerPurchaseShippingCharge:
+        totals.shippingCharge,
+      customerPurchaseCustomsDuty:
+        totals.customsDuty,
+      customerPurchaseDeliveryFee:
+        totals.deliveryFee,
+      customerPurchaseOtherCharges:
+        totals.otherCharges,
+      customerPurchaseTotal:
+        totals.totalCustomerPurchaseAmount,
+      subtotal: totals.shippingRevenue,
+      customsDuty: totals.customsDuty,
+      gct: 0,
+      processingFee:
+        totals.shoppingServiceFee,
+      deliveryFee: totals.deliveryFee,
+      deliveryType: "",
+      otherAdjustment:
+        totals.otherCharges,
+      adjustmentNote:
+        "Generated from Customer Purchase recovery records.",
+      pointsRedeemed: 0,
+      finalTotal:
+        totals.totalCustomerPurchaseAmount,
+      amountPaid: 0,
+      balanceDue:
+        totals.totalCustomerPurchaseAmount,
+      dueDate: createdDate,
+      paymentTerms: "Due on Receipt",
+      status: "Unpaid",
+      paymentLink: "",
+      paidDate: null,
+      paidAt: null,
+      createdAt: createdDate,
+    });
+
+    try {
+      const journalEntry =
+        await postCustomerPurchaseRecoveryInvoice({
+          customerName: customer.name,
+          invoiceNumber:
+            invoice.invoiceNumber,
+          recoverableAmount:
+            totals.recoverableAmount,
+          shoppingServiceFee:
+            totals.shoppingServiceFee,
+          shippingRevenue:
+            totals.shippingRevenue,
+          deliveryRevenue:
+            totals.deliveryFee,
+          otherServiceRevenue:
+            totals.otherServiceRevenue,
+          invoiceDate: createdDate,
+          user: req.user,
+        });
+
+      invoice.journalEntryNumber =
+        journalEntry.entryNumber;
+
+      invoice.customerPurchaseJournalEntryNumber =
+        journalEntry.entryNumber;
+
+      invoice.journalStatus = "Posted";
+      invoice.journalPostedAt = new Date();
+
+      await invoice.save();
+
+      await markPurchasesInvoiced({
+        purchases,
+        invoice,
+        journalEntryNumber:
+          journalEntry.entryNumber,
+        user: req.user,
+      });
+
+      if (linkedPackages.length > 0) {
+        await Package.updateMany(
+          {
+            _id: {
+              $in: linkedPackages.map(
+                (pkg) => pkg._id
+              ),
+            },
+          },
+          {
+            $set: {
+              invoiceStatus: "Issued",
+            },
+          }
+        );
+      }
+
+      await createCustomerNotification({
+        customerEkonId: customer.ekonId,
+        customerName: customer.name,
+        title:
+          "Shopping Assistance Invoice Generated",
+        message: `Invoice ${
+          invoice.invoiceNumber
+        } has been generated for ${
+          invoice.customerPurchaseCount
+        } customer purchase(s). Final total: JMD ${Number(
+          invoice.finalTotal || 0
+        ).toLocaleString()}.`,
+        type: "Invoice Update",
+        referenceType: "Invoice",
+        referenceId: invoice.invoiceNumber,
+      });
+
+      await writeAuditLog({
+        req,
+        action:
+          "CREATE_CUSTOMER_PURCHASE_INVOICE",
+        module: "Invoices",
+        description: `Customer purchase recovery invoice ${invoice.invoiceNumber} created for ${invoice.customerName}`,
+        targetType: "Invoice",
+        targetId: invoice.invoiceNumber,
+        journalEntryNumber:
+          journalEntry.entryNumber,
+        metadata: {
+          customerEkonId:
+            invoice.customerEkonId,
+          customerPurchaseNumbers:
+            customerPurchaseNumbers,
+          customerPurchaseCount:
+            invoice.customerPurchaseCount,
+          recoverableAmount:
+            totals.recoverableAmount,
+          shoppingServiceFee:
+            totals.shoppingServiceFee,
+          shippingRevenue:
+            totals.shippingRevenue,
+          deliveryRevenue:
+            totals.deliveryFee,
+          otherServiceRevenue:
+            totals.otherServiceRevenue,
+          finalTotal: invoice.finalTotal,
+        },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message:
+          "Customer purchase recovery invoice generated successfully.",
+        data: invoice,
+        journalEntryNumber:
+          journalEntry.entryNumber,
+      });
+    } catch (postingError) {
+      await Invoice.deleteOne({
+        _id: invoice._id,
+      });
+
+      throw postingError;
+    }
+  } catch (error) {
+    console.error(
+      "Customer purchase invoice generation error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Customer purchase recovery invoice could not be generated.",
+      error: error.message,
+    });
+  }
+};
+
 const getInvoices = async (req, res) => {
   try {
     const invoices = await Invoice.find().sort({ _id: -1 });
@@ -882,15 +1146,18 @@ const markInvoicePaid = async (req, res) => {
       receivedBy: invoice.cashierName,
     });
 
-    await invoice.save();
+        await invoice.save();
 
     await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}`,
       accountNumber: account.accountNumber,
       accountName: account.accountName,
-      linkedChartAccountCode: account.linkedChartAccountCode || "",
-      journalEntryNumber: paymentJournalEntry.entryNumber,
-      ledgerReference: paymentJournalEntry.entryNumber,
+      linkedChartAccountCode:
+        account.linkedChartAccountCode || "",
+      journalEntryNumber:
+        paymentJournalEntry.entryNumber,
+      ledgerReference:
+        paymentJournalEntry.entryNumber,
       transactionType: "Invoice Payment",
       amount: actualPaymentAmount,
       paymentMethod,
@@ -899,7 +1166,28 @@ const markInvoicePaid = async (req, res) => {
       reference: invoice.invoiceNumber,
       notes: `Invoice payment received for ${invoice.customerName}`,
       transactionDate: now,
+      invoiceNumber: invoice.invoiceNumber,
+      customerEkonId: invoice.customerEkonId,
+      customerName: invoice.customerName,
     });
+
+    let customerPurchaseAllocation = null;
+
+    if (
+      Array.isArray(invoice.customerPurchases) &&
+      invoice.customerPurchases.length > 0
+    ) {
+      customerPurchaseAllocation =
+        await allocateInvoicePaymentToPurchases({
+          invoice,
+          paymentAmount:
+            actualPaymentAmount,
+          paymentJournalEntryNumber:
+            paymentJournalEntry.entryNumber,
+          paymentDate: now,
+          receivedBy: invoice.cashierName,
+        });
+    }
 
     await syncFinancialAccountFromLedger(account);
 
@@ -949,6 +1237,7 @@ const markInvoicePaid = async (req, res) => {
         balanceDue: invoice.balanceDue,
         status: invoice.status,
         journalEntryNumber: paymentJournalEntry.entryNumber,
+        customerPurchaseAllocation,
       },
     });
 
@@ -1030,6 +1319,7 @@ const reconcilePaidInvoicePackages = async (req, res) => {
 module.exports = {
   createInvoice,
   generateMultipleInvoice,
+  generateCustomerPurchaseInvoice,
   getInvoices,
   updateInvoicePaymentLink,
   updateInvoiceChargesAdjustment,

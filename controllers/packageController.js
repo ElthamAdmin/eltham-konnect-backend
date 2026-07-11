@@ -2,8 +2,13 @@ const Package = require("../models/Package");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
+const CustomerPurchase = require("../models/CustomerPurchase");
 const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
+
+const {
+  syncCustomerPurchaseFromPackage,
+} = require("../services/customerPurchaseIntegrationService");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -374,9 +379,19 @@ const createPackage = async (req, res) => {
       ...addedByDetails,
     });
 
-    await newPackage.save();
+        await newPackage.save();
 
-const pointsAwarded = await awardWarehousePointsIfEligible(customer, newPackage, req);
+    await syncCustomerPurchaseFromPackage({
+      pkg: newPackage,
+      user: req.user,
+    });
+
+    const pointsAwarded =
+      await awardWarehousePointsIfEligible(
+        customer,
+        newPackage,
+        req
+      );
 
 if (packageStatus === "At Warehouse") {
   await completeReferralIfFirstWarehousePackage(newPackage);
@@ -497,7 +512,13 @@ const updatePackageStatus = async (req, res) => {
       pkg.readyForPickupDate = null;
     }
 
-    await pkg.save();
+        await pkg.save();
+
+    const synchronizedPurchase =
+      await syncCustomerPurchaseFromPackage({
+        pkg,
+        user: req.user,
+      });
 
     let pointsAwarded = 0;
     let customer = null;
@@ -554,6 +575,8 @@ const updatePackageStatus = async (req, res) => {
         readyForPickupDate: pkg.readyForPickupDate,
         statusUpdatedAt: pkg.statusUpdatedAt,
         pointsAwarded,
+                customerPurchaseNumber:
+          synchronizedPurchase?.purchaseNumber || "",
       },
     });
 
@@ -638,7 +661,13 @@ const bulkUpdatePackageStatus = async (req, res) => {
         pkg.readyForPickupDate = null;
       }
 
-      await pkg.save();
+            await pkg.save();
+
+      const synchronizedPurchase =
+        await syncCustomerPurchaseFromPackage({
+          pkg,
+          user: req.user,
+        });
 
       let pointsAwarded = 0;
       let customer = null;
@@ -696,6 +725,8 @@ const bulkUpdatePackageStatus = async (req, res) => {
           readyForPickupDate: pkg.readyForPickupDate,
           statusUpdatedAt: pkg.statusUpdatedAt,
           pointsAwarded,
+                    customerPurchaseNumber:
+            synchronizedPurchase?.purchaseNumber || "",
         },
       });
 

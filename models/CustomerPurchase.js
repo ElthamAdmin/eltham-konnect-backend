@@ -222,10 +222,110 @@ const customerPurchaseSchema = new mongoose.Schema(
       default: null,
     },
 
-    invoiceNumber: {
+        invoiceNumber: {
       type: String,
       default: "",
       index: true,
+    },
+
+    invoiceReady: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    invoicedAt: {
+      type: Date,
+      default: null,
+    },
+
+    invoiceJournalEntryNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    invoiceHistory: [
+      {
+        invoiceNumber: {
+          type: String,
+          default: "",
+        },
+
+        invoiceDate: {
+          type: Date,
+          default: null,
+        },
+
+        allocatedInvoiceAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        recoveredAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        outstandingAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        journalEntryNumber: {
+          type: String,
+          default: "",
+        },
+
+        status: {
+          type: String,
+          default: "Invoiced",
+        },
+      },
+    ],
+
+    paymentAllocations: [
+      {
+        invoiceNumber: {
+          type: String,
+          default: "",
+        },
+
+        paymentDate: {
+          type: Date,
+          default: Date.now,
+        },
+
+        paymentAmount: {
+          type: Number,
+          default: 0,
+        },
+
+        journalEntryNumber: {
+          type: String,
+          default: "",
+        },
+
+        receivedBy: {
+          type: String,
+          default: "",
+        },
+
+        remainingBalance: {
+          type: Number,
+          default: 0,
+        },
+      },
+    ],
+
+    lastPackageSyncAt: {
+      type: Date,
+      default: null,
+    },
+
+    lastPackageStatus: {
+      type: String,
+      default: "",
     },
 
     itemRecoveryAmount: {

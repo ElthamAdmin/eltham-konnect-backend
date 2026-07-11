@@ -274,7 +274,7 @@ const refundCustomerPurchase = async ({
 };
 
 const postCustomerPurchaseRecoveryInvoice = async ({
-  purchase,
+  customerName,
   invoiceNumber,
   recoverableAmount,
   shoppingServiceFee,
@@ -285,18 +285,23 @@ const postCustomerPurchaseRecoveryInvoice = async ({
   user,
 }) => {
   return postJournalEntry({
-    entryDate: normalizePostingDate(invoiceDate || new Date()),
-    memo: `Customer purchase recovery invoice for ${purchase.customerName}`,
-    reference: invoiceNumber || purchase.purchaseNumber,
+    entryDate: normalizePostingDate(
+      invoiceDate || new Date()
+    ),
+    memo: `Customer purchase recovery invoice for ${
+      customerName || "customer"
+    }`,
+    reference: invoiceNumber,
     sourceModule: "Customer Purchases",
     createdBy: getUserName(user),
-    lines: templates.buildCustomerPurchaseRecoveryInvoiceLines({
-      recoverableAmount,
-      shoppingServiceFee,
-      shippingRevenue,
-      deliveryRevenue,
-      otherServiceRevenue,
-    }),
+    lines:
+      templates.buildCustomerPurchaseRecoveryInvoiceLines({
+        recoverableAmount,
+        shoppingServiceFee,
+        shippingRevenue,
+        deliveryRevenue,
+        otherServiceRevenue,
+      }),
   });
 };
 

@@ -22,13 +22,149 @@ const InvoiceSchema = new mongoose.Schema({
     default: 0,
   },
 
-  packages: [
+    packages: [
     {
       trackingNumber: String,
       chargeableWeight: Number,
       rate: Number,
+      customerPurchaseNumber: {
+        type: String,
+        default: "",
+      },
     },
   ],
+
+  invoiceSource: {
+    type: String,
+    enum: ["Packages", "Customer Purchases", "Combined"],
+    default: "Packages",
+    index: true,
+  },
+
+  customerPurchaseCount: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchases: [
+    {
+      purchaseNumber: {
+        type: String,
+        required: true,
+      },
+
+      merchant: {
+        type: String,
+        default: "",
+      },
+
+      orderNumber: {
+        type: String,
+        default: "",
+      },
+
+      trackingNumber: {
+        type: String,
+        default: "",
+      },
+
+      itemRecoveryAmount: {
+        type: Number,
+        default: 0,
+      },
+
+      shoppingAssistanceFee: {
+        type: Number,
+        default: 0,
+      },
+
+      weightCharge: {
+        type: Number,
+        default: 0,
+      },
+
+      shippingCharge: {
+        type: Number,
+        default: 0,
+      },
+
+      customsDuty: {
+        type: Number,
+        default: 0,
+      },
+
+      deliveryFee: {
+        type: Number,
+        default: 0,
+      },
+
+      otherCharges: {
+        type: Number,
+        default: 0,
+      },
+
+      allocatedInvoiceAmount: {
+        type: Number,
+        default: 0,
+      },
+
+      recoveredAmount: {
+        type: Number,
+        default: 0,
+      },
+
+      outstandingAmount: {
+        type: Number,
+        default: 0,
+      },
+    },
+  ],
+
+  customerPurchaseRecoveryAmount: {
+    type: Number,
+    default: 0,
+  },
+
+  shoppingAssistanceFee: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseWeightCharge: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseShippingCharge: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseCustomsDuty: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseDeliveryFee: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseOtherCharges: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseTotal: {
+    type: Number,
+    default: 0,
+  },
+
+  customerPurchaseJournalEntryNumber: {
+    type: String,
+    default: "",
+    index: true,
+  },
 
   subtotal: {
     type: Number,

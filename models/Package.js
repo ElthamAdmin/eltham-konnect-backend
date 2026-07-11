@@ -53,9 +53,38 @@ syncNotes: {
   default: "",
 },
 
-    weight: {
+        weight: {
       type: Number,
       default: 0,
+    },
+
+    customerPurchaseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "CustomerPurchase",
+      default: null,
+      index: true,
+    },
+
+    customerPurchaseNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    customerPurchaseLinked: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+
+    customerPurchaseLinkedAt: {
+      type: Date,
+      default: null,
+    },
+
+    customerPurchaseLinkedBy: {
+      type: String,
+      default: "",
     },
 
     status: {
