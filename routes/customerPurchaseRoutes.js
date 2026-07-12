@@ -10,6 +10,7 @@ const {
   getCustomerPurchaseDashboard,
   createCustomerPurchase,
   updateUnpostedCustomerPurchase,
+  recordCustomerPurchaseTracking,
   linkCustomerPurchasePackage,
   receiveCustomerPurchase,
   prepareCustomerPurchaseRecovery,
@@ -54,6 +55,12 @@ router.put(
   "/:purchaseNumber",
   protect,
   updateUnpostedCustomerPurchase
+);
+
+router.patch(
+  "/:purchaseNumber/tracking",
+  protect,
+  recordCustomerPurchaseTracking
 );
 
 router.patch(

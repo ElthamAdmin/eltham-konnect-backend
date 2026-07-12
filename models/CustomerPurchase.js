@@ -196,10 +196,52 @@ const customerPurchaseSchema = new mongoose.Schema(
       index: true,
     },
 
-    trackingNumber: {
+        trackingNumber: {
       type: String,
       default: "",
       index: true,
+    },
+
+    carrier: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    shipmentDate: {
+      type: Date,
+      default: null,
+    },
+
+    shippingMethod: {
+      type: String,
+      enum: ["", "Air", "Sea", "Courier", "Local Delivery", "Other"],
+      default: "",
+    },
+
+    expectedWarehouse: {
+      type: String,
+      default: "",
+    },
+
+    estimatedArrivalDate: {
+      type: Date,
+      default: null,
+    },
+
+    trackingRecordedAt: {
+      type: Date,
+      default: null,
+    },
+
+    trackingRecordedBy: {
+      type: String,
+      default: "",
+    },
+
+    trackingNotes: {
+      type: String,
+      default: "",
     },
 
     warehouse: {
@@ -392,13 +434,15 @@ const customerPurchaseSchema = new mongoose.Schema(
       index: true,
     },
 
-    status: {
+        status: {
       type: String,
       enum: [
         "Pending Purchase",
         "Purchased",
+        "Tracking Received",
         "In Transit",
         "At Warehouse",
+        "Recovery Calculated",
         "Ready to Invoice",
         "Invoiced",
         "Partially Recovered",

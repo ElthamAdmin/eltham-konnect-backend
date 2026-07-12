@@ -209,12 +209,14 @@ const getCustomerPurchaseDashboard = async (req, res) => {
       $nin: ["Cancelled", "Refunded", "Reversed"],
     };
 
-    const [
+        const [
       totalPurchases,
       pendingPurchase,
       purchased,
+      trackingReceived,
       inTransit,
       atWarehouse,
+      recoveryCalculated,
       readyToInvoice,
       invoiced,
       recovered,
@@ -223,12 +225,37 @@ const getCustomerPurchaseDashboard = async (req, res) => {
       recentPurchases,
     ] = await Promise.all([
       CustomerPurchase.countDocuments(),
-      CustomerPurchase.countDocuments({ status: "Pending Purchase" }),
-      CustomerPurchase.countDocuments({ status: "Purchased" }),
-      CustomerPurchase.countDocuments({ status: "In Transit" }),
-      CustomerPurchase.countDocuments({ status: "At Warehouse" }),
-      CustomerPurchase.countDocuments({ status: "Ready to Invoice" }),
-      CustomerPurchase.countDocuments({ status: "Invoiced" }),
+            CustomerPurchase.countDocuments({
+        status: "Pending Purchase",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "Purchased",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "Tracking Received",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "In Transit",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "At Warehouse",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "Recovery Calculated",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "Ready to Invoice",
+      }),
+
+      CustomerPurchase.countDocuments({
+        status: "Invoiced",
+      }),
       CustomerPurchase.countDocuments({
         status: { $in: ["Recovered", "Refunded"] },
       }),
@@ -283,8 +310,10 @@ const getCustomerPurchaseDashboard = async (req, res) => {
         totalPurchases,
         pendingPurchase,
         purchased,
+        trackingReceived,
         inTransit,
         atWarehouse,
+        recoveryCalculated,
         readyToInvoice,
         invoiced,
         recovered,
@@ -743,6 +772,238 @@ const updateUnpostedCustomerPurchase = async (req, res) => {
   }
 };
 
+const recordCustomerPurchaseTracking = async (req, res) => {
+  try {
+    const { purchaseNumber } = req.params;
+
+    const {
+      trackingNumber,
+      carrier = "",
+      shipmentDate,
+      shippingMethod = "",
+      expectedWarehouse = "",
+      estimatedArrivalDate,
+      trackingNotes = "",
+    } = req.body;
+
+    if (!trackingNumber || !String(trackingNumber).trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Tracking number is required.",
+      });
+    }
+
+    const purchase = await CustomerPurchase.findOne({
+      purchaseNumber,
+    });
+
+    if (!purchase) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer purchase not found.",
+      });
+    }
+
+    if (
+      [
+        "Invoiced",
+        "Partially Recovered",
+        "Recovered",
+        "Cancelled",
+        "Refunded",
+        "Reversed",
+      ].includes(purchase.status)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `Tracking cannot be recorded while the purchase status is ${purchase.status}.`,
+      });
+    }
+
+    const normalizedTrackingNumber = String(
+      trackingNumber
+    ).trim();
+
+    const duplicateTracking =
+      await CustomerPurchase.findOne({
+        trackingNumber: normalizedTrackingNumber,
+        purchaseNumber: { $ne: purchaseNumber },
+        status: {
+          $nin: ["Cancelled", "Refunded", "Reversed"],
+        },
+      });
+
+    if (duplicateTracking) {
+      return res.status(400).json({
+        success: false,
+        message: `Tracking number ${normalizedTrackingNumber} is already linked to purchase ${duplicateTracking.purchaseNumber}.`,
+      });
+    }
+
+    const beforeValues = purchase.toObject();
+    const performedBy = getUserName(req.user);
+
+    purchase.trackingNumber =
+      normalizedTrackingNumber;
+
+    purchase.carrier = String(carrier || "").trim();
+
+    purchase.shipmentDate = shipmentDate
+      ? new Date(shipmentDate)
+      : purchase.shipmentDate;
+
+    purchase.shippingMethod =
+      String(shippingMethod || "").trim();
+
+    purchase.expectedWarehouse =
+      String(expectedWarehouse || "").trim();
+
+    purchase.estimatedArrivalDate =
+      estimatedArrivalDate
+        ? new Date(estimatedArrivalDate)
+        : null;
+
+    purchase.trackingRecordedAt = new Date();
+    purchase.trackingRecordedBy = performedBy;
+    purchase.trackingNotes =
+      String(trackingNotes || "").trim();
+
+    purchase.lastPackageStatus =
+      "Tracking Received";
+
+    purchase.status = "Tracking Received";
+    purchase.invoiceReady = false;
+    purchase.updatedBy = performedBy;
+
+    await purchase.save();
+
+    let linkedPackage = null;
+
+    linkedPackage = await Package.findOne({
+      trackingNumber: normalizedTrackingNumber,
+    });
+
+    if (linkedPackage) {
+      if (
+        linkedPackage.customerEkonId !==
+        purchase.customerEkonId
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "The matching package belongs to a different customer.",
+        });
+      }
+
+      purchase.packageId = linkedPackage._id;
+
+      if (linkedPackage.status === "At Warehouse") {
+        purchase.status = "At Warehouse";
+        purchase.warehouse =
+          linkedPackage.warehouseLocation ||
+          purchase.expectedWarehouse ||
+          "";
+
+        purchase.weight = roundMoney(
+          linkedPackage.weight || 0
+        );
+
+        purchase.chargeableWeight =
+          Number(linkedPackage.weight || 0) > 0
+            ? Math.ceil(
+                Number(linkedPackage.weight || 0)
+              )
+            : 0;
+
+        purchase.packageReceivedDate =
+          linkedPackage.dateReceived || new Date();
+      } else if (
+        [
+          "Manifest Assigned",
+          "In Transit",
+          "Cleared Customs",
+          "In Transit to Branch",
+        ].includes(linkedPackage.status)
+      ) {
+        purchase.status = "In Transit";
+      }
+
+      purchase.lastPackageStatus =
+        linkedPackage.status || purchase.status;
+
+      purchase.lastPackageSyncAt = new Date();
+
+      await purchase.save();
+
+      linkedPackage.customerPurchaseId =
+        purchase._id;
+
+      linkedPackage.customerPurchaseNumber =
+        purchase.purchaseNumber;
+
+      linkedPackage.customerPurchaseLinked = true;
+
+      linkedPackage.customerPurchaseLinkedAt =
+        linkedPackage.customerPurchaseLinkedAt ||
+        new Date();
+
+      linkedPackage.customerPurchaseLinkedBy =
+        linkedPackage.customerPurchaseLinkedBy ||
+        performedBy;
+
+      await linkedPackage.save();
+    }
+
+    await writeAuditLog({
+      req,
+      action: "RECORD_CUSTOMER_PURCHASE_TRACKING",
+      module: "Customer Purchases",
+      description: `Tracking ${purchase.trackingNumber} recorded for customer purchase ${purchase.purchaseNumber}`,
+      targetType: "CustomerPurchase",
+      targetId: purchase.purchaseNumber,
+      beforeValues,
+      afterValues: purchase.toObject(),
+      metadata: {
+        trackingNumber: purchase.trackingNumber,
+        carrier: purchase.carrier,
+        shipmentDate: purchase.shipmentDate,
+        shippingMethod: purchase.shippingMethod,
+        expectedWarehouse:
+          purchase.expectedWarehouse,
+        estimatedArrivalDate:
+          purchase.estimatedArrivalDate,
+        trackingRecordedBy:
+          purchase.trackingRecordedBy,
+        linkedPackageId: linkedPackage
+          ? String(linkedPackage._id)
+          : "",
+        resultingStatus: purchase.status,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: linkedPackage
+        ? "Tracking recorded and matching package linked successfully."
+        : "Tracking information recorded successfully.",
+      data: purchase,
+      package: linkedPackage,
+    });
+  } catch (error) {
+    console.error(
+      "Customer purchase tracking error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not record customer purchase tracking information.",
+      error: error.message,
+    });
+  }
+};
+
 const linkCustomerPurchasePackage = async (req, res) => {
   try {
     const { purchaseNumber } = req.params;
@@ -891,6 +1152,17 @@ const receiveCustomerPurchase = async (req, res) => {
       });
     }
 
+        if (
+      !trackingNumber &&
+      !purchase.trackingNumber
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Record the shipment tracking number before recording warehouse arrival.",
+      });
+    }
+
     if (
       ["Cancelled", "Refunded", "Reversed"].includes(
         purchase.status
@@ -903,7 +1175,22 @@ const receiveCustomerPurchase = async (req, res) => {
       });
     }
 
-    const numericWeight = roundMoney(weight);
+        const numericWeight = roundMoney(weight);
+
+    if (numericWeight <= 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Actual warehouse weight must be greater than zero.",
+      });
+    }
+
+    if (!warehouse && !purchase.warehouse) {
+      return res.status(400).json({
+        success: false,
+        message: "Warehouse location is required.",
+      });
+    }
     const billedWeight =
       Number(chargeableWeight || 0) > 0
         ? roundMoney(chargeableWeight)
@@ -925,7 +1212,10 @@ const receiveCustomerPurchase = async (req, res) => {
       packageReceivedDate
         ? new Date(packageReceivedDate)
         : new Date();
-    purchase.status = "At Warehouse";
+        purchase.status = "At Warehouse";
+    purchase.lastPackageStatus = "At Warehouse";
+    purchase.lastPackageSyncAt = new Date();
+    purchase.invoiceReady = false;
     purchase.updatedBy = getUserName(req.user);
 
     await purchase.save();
@@ -1056,6 +1346,28 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
       });
     }
 
+        if (
+      purchase.status !== "At Warehouse" &&
+      purchase.status !== "Recovery Calculated"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Recovery charges can only be calculated after the package reaches the warehouse.",
+      });
+    }
+
+    if (
+      Number(purchase.weight || 0) <= 0 ||
+      Number(purchase.chargeableWeight || 0) <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Warehouse weight and chargeable weight must be recorded before recovery calculation.",
+      });
+    }
+
     if (purchase.invoiceNumber) {
       return res.status(400).json({
         success: false,
@@ -1099,9 +1411,15 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
       recoveryTotals.totalCustomerCharge;
     purchase.outstandingAmount =
       recoveryTotals.outstandingAmount;
-    purchase.recoveryStatus = "Not Invoiced";
-    purchase.status = "Ready to Invoice";
+        purchase.recoveryStatus = "Not Invoiced";
+
+    purchase.status = "Recovery Calculated";
+    purchase.invoiceReady = true;
     purchase.updatedBy = getUserName(req.user);
+
+    await purchase.save();
+
+    purchase.status = "Ready to Invoice";
 
     if (notes) {
       purchase.notes = [purchase.notes, notes]
@@ -1401,6 +1719,7 @@ module.exports = {
   getCustomerPurchaseDashboard,
   createCustomerPurchase,
   updateUnpostedCustomerPurchase,
+  recordCustomerPurchaseTracking,
   linkCustomerPurchasePackage,
   receiveCustomerPurchase,
   prepareCustomerPurchaseRecovery,
