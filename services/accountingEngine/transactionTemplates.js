@@ -197,6 +197,40 @@ const buildExpensePaymentLines = ({
   ];
 };
 
+const buildEmployeeAdvanceFundingLines = ({
+  paymentAccount,
+  amount,
+  advanceNumber,
+  employeeId,
+  employeeName,
+  description = "",
+}) => {
+  requireLinkedAccount(paymentAccount, "Employee advance payment account");
+
+  const value = requirePositiveAmount(amount, "Employee advance amount");
+  const employeeReference =
+    employeeName || employeeId || "employee";
+
+  return [
+    {
+      accountCode: SYSTEM_ACCOUNTS.EMPLOYEE_ADVANCES_RECEIVABLE,
+      debit: value,
+      credit: 0,
+      description:
+        description ||
+        `${advanceNumber} - Advance receivable from ${employeeReference}`,
+    },
+    {
+      accountCode: paymentAccount.linkedChartAccountCode,
+      debit: 0,
+      credit: value,
+      description:
+        description ||
+        `${advanceNumber} - Payment made on behalf of ${employeeReference}`,
+    },
+  ];
+};
+
 const buildPayrollPaymentLines = ({
   paymentAccount,
   grossPay,
@@ -485,6 +519,7 @@ module.exports = {
   buildOwnerDrawingLines,
   buildTransferLines,
   buildExpensePaymentLines,
+  buildEmployeeAdvanceFundingLines,
   buildPayrollPaymentLines,
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,

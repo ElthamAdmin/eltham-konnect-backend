@@ -51,6 +51,8 @@ const accountTransactionSchema = new mongoose.Schema(
         "Credit Card Payment",
         "Credit Card Charge",
         "Payroll Payment",
+        "Employee Advance Payment",
+        "Employee Advance Recovery",
         "Bank Fee",
         "Interest Income",
         "Interest Expense",

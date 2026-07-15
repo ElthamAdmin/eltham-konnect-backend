@@ -15,6 +15,13 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["1000", "Cash on Hand", "Asset", "Debit", "Cash"],
   ["1010", "NCB Bank", "Asset", "Debit", "Bank"],
   ["1100", "Accounts Receivable", "Asset", "Debit", "Current Asset"],
+  [
+    "1160",
+    "Employee Advances Receivable",
+    "Asset",
+    "Debit",
+    "Current Asset",
+  ],
   ["1200", "Inventory", "Asset", "Debit", "Current Asset"],
 
   ["2000", "Accounts Payable", "Liability", "Credit", "Current Liability"],

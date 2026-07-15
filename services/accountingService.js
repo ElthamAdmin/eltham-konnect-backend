@@ -25,9 +25,11 @@ module.exports = {
    */
   postExpensePayment: workflowService.postExpensePayment,
 
-  /**
+   /**
    * Payroll
    */
+  postEmployeeAdvanceFunding:
+  workflowService.postEmployeeAdvanceFunding,
   postPayrollPayment: workflowService.postPayrollPayment,
   postCustomerPurchase: workflowService.postCustomerPurchase,
   refundCustomerPurchase: workflowService.refundCustomerPurchase,

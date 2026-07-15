@@ -197,6 +197,35 @@ const postExpensePayment = async ({
   });
 };
 
+const postEmployeeAdvanceFunding = async ({
+  paymentAccount,
+  amount,
+  advanceNumber,
+  employeeId,
+  employeeName,
+  description,
+  advanceDate,
+  user,
+}) => {
+  return postJournalEntry({
+    entryDate: normalizePostingDate(advanceDate),
+    memo:
+      description ||
+      `Employee advance funded for ${employeeName || employeeId}`,
+    reference: advanceNumber,
+    sourceModule: "Payroll",
+    createdBy: getUserName(user),
+    lines: templates.buildEmployeeAdvanceFundingLines({
+      paymentAccount,
+      amount,
+      advanceNumber,
+      employeeId,
+      employeeName,
+      description,
+    }),
+  });
+};
+
 const postPayrollPayment = async ({
   paymentAccount,
   payroll,
@@ -320,6 +349,7 @@ module.exports = {
   postOwnerDrawing,
   transferFunds,
   postExpensePayment,
+  postEmployeeAdvanceFunding,
   postPayrollPayment,
   postCustomerPurchase,
   refundCustomerPurchase,

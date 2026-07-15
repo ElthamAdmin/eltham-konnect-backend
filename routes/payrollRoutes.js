@@ -8,6 +8,11 @@ const {
 } = require("../controllers/payrollController");
 
 const {
+  getEmployeeAdvances,
+  createEmployeeAdvance,
+} = require("../controllers/employeeAdvanceController");
+
+const {
   protect,
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
@@ -34,6 +39,20 @@ const canViewOwnPayslips = requireAnyPermission([
   "payrollApprove",
   "finance",
 ]);
+
+router.get(
+  "/advances",
+  protect,
+  canViewPayroll,
+  getEmployeeAdvances
+);
+
+router.post(
+  "/advances",
+  protect,
+  canManagePayroll,
+  createEmployeeAdvance
+);
 
 router.post(
   "/preview",
