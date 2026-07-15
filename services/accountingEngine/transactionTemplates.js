@@ -205,6 +205,10 @@ const buildPayrollPaymentLines = ({
   educationTax = 0,
   incomeTax = 0,
   pensionEmployee = 0,
+  nisEmployer = 0,
+  nhtEmployer = 0,
+  educationTaxEmployer = 0,
+  heartEmployer = 0,
   netPay,
   employeeName = "",
 }) => {
@@ -213,21 +217,81 @@ const buildPayrollPaymentLines = ({
   const gross = requirePositiveAmount(grossPay, "Gross payroll");
   const net = requirePositiveAmount(netPay, "Net payroll");
 
+  const employeeNis = Math.max(0, roundMoney(nisEmployee));
+  const employeeNht = Math.max(0, roundMoney(nhtEmployee));
+  const employeeEducationTax = Math.max(0, roundMoney(educationTax));
+  const employeePaye = Math.max(0, roundMoney(incomeTax));
+  const employeePension = Math.max(0, roundMoney(pensionEmployee));
+
+  const employerNis = Math.max(0, roundMoney(nisEmployer));
+  const employerNht = Math.max(0, roundMoney(nhtEmployer));
+  const employerEducationTax = Math.max(
+    0,
+    roundMoney(educationTaxEmployer)
+  );
+  const employerHeart = Math.max(0, roundMoney(heartEmployer));
+
+  const totalEmployerContributions = roundMoney(
+    employerNis +
+      employerNht +
+      employerEducationTax +
+      employerHeart
+  );
+
   const lines = [
     {
       accountCode: SYSTEM_ACCOUNTS.PAYROLL_EXPENSE,
       debit: gross,
       credit: 0,
-      description: `Gross payroll expense${employeeName ? ` for ${employeeName}` : ""}`,
+      description: `Gross payroll expense${
+        employeeName ? ` for ${employeeName}` : ""
+      }`,
     },
   ];
 
+  if (totalEmployerContributions > 0) {
+    lines.push({
+      accountCode:
+        SYSTEM_ACCOUNTS.EMPLOYER_PAYROLL_CONTRIBUTION_EXPENSE,
+      debit: totalEmployerContributions,
+      credit: 0,
+      description: `Employer statutory contributions${
+        employeeName ? ` for ${employeeName}` : ""
+      }`,
+    });
+  }
+
   const liabilities = [
-    [SYSTEM_ACCOUNTS.NIS_PAYABLE, nisEmployee, "NIS payable"],
-    [SYSTEM_ACCOUNTS.NHT_PAYABLE, nhtEmployee, "NHT payable"],
-    [SYSTEM_ACCOUNTS.EDUCATION_TAX_PAYABLE, educationTax, "Education tax payable"],
-    [SYSTEM_ACCOUNTS.PAYE_PAYABLE, incomeTax, "PAYE payable"],
-    [SYSTEM_ACCOUNTS.PENSION_PAYABLE, pensionEmployee, "Pension payable"],
+    [
+      SYSTEM_ACCOUNTS.NIS_PAYABLE,
+      roundMoney(employeeNis + employerNis),
+      "NIS payable",
+    ],
+    [
+      SYSTEM_ACCOUNTS.NHT_PAYABLE,
+      roundMoney(employeeNht + employerNht),
+      "NHT payable",
+    ],
+    [
+      SYSTEM_ACCOUNTS.EDUCATION_TAX_PAYABLE,
+      roundMoney(employeeEducationTax + employerEducationTax),
+      "Education Tax payable",
+    ],
+    [
+      SYSTEM_ACCOUNTS.PAYE_PAYABLE,
+      employeePaye,
+      "PAYE payable",
+    ],
+    [
+      SYSTEM_ACCOUNTS.PENSION_PAYABLE,
+      employeePension,
+      "Pension payable",
+    ],
+    [
+      SYSTEM_ACCOUNTS.HEART_PAYABLE,
+      employerHeart,
+      "HEART payable",
+    ],
   ];
 
   liabilities.forEach(([accountCode, amount, label]) => {
@@ -238,7 +302,9 @@ const buildPayrollPaymentLines = ({
         accountCode,
         debit: 0,
         credit: value,
-        description: `${label}${employeeName ? ` for ${employeeName}` : ""}`,
+        description: `${label}${
+          employeeName ? ` for ${employeeName}` : ""
+        }`,
       });
     }
   });
@@ -247,8 +313,24 @@ const buildPayrollPaymentLines = ({
     accountCode: paymentAccount.linkedChartAccountCode,
     debit: 0,
     credit: net,
-    description: `Payroll paid${employeeName ? ` to ${employeeName}` : ""}`,
+    description: `Payroll paid${
+      employeeName ? ` to ${employeeName}` : ""
+    }`,
   });
+
+  const totalDebit = roundMoney(
+    lines.reduce((sum, line) => sum + Number(line.debit || 0), 0)
+  );
+
+  const totalCredit = roundMoney(
+    lines.reduce((sum, line) => sum + Number(line.credit || 0), 0)
+  );
+
+  if (totalDebit !== totalCredit) {
+    throw new Error(
+      `Payroll journal is not balanced. Debit: ${totalDebit}, Credit: ${totalCredit}`
+    );
+  }
 
   return lines;
 };

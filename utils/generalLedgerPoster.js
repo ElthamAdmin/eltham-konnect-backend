@@ -23,6 +23,7 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["2120", "NHT Payable", "Liability", "Credit", "Payroll Tax Payable"],
   ["2130", "Education Tax Payable", "Liability", "Credit", "Payroll Tax Payable"],
   ["2140", "Pension Payable", "Liability", "Credit", "Payroll Payable"],
+  ["2150", "HEART Payable", "Liability", "Credit", "Payroll Tax Payable"],
 
   ["3000", "Owner Capital", "Equity", "Credit", "Owner Capital"],
   ["3010", "Owner Contributions", "Equity", "Credit", "Owner Contributions"],
@@ -39,6 +40,13 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
 
   ["6000", "Operating Expense", "Expense", "Debit", "Operating Expense"],
   ["6100", "Payroll Expense", "Expense", "Debit", "Payroll Expense"],
+   [
+    "6150",
+    "Employer Statutory Contributions Expense",
+    "Expense",
+    "Debit",
+    "Payroll Expense",
+  ],
   ["6200", "Rent Expense", "Expense", "Debit", "Rent Expense"],
   ["6300", "Utilities Expense", "Expense", "Debit", "Utilities Expense"],
   ["6400", "Delivery Expense", "Expense", "Debit", "Delivery Expense"],

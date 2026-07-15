@@ -33,6 +33,9 @@ const auditLogRoutes = require("./routes/auditLogRoutes");
 const hrAnalyticsRoutes = require("./routes/hrAnalyticsRoutes");
 const amazonAssociateRoutes = require("./routes/amazonAssociateRoutes");
 const { attachUserIfPresent } = require("./middleware/authMiddleware");
+const {
+  ensureSystemAccounts,
+} = require("./utils/generalLedgerPoster");
 
 const app = express();
 
@@ -270,8 +273,11 @@ const MONGO_URI = process.env.MONGO_URI;
 
 mongoose
   .connect(MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log("MongoDB Connected");
+
+    await ensureSystemAccounts();
+    console.log("System Chart of Accounts verified");
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);

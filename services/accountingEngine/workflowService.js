@@ -204,9 +204,11 @@ const postPayrollPayment = async ({
   user,
 }) => {
   return postJournalEntry({
-    entryDate: normalizePostingDate(paymentDate || payroll.paymentDate || payroll.payDate),
+    entryDate: normalizePostingDate(
+      paymentDate || payroll.paymentDate || payroll.payDate
+    ),
     memo: `Payroll payment for ${payroll.employeeName}`,
-    reference: `Payroll ${payroll.payPeriod}`,
+    reference: payroll.payrollNumber || `Payroll ${payroll.payPeriod}`,
     sourceModule: "Payroll",
     createdBy: getUserName(user),
     lines: templates.buildPayrollPaymentLines({
@@ -217,6 +219,10 @@ const postPayrollPayment = async ({
       educationTax: payroll.educationTax,
       incomeTax: payroll.incomeTax,
       pensionEmployee: payroll.pensionEmployee,
+      nisEmployer: payroll.nisEmployer,
+      nhtEmployer: payroll.nhtEmployer,
+      educationTaxEmployer: payroll.educationTaxEmployer,
+      heartEmployer: payroll.heartEmployer,
       netPay: payroll.netPay,
       employeeName: payroll.employeeName,
     }),
