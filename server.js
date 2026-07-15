@@ -18,6 +18,7 @@ const invoiceRoutes = require("./routes/invoiceRoutes");
 const supportRoutes = require("./routes/supportRoutes");
 const communicationRoutes = require("./routes/communicationRoutes");
 const financeRoutes = require("./routes/financeRoutes");
+const payrollRoutes = require("./routes/payrollRoutes");
 const systemUserRoutes = require("./routes/systemUserRoutes");
 const hrRoutes = require("./routes/hrRoutes");
 const leaveRoutes = require("./routes/leaveRoutes");
@@ -199,6 +200,13 @@ app.use("/api/invoices", invoiceRoutes);
 app.use("/api/support-tickets", supportRoutes);
 app.use("/api/communication", communicationRoutes);
 app.use("/api/finance", financeRoutes);
+
+// Standalone Payroll API
+app.use("/api/payroll", payrollRoutes);
+
+// Temporary compatibility for existing HR and Finance frontend calls.
+// Remove after every frontend call has migrated to /api/payroll.
+app.use("/api/finance/payroll", payrollRoutes);
 app.use("/api/system-users", systemUserRoutes);
 app.use("/api/hr", hrRoutes);
 app.use("/api/leave-requests", leaveRoutes);

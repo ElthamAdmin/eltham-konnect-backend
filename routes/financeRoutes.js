@@ -9,12 +9,6 @@ const {
 } = require("../controllers/expenseController");
 
 const {
-  getPayroll,
-  getMyPayroll,
-  createPayroll,
-} = require("../controllers/payrollController");
-
-const {
   auditTrialBalance,
 } = require("../controllers/accountingAuditController");
 
@@ -96,9 +90,5 @@ router.delete(
 router.get("/expense-categories", protect, getExpenseCategories);
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);
-
-router.get("/payroll", protect, getPayroll);
-router.get("/payroll/my-records", protect, getMyPayroll);
-router.post("/payroll", protect, createPayroll);
 
 module.exports = router;
