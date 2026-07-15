@@ -3,6 +3,7 @@ const express = require("express");
 const {
   getPayroll,
   getMyPayroll,
+  previewPayroll,
   createPayroll,
 } = require("../controllers/payrollController");
 
@@ -33,6 +34,13 @@ const canViewOwnPayslips = requireAnyPermission([
   "payrollApprove",
   "finance",
 ]);
+
+router.post(
+  "/preview",
+  protect,
+  canViewPayroll,
+  previewPayroll
+);
 
 router.get("/", protect, canViewPayroll, getPayroll);
 
