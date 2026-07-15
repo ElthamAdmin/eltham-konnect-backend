@@ -89,11 +89,58 @@ const PayrollSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
-    totalDeductions: {
+        totalDeductions: {
       type: Number,
       default: 0,
       min: 0,
     },
+
+    netPayBeforeAdvance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    advanceRecovery: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    advanceRecoveries: [
+      {
+        employeeAdvanceId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "EmployeeAdvance",
+          required: true,
+        },
+
+        advanceNumber: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+
+        description: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        outstandingBeforeRecovery: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        amount: {
+          type: Number,
+          required: true,
+          min: 0,
+        },
+      },
+    ],
+
     netPay: {
       type: Number,
       required: true,

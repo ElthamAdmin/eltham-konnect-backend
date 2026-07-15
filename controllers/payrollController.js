@@ -10,6 +10,11 @@ const {
   roundMoney,
 } = require("../services/payrollCalculationService");
 
+const {
+  buildEmployeeAdvanceRecoveryPlan,
+  applyEmployeeAdvanceRecoveries,
+} = require("../services/employeeAdvanceService");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -106,12 +111,15 @@ const getMyPayroll = async (req, res) => {
 
 const previewPayroll = async (req, res) => {
   try {
-    const {
+        const {
       grossPay,
       pensionEmployee = 0,
       payPeriod,
       payDate,
       payFrequency = "Monthly",
+      employeeId = "",
+      applyEmployeeAdvances = true,
+      requestedAdvanceRecovery,
     } = req.body;
 
     if (Number(grossPay || 0) <= 0 || !payPeriod) {
@@ -121,7 +129,7 @@ const previewPayroll = async (req, res) => {
       });
     }
 
-    const calculation = await calculateJamaicanPayroll({
+        const calculation = await calculateJamaicanPayroll({
       grossPay,
       pensionEmployee,
       payPeriod,
@@ -129,10 +137,38 @@ const previewPayroll = async (req, res) => {
       payFrequency,
     });
 
+    const shouldApplyAdvances =
+      applyEmployeeAdvances === true ||
+      applyEmployeeAdvances === "true";
+
+    const recoveryPlan = shouldApplyAdvances
+      ? await buildEmployeeAdvanceRecoveryPlan({
+          employeeId,
+          payPeriod,
+          availableNetPay: calculation.netPay,
+          requestedRecoveryAmount: requestedAdvanceRecovery,
+        })
+      : {
+          totalAdvanceRecovery: 0,
+          allocations: [],
+        };
+
+    const netPayBeforeAdvance = calculation.netPay;
+
+    const finalNetPay = roundMoney(
+      netPayBeforeAdvance - recoveryPlan.totalAdvanceRecovery
+    );
+
     return res.json({
       success: true,
       message: "Payroll preview calculated successfully",
-      data: calculation,
+      data: {
+        ...calculation,
+        netPayBeforeAdvance,
+        advanceRecovery: recoveryPlan.totalAdvanceRecovery,
+        advanceRecoveries: recoveryPlan.allocations,
+        netPay: finalNetPay,
+      },
     });
   } catch (error) {
     console.error("Error previewing Payroll:", error);
@@ -160,8 +196,10 @@ const createPayroll = async (req, res) => {
       educationTax,
       incomeTax,
       pensionEmployee,
-      autoCalculateStatutoryDeductions,
+            autoCalculateStatutoryDeductions,
       paidFromAccountNumber,
+      applyEmployeeAdvances = true,
+      requestedAdvanceRecovery,
     } = req.body;
 
     if (!payPeriod || Number(grossPay || 0) <= 0 || !paidFromAccountNumber) {
@@ -211,10 +249,29 @@ const createPayroll = async (req, res) => {
       }
     }
 
-    if (!finalEmployeeName || !finalRole) {
+        if (!finalEmployeeName || !finalRole) {
       return res.status(400).json({
         success: false,
         message: "Employee name and role are required",
+      });
+    }
+
+    const duplicatePayroll = finalEmployeeId
+      ? await Payroll.findOne({
+          employeeId: finalEmployeeId,
+          payPeriod,
+          status: {
+            $nin: ["Reversed", "Cancelled"],
+          },
+        })
+      : null;
+
+    if (duplicatePayroll) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${finalEmployeeName} already has Payroll ` +
+          `${duplicatePayroll.payrollNumber} for ${payPeriod}`,
       });
     }
 
@@ -296,12 +353,40 @@ const createPayroll = async (req, res) => {
       calculationMode = "Manual";
     }
 
-    if (payrollBreakdown.netPay < 0) {
+        if (payrollBreakdown.netPay < 0) {
       return res.status(400).json({
         success: false,
         message: "Payroll deductions cannot exceed gross pay",
       });
     }
+
+    const shouldApplyAdvances =
+      applyEmployeeAdvances === true ||
+      applyEmployeeAdvances === "true";
+
+    const netPayBeforeAdvance = payrollBreakdown.netPay;
+
+    const recoveryPlan = shouldApplyAdvances
+      ? await buildEmployeeAdvanceRecoveryPlan({
+          employeeId: finalEmployeeId,
+          payPeriod,
+          availableNetPay: netPayBeforeAdvance,
+          requestedRecoveryAmount: requestedAdvanceRecovery,
+        })
+      : {
+          totalAdvanceRecovery: 0,
+          allocations: [],
+        };
+
+    payrollBreakdown.netPayBeforeAdvance = netPayBeforeAdvance;
+    payrollBreakdown.advanceRecovery =
+      recoveryPlan.totalAdvanceRecovery;
+    payrollBreakdown.advanceRecoveries =
+      recoveryPlan.allocations;
+
+    payrollBreakdown.netPay = roundMoney(
+      netPayBeforeAdvance - recoveryPlan.totalAdvanceRecovery
+    );
 
     if (
       Number(selectedFinancialAccount.currentBalance || 0) <
@@ -331,7 +416,10 @@ const createPayroll = async (req, res) => {
       educationTax: payrollBreakdown.educationTax,
       incomeTax: payrollBreakdown.incomeTax,
       pensionEmployee: payrollBreakdown.pensionEmployee,
-      totalDeductions: payrollBreakdown.totalDeductions,
+            totalDeductions: payrollBreakdown.totalDeductions,
+      netPayBeforeAdvance: payrollBreakdown.netPayBeforeAdvance,
+      advanceRecovery: payrollBreakdown.advanceRecovery,
+      advanceRecoveries: payrollBreakdown.advanceRecoveries,
       netPay: payrollBreakdown.netPay,
       nisEmployer: payrollBreakdown.nisEmployer,
       nhtEmployer: payrollBreakdown.nhtEmployer,
@@ -358,8 +446,17 @@ const createPayroll = async (req, res) => {
       user: req.user,
     });
 
-    newPayroll.journalEntryNumber = journalEntry.entryNumber;
+        newPayroll.journalEntryNumber = journalEntry.entryNumber;
     await newPayroll.save();
+
+    const appliedAdvanceRecoveries =
+      await applyEmployeeAdvanceRecoveries({
+        allocations: recoveryPlan.allocations,
+        payrollNumber: newPayroll.payrollNumber,
+        payPeriod: newPayroll.payPeriod,
+        journalEntryNumber: journalEntry.entryNumber,
+        recoveredBy: getUserName(req.user),
+      });
 
     await AccountTransaction.create({
       transactionNumber: `TRN-${Date.now()}`,
@@ -390,6 +487,9 @@ const createPayroll = async (req, res) => {
             employeeName: newPayroll.employeeName,
             payPeriod: newPayroll.payPeriod,
             grossPay: newPayroll.grossPay,
+            netPayBeforeAdvance: newPayroll.netPayBeforeAdvance,
+            advanceRecovery: newPayroll.advanceRecovery,
+            advanceRecoveries: appliedAdvanceRecoveries,
             totalEmployeeDeductions: newPayroll.totalDeductions,
             netPay: newPayroll.netPay,
             totalEmployerContributions:

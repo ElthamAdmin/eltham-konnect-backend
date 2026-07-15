@@ -243,6 +243,7 @@ const buildPayrollPaymentLines = ({
   nhtEmployer = 0,
   educationTaxEmployer = 0,
   heartEmployer = 0,
+    advanceRecovery = 0,
   netPay,
   employeeName = "",
 }) => {
@@ -263,7 +264,11 @@ const buildPayrollPaymentLines = ({
     0,
     roundMoney(educationTaxEmployer)
   );
-  const employerHeart = Math.max(0, roundMoney(heartEmployer));
+    const employerHeart = Math.max(0, roundMoney(heartEmployer));
+  const employeeAdvanceRecovery = Math.max(
+    0,
+    roundMoney(advanceRecovery)
+  );
 
   const totalEmployerContributions = roundMoney(
     employerNis +
@@ -327,6 +332,17 @@ const buildPayrollPaymentLines = ({
       "HEART payable",
     ],
   ];
+
+    if (employeeAdvanceRecovery > 0) {
+    lines.push({
+      accountCode: SYSTEM_ACCOUNTS.EMPLOYEE_ADVANCES_RECEIVABLE,
+      debit: 0,
+      credit: employeeAdvanceRecovery,
+      description: `Employee advance recovered${
+        employeeName ? ` from ${employeeName}` : ""
+      }`,
+    });
+  }
 
   liabilities.forEach(([accountCode, amount, label]) => {
     const value = roundMoney(amount);

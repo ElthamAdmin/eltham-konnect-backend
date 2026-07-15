@@ -252,6 +252,7 @@ const postPayrollPayment = async ({
       nhtEmployer: payroll.nhtEmployer,
       educationTaxEmployer: payroll.educationTaxEmployer,
       heartEmployer: payroll.heartEmployer,
+      advanceRecovery: payroll.advanceRecovery,
       netPay: payroll.netPay,
       employeeName: payroll.employeeName,
     }),
