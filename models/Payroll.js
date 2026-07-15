@@ -222,6 +222,52 @@ const PayrollSchema = new mongoose.Schema(
       default: "Pending",
       index: true,
     },
+
+        approvedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    approvedAt: {
+      type: Date,
+      default: null,
+    },
+
+    approvalNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    paidBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    paidAt: {
+      type: Date,
+      default: null,
+    },
+
+    cancelledBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+
+    cancellationReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    
     createdBy: {
       type: String,
       default: "",

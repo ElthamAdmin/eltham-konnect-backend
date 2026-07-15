@@ -5,6 +5,9 @@ const {
   getMyPayroll,
   previewPayroll,
   createPayroll,
+   approvePayroll,
+  payPayroll,
+  cancelPayroll,
 } = require("../controllers/payrollController");
 
 const {
@@ -30,6 +33,10 @@ const canManagePayroll = requireAnyPermission([
   "payrollManage",
   "payroll",
   "finance",
+]);
+
+const canApprovePayroll = requireAnyPermission([
+  "payrollApprove",
 ]);
 
 const canViewOwnPayslips = requireAnyPermission([
@@ -68,6 +75,27 @@ router.get(
   protect,
   canViewOwnPayslips,
   getMyPayroll
+);
+
+router.post(
+  "/:payrollNumber/approve",
+  protect,
+  canApprovePayroll,
+  approvePayroll
+);
+
+router.post(
+  "/:payrollNumber/pay",
+  protect,
+  canApprovePayroll,
+  payPayroll
+);
+
+router.post(
+  "/:payrollNumber/cancel",
+  protect,
+  canApprovePayroll,
+  cancelPayroll
 );
 
 router.post("/", protect, canManagePayroll, createPayroll);

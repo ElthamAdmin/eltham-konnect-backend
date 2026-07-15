@@ -388,16 +388,6 @@ const createPayroll = async (req, res) => {
       netPayBeforeAdvance - recoveryPlan.totalAdvanceRecovery
     );
 
-    if (
-      Number(selectedFinancialAccount.currentBalance || 0) <
-      Number(payrollBreakdown.netPay || 0)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient balance in selected Payroll payment account",
-      });
-    }
-
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
       employeeId: finalEmployeeId,
@@ -436,88 +426,408 @@ const createPayroll = async (req, res) => {
       calculationMode,
       paidFromAccountNumber,
       paidFromAccountName: selectedFinancialAccount.accountName,
-      status: status || "Paid",
+            status: "Pending",
       createdBy: getUserName(req.user),
     });
 
-    const journalEntry = await postPayrollPayment({
-      paymentAccount: selectedFinancialAccount,
-      payroll: newPayroll,
-      user: req.user,
-    });
-
-        newPayroll.journalEntryNumber = journalEntry.entryNumber;
-    await newPayroll.save();
-
-    const appliedAdvanceRecoveries =
-      await applyEmployeeAdvanceRecoveries({
-        allocations: recoveryPlan.allocations,
-        payrollNumber: newPayroll.payrollNumber,
-        payPeriod: newPayroll.payPeriod,
-        journalEntryNumber: journalEntry.entryNumber,
-        recoveredBy: getUserName(req.user),
-      });
-
-    await AccountTransaction.create({
-      transactionNumber: `TRN-${Date.now()}`,
-      accountNumber: selectedFinancialAccount.accountNumber,
-      accountName: selectedFinancialAccount.accountName,
-      linkedChartAccountCode: selectedFinancialAccount.linkedChartAccountCode,
-      journalEntryNumber: journalEntry.entryNumber,
-      ledgerReference: journalEntry.entryNumber,
-      transactionType: "Payroll Payment",
-      amount: Number(payrollBreakdown.netPay || 0),
-      reference: newPayroll.payrollNumber,
-      notes: `Payroll payment for ${finalEmployeeName} - ${payPeriod}`,
-      transactionDate: calculationDate,
-    });
-
-    try {
+        try {
       if (req.user) {
         await writeAuditLog({
           req,
-          action: "CREATE_PAYROLL",
+          action: "CREATE_PAYROLL_PENDING",
           module: "Payroll",
-          description: `Payroll ${newPayroll.payrollNumber} created for ${newPayroll.employeeName}`,
+          description:
+            `Pending Payroll ${newPayroll.payrollNumber} created ` +
+            `for ${newPayroll.employeeName}`,
           targetType: "Payroll",
           targetId: newPayroll.payrollNumber,
-          journalEntryNumber: journalEntry.entryNumber,
           metadata: {
             employeeId: newPayroll.employeeId,
             employeeName: newPayroll.employeeName,
             payPeriod: newPayroll.payPeriod,
             grossPay: newPayroll.grossPay,
+            totalEmployeeDeductions: newPayroll.totalDeductions,
             netPayBeforeAdvance: newPayroll.netPayBeforeAdvance,
             advanceRecovery: newPayroll.advanceRecovery,
-            advanceRecoveries: appliedAdvanceRecoveries,
-            totalEmployeeDeductions: newPayroll.totalDeductions,
             netPay: newPayroll.netPay,
             totalEmployerContributions:
               newPayroll.totalEmployerContributions,
             totalPayrollCost: newPayroll.totalPayrollCost,
             statutoryRuleCode: newPayroll.statutoryRuleCode,
-            calculationMode: newPayroll.calculationMode,
-            paidFromAccountNumber: newPayroll.paidFromAccountNumber,
-            paidFromAccountName: newPayroll.paidFromAccountName,
-            journalEntryNumber: journalEntry.entryNumber,
+            paidFromAccountNumber:
+              newPayroll.paidFromAccountNumber,
+            paidFromAccountName:
+              newPayroll.paidFromAccountName,
+            status: newPayroll.status,
           },
         });
       }
     } catch (auditError) {
-      console.error("Audit log error while creating Payroll:", auditError);
+      console.error(
+        "Audit log error while creating pending Payroll:",
+        auditError
+      );
     }
 
     return res.status(201).json({
       success: true,
-      message: "Payroll record calculated and posted successfully",
+      message:
+        "Payroll record created successfully and is pending approval",
       data: newPayroll,
-      journalEntryNumber: journalEntry.entryNumber,
     });
   } catch (error) {
-    console.error("Error creating payroll:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to create Payroll record",
+      error: error.message,
+    });
+  }
+};
+
+const approvePayroll = async (req, res) => {
+  try {
+    const { payrollNumber } = req.params;
+    const { approvalNotes = "" } = req.body;
+
+    const payroll = await Payroll.findOne({ payrollNumber });
+
+    if (!payroll) {
+      return res.status(404).json({
+        success: false,
+        message: "Payroll record not found",
+      });
+    }
+
+    if (payroll.status !== "Pending") {
+      return res.status(400).json({
+        success: false,
+        message:
+          `Only Pending Payroll can be approved. ` +
+          `Current status: ${payroll.status}`,
+      });
+    }
+
+    payroll.status = "Approved";
+    payroll.approvedBy = getUserName(req.user);
+    payroll.approvedAt = new Date();
+    payroll.approvalNotes = String(approvalNotes || "").trim();
+
+    await payroll.save();
+
+    try {
+      await writeAuditLog({
+        req,
+        action: "APPROVE_PAYROLL",
+        module: "Payroll",
+        description:
+          `Payroll ${payroll.payrollNumber} approved ` +
+          `for ${payroll.employeeName}`,
+        targetType: "Payroll",
+        targetId: payroll.payrollNumber,
+        metadata: {
+          employeeId: payroll.employeeId,
+          employeeName: payroll.employeeName,
+          payPeriod: payroll.payPeriod,
+          grossPay: payroll.grossPay,
+          netPay: payroll.netPay,
+          advanceRecovery: payroll.advanceRecovery,
+          approvedBy: payroll.approvedBy,
+          approvedAt: payroll.approvedAt,
+        },
+      });
+    } catch (auditError) {
+      console.error("Payroll approval audit error:", auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: "Payroll approved successfully",
+      data: payroll,
+    });
+  } catch (error) {
+    console.error("Error approving Payroll:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not approve Payroll",
+      error: error.message,
+    });
+  }
+};
+
+const payPayroll = async (req, res) => {
+  try {
+    const { payrollNumber } = req.params;
+
+    const payroll = await Payroll.findOne({ payrollNumber });
+
+    if (!payroll) {
+      return res.status(404).json({
+        success: false,
+        message: "Payroll record not found",
+      });
+    }
+
+    if (payroll.status !== "Approved") {
+      return res.status(400).json({
+        success: false,
+        message:
+          `Only Approved Payroll can be paid. ` +
+          `Current status: ${payroll.status}`,
+      });
+    }
+
+    if (payroll.journalEntryNumber) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `Payroll ${payroll.payrollNumber} has already been posted`,
+      });
+    }
+
+    const paymentAccount = await FinancialAccount.findOne({
+      accountNumber: payroll.paidFromAccountNumber,
+      status: "Active",
+      accountType: {
+        $in: ["Bank", "Cash"],
+      },
+    });
+
+    if (!paymentAccount) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "The selected Payroll payment account is unavailable",
+      });
+    }
+
+    if (!paymentAccount.linkedChartAccountCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The Payroll payment account is not linked to the Chart of Accounts",
+      });
+    }
+
+    if (
+      Number(paymentAccount.currentBalance || 0) <
+      Number(payroll.netPay || 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Insufficient balance in the Payroll payment account",
+      });
+    }
+
+    const recoveryPlan =
+      await buildEmployeeAdvanceRecoveryPlan({
+        employeeId: payroll.employeeId,
+        payPeriod: payroll.payPeriod,
+        availableNetPay: payroll.netPayBeforeAdvance,
+        requestedRecoveryAmount: payroll.advanceRecovery,
+      });
+
+    if (
+      roundMoney(recoveryPlan.totalAdvanceRecovery) !==
+      roundMoney(payroll.advanceRecovery)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The employee advance balance changed after this Payroll " +
+          "was created. Cancel and recreate the Payroll.",
+      });
+    }
+
+    const expectedAdvanceNumbers = (
+      payroll.advanceRecoveries || []
+    )
+      .map((item) => item.advanceNumber)
+      .sort()
+      .join(",");
+
+    const currentAdvanceNumbers = (
+      recoveryPlan.allocations || []
+    )
+      .map((item) => item.advanceNumber)
+      .sort()
+      .join(",");
+
+    if (expectedAdvanceNumbers !== currentAdvanceNumbers) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The employee advance allocation changed after approval. " +
+          "Cancel and recreate the Payroll.",
+      });
+    }
+
+    const journalEntry = await postPayrollPayment({
+      paymentAccount,
+      payroll,
+      paymentDate: payroll.payDate,
+      user: req.user,
+    });
+
+    const appliedAdvanceRecoveries =
+      await applyEmployeeAdvanceRecoveries({
+        allocations: recoveryPlan.allocations,
+        payrollNumber: payroll.payrollNumber,
+        payPeriod: payroll.payPeriod,
+        journalEntryNumber: journalEntry.entryNumber,
+        recoveredBy: getUserName(req.user),
+      });
+
+    const transaction = await AccountTransaction.create({
+      transactionNumber: `TRN-${Date.now()}-PAY`,
+      accountNumber: paymentAccount.accountNumber,
+      accountName: paymentAccount.accountName,
+      linkedChartAccountCode:
+        paymentAccount.linkedChartAccountCode,
+      journalEntryNumber: journalEntry.entryNumber,
+      ledgerReference: journalEntry.entryNumber,
+      transactionType: "Payroll Payment",
+      amount: Number(payroll.netPay || 0),
+      reference: payroll.payrollNumber,
+      notes:
+        `Payroll payment for ${payroll.employeeName} - ` +
+        `${payroll.payPeriod}`,
+      transactionDate: payroll.payDate || new Date(),
+    });
+
+    payroll.status = "Paid";
+    payroll.journalEntryNumber = journalEntry.entryNumber;
+    payroll.paidBy = getUserName(req.user);
+    payroll.paidAt = new Date();
+
+    await payroll.save();
+
+    try {
+      await writeAuditLog({
+        req,
+        action: "PAY_PAYROLL",
+        module: "Payroll",
+        description:
+          `Payroll ${payroll.payrollNumber} paid ` +
+          `for ${payroll.employeeName}`,
+        targetType: "Payroll",
+        targetId: payroll.payrollNumber,
+        journalEntryNumber: journalEntry.entryNumber,
+        accountNumber: paymentAccount.accountNumber,
+        accountName: paymentAccount.accountName,
+        metadata: {
+          employeeId: payroll.employeeId,
+          employeeName: payroll.employeeName,
+          payPeriod: payroll.payPeriod,
+          grossPay: payroll.grossPay,
+          totalEmployeeDeductions:
+            payroll.totalDeductions,
+          netPayBeforeAdvance:
+            payroll.netPayBeforeAdvance,
+          advanceRecovery: payroll.advanceRecovery,
+          advanceRecoveries: appliedAdvanceRecoveries,
+          netPay: payroll.netPay,
+          totalEmployerContributions:
+            payroll.totalEmployerContributions,
+          totalPayrollCost: payroll.totalPayrollCost,
+          paidBy: payroll.paidBy,
+          paidAt: payroll.paidAt,
+          transactionNumber: transaction.transactionNumber,
+        },
+      });
+    } catch (auditError) {
+      console.error("Payroll payment audit error:", auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: "Payroll paid and posted successfully",
+      data: payroll,
+      journalEntryNumber: journalEntry.entryNumber,
+      transactionNumber: transaction.transactionNumber,
+      advanceRecoveries: appliedAdvanceRecoveries,
+    });
+  } catch (error) {
+    console.error("Error paying Payroll:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not pay Payroll",
+      error: error.message,
+    });
+  }
+};
+
+const cancelPayroll = async (req, res) => {
+  try {
+    const { payrollNumber } = req.params;
+    const { reason = "" } = req.body;
+
+    if (!String(reason || "").trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Cancellation reason is required",
+      });
+    }
+
+    const payroll = await Payroll.findOne({ payrollNumber });
+
+    if (!payroll) {
+      return res.status(404).json({
+        success: false,
+        message: "Payroll record not found",
+      });
+    }
+
+    if (!["Pending", "Approved"].includes(payroll.status)) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only Pending or Approved Payroll can be cancelled",
+      });
+    }
+
+    payroll.status = "Cancelled";
+    payroll.cancelledBy = getUserName(req.user);
+    payroll.cancelledAt = new Date();
+    payroll.cancellationReason = String(reason).trim();
+
+    await payroll.save();
+
+    try {
+      await writeAuditLog({
+        req,
+        action: "CANCEL_PAYROLL",
+        module: "Payroll",
+        description:
+          `Payroll ${payroll.payrollNumber} cancelled`,
+        targetType: "Payroll",
+        targetId: payroll.payrollNumber,
+        metadata: {
+          employeeId: payroll.employeeId,
+          employeeName: payroll.employeeName,
+          payPeriod: payroll.payPeriod,
+          cancelledBy: payroll.cancelledBy,
+          cancelledAt: payroll.cancelledAt,
+          reason: payroll.cancellationReason,
+        },
+      });
+    } catch (auditError) {
+      console.error("Payroll cancellation audit error:", auditError);
+    }
+
+    return res.json({
+      success: true,
+      message: "Payroll cancelled successfully",
+      data: payroll,
+    });
+  } catch (error) {
+    console.error("Error cancelling Payroll:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not cancel Payroll",
       error: error.message,
     });
   }
@@ -528,4 +838,7 @@ module.exports = {
   getMyPayroll,
   previewPayroll,
   createPayroll,
+  approvePayroll,
+  payPayroll,
+  cancelPayroll,
 };
