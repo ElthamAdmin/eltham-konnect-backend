@@ -111,8 +111,14 @@ const formatDateForComparison = (value) => {
 };
 
 const getMinimumWageRule = (payDate) => {
-  const normalizedDate = normalizePayrollDate(payDate);
-  const date = new Date(`${normalizedDate}T00:00:00.000Z`);
+  const normalizedDate =
+    formatDateForComparison(
+      normalizePayrollDate(payDate)
+    );
+
+  const date = new Date(
+    `${normalizedDate}T00:00:00.000Z`
+  );
 
   if (date >= new Date("2026-07-01T00:00:00.000Z")) {
     return {
@@ -652,9 +658,24 @@ const buildPayrollTotals = (records = []) =>
             )
         );
 
+            const recordedPayrollCost = Number(
+        payroll.totalPayrollCost || 0
+      );
+
+      const payrollCost =
+        recordedPayrollCost > 0
+          ? recordedPayrollCost
+          : roundMoney(
+              Number(payroll.grossPay || 0) +
+                Number(
+                  payroll.totalEmployerContributions ||
+                    0
+                )
+            );
+
       totals.totalPayrollCost = roundMoney(
         totals.totalPayrollCost +
-          Number(payroll.totalPayrollCost || 0)
+          payrollCost
       );
 
       if (!payroll.statutoryRuleCode) {
@@ -909,6 +930,116 @@ const getEmployeePayrollYtd = async (
       success: false,
       message:
         "Could not generate employee Payroll YTD",
+      error: error.message,
+    });
+  }
+};
+
+const reassessPayrollCompliance = async (
+  req,
+  res
+) => {
+  try {
+    const { payrollNumber } = req.params;
+
+    const payroll = await Payroll.findOne({
+      payrollNumber,
+    });
+
+    if (!payroll) {
+      return res.status(404).json({
+        success: false,
+        message: "Payroll record not found",
+      });
+    }
+
+    if (
+      !["Pending", "Approved"].includes(
+        payroll.status
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only Pending or Approved Payroll can be reassessed",
+      });
+    }
+
+    const workedHours = Number(
+      req.body.workedHours ??
+        payroll.minimumWageAssessment
+          ?.workedHours ??
+        0
+    );
+
+    const beforeValues = {
+      minimumWageAssessment:
+        payroll.minimumWageAssessment,
+    };
+
+    payroll.minimumWageAssessment =
+      buildMinimumWageAssessment({
+        payDate:
+          payroll.payDate ||
+          payroll.payPeriod,
+        workedHours,
+        grossPay: payroll.grossPay,
+        applicable:
+          payroll.minimumWageAssessment
+            ?.applicable !== false,
+      });
+
+    await payroll.save();
+
+    try {
+      await writeAuditLog({
+        req,
+        action:
+          "REASSESS_PAYROLL_COMPLIANCE",
+        module: "Payroll",
+        description:
+          `Minimum-wage compliance reassessed for ` +
+          `${payroll.payrollNumber}`,
+        targetType: "Payroll",
+        targetId: payroll.payrollNumber,
+        beforeValues,
+        afterValues: {
+          minimumWageAssessment:
+            payroll.minimumWageAssessment,
+        },
+        metadata: {
+          employeeId: payroll.employeeId,
+          employeeName:
+            payroll.employeeName,
+          payPeriod: payroll.payPeriod,
+          payDate: payroll.payDate,
+          workedHours,
+          grossPay: payroll.grossPay,
+        },
+      });
+    } catch (auditError) {
+      console.error(
+        "Payroll compliance reassessment audit error:",
+        auditError
+      );
+    }
+
+    return res.json({
+      success: true,
+      message:
+        "Payroll compliance reassessed successfully",
+      data: payroll,
+    });
+  } catch (error) {
+    console.error(
+      "Payroll compliance reassessment error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Could not reassess Payroll compliance",
       error: error.message,
     });
   }
@@ -2053,6 +2184,7 @@ module.exports = {
   getMyPayroll,
   getPayrollRegister,
   getEmployeePayrollYtd,
+  reassessPayrollCompliance,
   previewPayroll,
   createPayroll,
   approvePayroll,

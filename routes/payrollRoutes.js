@@ -5,6 +5,7 @@ const {
   getMyPayroll,
   getPayrollRegister,
   getEmployeePayrollYtd,
+  reassessPayrollCompliance,
   previewPayroll,
   createPayroll,
    approvePayroll,
@@ -91,6 +92,13 @@ router.get(
   protect,
   canViewOwnPayslips,
   getMyPayroll
+);
+
+router.post(
+  "/:payrollNumber/reassess-compliance",
+  protect,
+  canApprovePayroll,
+  reassessPayrollCompliance
 );
 
 router.post(
