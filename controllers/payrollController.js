@@ -157,44 +157,96 @@ const buildMinimumWageAssessment = ({
   grossPay,
   applicable = true,
 }) => {
-  const rule = getMinimumWageRule(payDate);
-  const safeWorkedHours = Math.max(0, Number(workedHours || 0));
-  const assessedGrossPay = roundMoney(grossPay);
-  const minimumGrossPay =
-    applicable && rule.hourlyRate > 0 && safeWorkedHours > 0
-      ? roundMoney(safeWorkedHours * rule.hourlyRate)
-      : 0;
-
-  const shortfall = Math.max(
-    0,
-    roundMoney(minimumGrossPay - assessedGrossPay)
+  const rule = getMinimumWageRule(
+    payDate
   );
 
-  const compliant = shortfall === 0;
+  const safeWorkedHours = Math.max(
+    0,
+    Number(workedHours || 0)
+  );
 
+  const assessedGrossPay =
+    roundMoney(grossPay);
+
+  const canAssess =
+    applicable &&
+    rule.hourlyRate > 0 &&
+    safeWorkedHours > 0;
+
+  const minimumGrossPay = canAssess
+    ? roundMoney(
+        safeWorkedHours *
+          rule.hourlyRate
+      )
+    : 0;
+
+  const shortfall = canAssess
+    ? Math.max(
+        0,
+        roundMoney(
+          minimumGrossPay -
+            assessedGrossPay
+        )
+      )
+    : 0;
+
+  let compliant = false;
+  let assessmentStatus =
+    "Not Assessed";
   let warning = "";
 
-  if (applicable && safeWorkedHours <= 0) {
+  if (!applicable) {
+    compliant = true;
+    assessmentStatus =
+      "Not Applicable";
+    warning =
+      "Minimum-wage assessment was marked as not applicable for this Payroll record.";
+  } else if (rule.hourlyRate <= 0) {
+    compliant = false;
+    assessmentStatus =
+      "Not Assessed";
+    warning =
+      "Minimum-wage compliance could not be assessed because no effective wage rule was available for the payment date.";
+  } else if (safeWorkedHours <= 0) {
+    compliant = false;
+    assessmentStatus =
+      "Not Assessed";
     warning =
       "Minimum-wage compliance could not be assessed because worked hours were not supplied.";
-  } else if (!compliant) {
+  } else if (shortfall > 0) {
+    compliant = false;
+    assessmentStatus =
+      "Non-Compliant";
     warning =
-      `Entered gross pay is JMD ${shortfall.toFixed(2)} below the ` +
+      `Entered gross pay is JMD ${shortfall.toFixed(
+        2
+      )} below the ` +
       `minimum ordinary-time pay calculated from ${safeWorkedHours.toFixed(
         2
-      )} hours at JMD ${rule.hourlyRate.toFixed(2)} per hour.`;
+      )} hours at JMD ${rule.hourlyRate.toFixed(
+        2
+      )} per hour.`;
+  } else {
+    compliant = true;
+    assessmentStatus =
+      "Compliant";
   }
 
   return {
     applicable,
-    hourlyRate: rule.hourlyRate,
-    workedHours: roundMoney(safeWorkedHours),
+    hourlyRate:
+      rule.hourlyRate,
+    workedHours:
+      roundMoney(safeWorkedHours),
     minimumGrossPay,
     assessedGrossPay,
     shortfall,
     compliant,
+    assessmentStatus,
     warning,
-    ruleCode: rule.ruleCode,
+    ruleCode:
+      rule.ruleCode,
     assessedAt: new Date(),
   };
 };
@@ -1951,6 +2003,56 @@ const previewPayrollBatch = async (
         defaults,
         record,
       });
+
+      const existingPayroll =
+  body.employeeId &&
+  body.payPeriod
+    ? await Payroll.findOne({
+        employeeId:
+          body.employeeId,
+        payPeriod:
+          body.payPeriod,
+        status: {
+          $nin: [
+            "Reversed",
+            "Cancelled",
+          ],
+        },
+      })
+        .select(
+          "payrollNumber employeeName status payPeriod"
+        )
+        .lean()
+    : null;
+
+if (existingPayroll) {
+  results.push({
+    rowNumber: index + 1,
+    employeeId:
+      body.employeeId,
+    employeeName:
+      existingPayroll.employeeName ||
+      String(
+        record?.employeeName || ""
+      ).trim(),
+    success: false,
+    statusCode: 409,
+    message:
+      `${existingPayroll.employeeName} already has Payroll ` +
+      `${existingPayroll.payrollNumber} for ${existingPayroll.payPeriod} ` +
+      `with status ${existingPayroll.status}.`,
+    data: {
+      existingPayrollNumber:
+        existingPayroll.payrollNumber,
+      existingStatus:
+        existingPayroll.status,
+      payPeriod:
+        existingPayroll.payPeriod,
+    },
+  });
+
+  continue;
+}
 
       const result =
         await executePayrollController({

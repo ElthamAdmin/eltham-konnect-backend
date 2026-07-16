@@ -174,6 +174,17 @@ const PayrollSchema = new mongoose.Schema(
         default: true,
       },
 
+      assessmentStatus: {
+  type: String,
+  enum: [
+    "Compliant",
+    "Non-Compliant",
+    "Not Assessed",
+    "Not Applicable",
+  ],
+  default: "Not Assessed",
+},
+
       warning: {
         type: String,
         default: "",
