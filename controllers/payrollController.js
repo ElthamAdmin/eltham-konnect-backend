@@ -201,56 +201,144 @@ const calculateEmployerAssistedPayroll = async ({
   payDate,
   payFrequency,
 }) => {
-  const safeBaseGrossPay = roundMoney(baseGrossPay);
+  const safeBaseGrossPay =
+    roundMoney(baseGrossPay);
+
   const safeTargetNetPay = roundMoney(
     Number(targetNetPay || 0) > 0
       ? targetNetPay
       : safeBaseGrossPay
   );
 
-  let adjustedGrossPay = Math.max(
+  let lowerGrossPay = Math.max(
     safeBaseGrossPay,
     safeTargetNetPay
   );
 
-  let calculation = null;
+  let upperGrossPay = lowerGrossPay;
 
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    calculation = await calculateJamaicanPayroll({
-      grossPay: adjustedGrossPay,
+  let upperCalculation =
+    await calculateJamaicanPayroll({
+      grossPay: upperGrossPay,
       pensionEmployee,
       payPeriod,
       payDate,
       payFrequency,
     });
 
-    const difference = roundMoney(
-      safeTargetNetPay - calculation.netPay
+  let expansionAttempts = 0;
+
+  while (
+    roundMoney(upperCalculation.netPay) <
+      safeTargetNetPay &&
+    expansionAttempts < 25
+  ) {
+    upperGrossPay = roundMoney(
+      upperGrossPay * 1.25 + 1
     );
 
-    if (Math.abs(difference) <= 0.01) {
-      break;
-    }
+    upperCalculation =
+      await calculateJamaicanPayroll({
+        grossPay: upperGrossPay,
+        pensionEmployee,
+        payPeriod,
+        payDate,
+        payFrequency,
+      });
 
-    adjustedGrossPay = roundMoney(
-      Math.max(safeBaseGrossPay, adjustedGrossPay + difference)
+    expansionAttempts += 1;
+  }
+
+  if (
+    roundMoney(upperCalculation.netPay) <
+    safeTargetNetPay
+  ) {
+    throw new Error(
+      "Could not calculate the employer-assisted gross pay."
     );
   }
 
-  calculation = await calculateJamaicanPayroll({
-    grossPay: adjustedGrossPay,
-    pensionEmployee,
-    payPeriod,
-    payDate,
-    payFrequency,
-  });
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const midpoint = roundMoney(
+      (lowerGrossPay + upperGrossPay) / 2
+    );
+
+    const midpointCalculation =
+      await calculateJamaicanPayroll({
+        grossPay: midpoint,
+        pensionEmployee,
+        payPeriod,
+        payDate,
+        payFrequency,
+      });
+
+    if (
+      roundMoney(midpointCalculation.netPay) >=
+      safeTargetNetPay
+    ) {
+      upperGrossPay = midpoint;
+      upperCalculation = midpointCalculation;
+    } else {
+      lowerGrossPay = roundMoney(midpoint + 0.01);
+    }
+
+    if (
+      roundMoney(
+        upperGrossPay - lowerGrossPay
+      ) <= 0.01
+    ) {
+      break;
+    }
+  }
+
+  let finalGrossPay = upperGrossPay;
+
+  let finalCalculation =
+    await calculateJamaicanPayroll({
+      grossPay: finalGrossPay,
+      pensionEmployee,
+      payPeriod,
+      payDate,
+      payFrequency,
+    });
+
+  while (
+    roundMoney(finalCalculation.netPay) <
+    safeTargetNetPay
+  ) {
+    finalGrossPay = roundMoney(
+      finalGrossPay + 0.01
+    );
+
+    finalCalculation =
+      await calculateJamaicanPayroll({
+        grossPay: finalGrossPay,
+        pensionEmployee,
+        payPeriod,
+        payDate,
+        payFrequency,
+      });
+  }
+
+  const employerSupportAllowance =
+    roundMoney(
+      finalGrossPay - safeBaseGrossPay
+    );
+
+  if (
+    employerSupportAllowance <= 0 &&
+    roundMoney(finalCalculation.netPay) <
+      safeTargetNetPay
+  ) {
+    throw new Error(
+      "Employer-assisted payroll did not preserve the requested take-home amount."
+    );
+  }
 
   return {
-    calculation,
+    calculation: finalCalculation,
     targetNetPay: safeTargetNetPay,
-    employerSupportAllowance: roundMoney(
-      adjustedGrossPay - safeBaseGrossPay
-    ),
+    employerSupportAllowance,
   };
 };
 
