@@ -268,13 +268,6 @@ const nisEmployer =
     nisInsurablePay *
       rule.employerRates.nis
   );
-  const nisInsurablePay = Math.min(gross, nisPeriodicCeiling);
-  const nisEmployee = roundMoney(
-    nisInsurablePay * rule.employeeRates.nis
-  );
-  const nisEmployer = roundMoney(
-    nisInsurablePay * rule.employerRates.nis
-  );
 
   const statutoryIncome = Math.max(
     0,
