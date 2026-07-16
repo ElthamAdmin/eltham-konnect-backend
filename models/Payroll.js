@@ -34,16 +34,170 @@ const PayrollSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
-    payFrequency: {
+        payFrequency: {
       type: String,
       enum: ["Weekly", "Fortnightly", "Semi-Monthly", "Monthly", "Annual"],
       default: "Monthly",
     },
-    grossPay: {
+
+    compensationType: {
+      type: String,
+      enum: [
+        "Salary",
+        "Wage",
+        "Stipend",
+        "Allowance",
+        "Other",
+      ],
+      default: "Salary",
+      index: true,
+    },
+
+    statutoryTreatment: {
+      type: String,
+      enum: [
+        "Standard",
+        "Employer-Assisted Net Pay",
+        "Documented Exemption",
+      ],
+      default: "Standard",
+      index: true,
+    },
+
+    applyEmployeeStatutoryDeductions: {
+      type: Boolean,
+      default: true,
+    },
+
+    applyEmployerStatutoryContributions: {
+      type: Boolean,
+      default: true,
+    },
+
+    targetNetPay: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    employerSupportAllowance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    statutoryExemption: {
+      reason: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      legalBasis: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      supportingReference: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      supportingDocumentUrl: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      effectiveFrom: {
+        type: Date,
+        default: null,
+      },
+
+      effectiveTo: {
+        type: Date,
+        default: null,
+      },
+
+      authorizedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      authorizedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
+    minimumWageAssessment: {
+      applicable: {
+        type: Boolean,
+        default: true,
+      },
+
+      hourlyRate: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      workedHours: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      minimumGrossPay: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      assessedGrossPay: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      shortfall: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      compliant: {
+        type: Boolean,
+        default: true,
+      },
+
+      warning: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      ruleCode: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      assessedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
+        grossPay: {
       type: Number,
       required: true,
       min: 0,
     },
+
     statutoryIncome: {
       type: Number,
       default: 0,
@@ -267,7 +421,7 @@ const PayrollSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
-    
+
     createdBy: {
       type: String,
       default: "",

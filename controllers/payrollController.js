@@ -18,6 +18,243 @@ const {
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
+const STATUTORY_TREATMENTS = [
+  "Standard",
+  "Employer-Assisted Net Pay",
+  "Documented Exemption",
+];
+
+const COMPENSATION_TYPES = [
+  "Salary",
+  "Wage",
+  "Stipend",
+  "Allowance",
+  "Other",
+];
+
+const normalizeBoolean = (value, fallback = false) => {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  return value === true || value === "true";
+};
+
+const getMinimumWageRule = (payDate) => {
+  const normalizedDate = normalizePayrollDate(payDate);
+  const date = new Date(`${normalizedDate}T00:00:00.000Z`);
+
+  if (date >= new Date("2026-07-01T00:00:00.000Z")) {
+    return {
+      ruleCode: "JM-NMW-2026-07",
+      hourlyRate: 425,
+      weeklyRate: 17000,
+    };
+  }
+
+  if (date >= new Date("2025-06-01T00:00:00.000Z")) {
+    return {
+      ruleCode: "JM-NMW-2025-06",
+      hourlyRate: 400,
+      weeklyRate: 16000,
+    };
+  }
+
+  if (date >= new Date("2024-06-01T00:00:00.000Z")) {
+    return {
+      ruleCode: "JM-NMW-2024-06",
+      hourlyRate: 375,
+      weeklyRate: 15000,
+    };
+  }
+
+  return {
+    ruleCode: "JM-NMW-HISTORICAL-REVIEW",
+    hourlyRate: 0,
+    weeklyRate: 0,
+  };
+};
+
+const buildMinimumWageAssessment = ({
+  payDate,
+  workedHours,
+  grossPay,
+  applicable = true,
+}) => {
+  const rule = getMinimumWageRule(payDate);
+  const safeWorkedHours = Math.max(0, Number(workedHours || 0));
+  const assessedGrossPay = roundMoney(grossPay);
+  const minimumGrossPay =
+    applicable && rule.hourlyRate > 0 && safeWorkedHours > 0
+      ? roundMoney(safeWorkedHours * rule.hourlyRate)
+      : 0;
+
+  const shortfall = Math.max(
+    0,
+    roundMoney(minimumGrossPay - assessedGrossPay)
+  );
+
+  const compliant = shortfall === 0;
+
+  let warning = "";
+
+  if (applicable && safeWorkedHours <= 0) {
+    warning =
+      "Minimum-wage compliance could not be assessed because worked hours were not supplied.";
+  } else if (!compliant) {
+    warning =
+      `Entered gross pay is JMD ${shortfall.toFixed(2)} below the ` +
+      `minimum ordinary-time pay calculated from ${safeWorkedHours.toFixed(
+        2
+      )} hours at JMD ${rule.hourlyRate.toFixed(2)} per hour.`;
+  }
+
+  return {
+    applicable,
+    hourlyRate: rule.hourlyRate,
+    workedHours: roundMoney(safeWorkedHours),
+    minimumGrossPay,
+    assessedGrossPay,
+    shortfall,
+    compliant,
+    warning,
+    ruleCode: rule.ruleCode,
+    assessedAt: new Date(),
+  };
+};
+
+const calculateEmployerAssistedPayroll = async ({
+  baseGrossPay,
+  targetNetPay,
+  pensionEmployee,
+  payPeriod,
+  payDate,
+  payFrequency,
+}) => {
+  const safeBaseGrossPay = roundMoney(baseGrossPay);
+  const safeTargetNetPay = roundMoney(
+    Number(targetNetPay || 0) > 0
+      ? targetNetPay
+      : safeBaseGrossPay
+  );
+
+  let adjustedGrossPay = Math.max(
+    safeBaseGrossPay,
+    safeTargetNetPay
+  );
+
+  let calculation = null;
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    calculation = await calculateJamaicanPayroll({
+      grossPay: adjustedGrossPay,
+      pensionEmployee,
+      payPeriod,
+      payDate,
+      payFrequency,
+    });
+
+    const difference = roundMoney(
+      safeTargetNetPay - calculation.netPay
+    );
+
+    if (Math.abs(difference) <= 0.01) {
+      break;
+    }
+
+    adjustedGrossPay = roundMoney(
+      Math.max(safeBaseGrossPay, adjustedGrossPay + difference)
+    );
+  }
+
+  calculation = await calculateJamaicanPayroll({
+    grossPay: adjustedGrossPay,
+    pensionEmployee,
+    payPeriod,
+    payDate,
+    payFrequency,
+  });
+
+  return {
+    calculation,
+    targetNetPay: safeTargetNetPay,
+    employerSupportAllowance: roundMoney(
+      adjustedGrossPay - safeBaseGrossPay
+    ),
+  };
+};
+
+const applyDocumentedExemption = (calculation) => {
+  const exemptCalculation = {
+    ...calculation,
+    nisEmployee: 0,
+    nhtEmployee: 0,
+    educationTax: 0,
+    incomeTax: 0,
+    pensionEmployee: 0,
+    totalEmployeeDeductions: 0,
+    totalDeductions: 0,
+    nisEmployer: 0,
+    nhtEmployer: 0,
+    educationTaxEmployer: 0,
+    heartEmployer: 0,
+    totalEmployerContributions: 0,
+  };
+
+  exemptCalculation.netPay = roundMoney(
+    exemptCalculation.grossPay
+  );
+
+  exemptCalculation.totalPayrollCost = roundMoney(
+    exemptCalculation.grossPay
+  );
+
+  return exemptCalculation;
+};
+
+const validateStatutorySelection = ({
+  statutoryTreatment,
+  compensationType,
+  statutoryExemption,
+  user,
+}) => {
+  if (!STATUTORY_TREATMENTS.includes(statutoryTreatment)) {
+    throw new Error("Invalid statutory treatment selected.");
+  }
+
+  if (!COMPENSATION_TYPES.includes(compensationType)) {
+    throw new Error("Invalid compensation type selected.");
+  }
+
+  if (statutoryTreatment !== "Documented Exemption") {
+    return;
+  }
+
+  if (user?.role !== "Admin") {
+    throw new Error(
+      "Only an administrator can authorize a documented statutory exemption."
+    );
+  }
+
+  const reason = String(
+    statutoryExemption?.reason || ""
+  ).trim();
+
+  const legalBasis = String(
+    statutoryExemption?.legalBasis || ""
+  ).trim();
+
+  const supportingReference = String(
+    statutoryExemption?.supportingReference || ""
+  ).trim();
+
+  if (!reason || !legalBasis || !supportingReference) {
+    throw new Error(
+      "A documented exemption requires a reason, legal basis, and supporting reference."
+    );
+  }
+};
+
 const getPayroll = async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
@@ -111,13 +348,19 @@ const getMyPayroll = async (req, res) => {
 
 const previewPayroll = async (req, res) => {
   try {
-        const {
+    const {
       grossPay,
       pensionEmployee = 0,
       payPeriod,
       payDate,
       payFrequency = "Monthly",
       employeeId = "",
+      compensationType = "Salary",
+      statutoryTreatment = "Standard",
+      targetNetPay = 0,
+      statutoryExemption = {},
+      workedHours = 0,
+      minimumWageApplicable = true,
       applyEmployeeAdvances = true,
       requestedAdvanceRecovery,
     } = req.body;
@@ -129,24 +372,97 @@ const previewPayroll = async (req, res) => {
       });
     }
 
-        const calculation = await calculateJamaicanPayroll({
-      grossPay,
-      pensionEmployee,
-      payPeriod,
-      payDate,
-      payFrequency,
+    const normalizedCompensationType =
+      COMPENSATION_TYPES.includes(compensationType)
+        ? compensationType
+        : "Salary";
+
+    const normalizedStatutoryTreatment =
+      STATUTORY_TREATMENTS.includes(statutoryTreatment)
+        ? statutoryTreatment
+        : "Standard";
+
+    validateStatutorySelection({
+      statutoryTreatment: normalizedStatutoryTreatment,
+      compensationType: normalizedCompensationType,
+      statutoryExemption,
+      user: req.user,
     });
 
-    const shouldApplyAdvances =
-      applyEmployeeAdvances === true ||
-      applyEmployeeAdvances === "true";
+    const calculationDate = normalizePayrollDate(
+      payDate || payPeriod
+    );
+
+    let calculation;
+    let finalTargetNetPay = 0;
+    let employerSupportAllowance = 0;
+
+    if (
+      normalizedStatutoryTreatment ===
+      "Employer-Assisted Net Pay"
+    ) {
+      const assistedResult =
+        await calculateEmployerAssistedPayroll({
+          baseGrossPay: grossPay,
+          targetNetPay,
+          pensionEmployee: Number(pensionEmployee || 0),
+          payPeriod,
+          payDate: calculationDate,
+          payFrequency,
+        });
+
+      calculation = assistedResult.calculation;
+      finalTargetNetPay = assistedResult.targetNetPay;
+      employerSupportAllowance =
+        assistedResult.employerSupportAllowance;
+    } else {
+      calculation = await calculateJamaicanPayroll({
+        grossPay,
+        pensionEmployee,
+        payPeriod,
+        payDate: calculationDate,
+        payFrequency,
+      });
+    }
+
+    if (
+      normalizedStatutoryTreatment ===
+      "Documented Exemption"
+    ) {
+      calculation = applyDocumentedExemption(calculation);
+    }
+
+    const applyEmployeeStatutoryDeductions =
+      normalizedStatutoryTreatment !==
+      "Documented Exemption";
+
+    const applyEmployerStatutoryContributions =
+      normalizedStatutoryTreatment !==
+      "Documented Exemption";
+
+    const minimumWageAssessment =
+      buildMinimumWageAssessment({
+        payDate: calculationDate,
+        workedHours,
+        grossPay: calculation.grossPay,
+        applicable: normalizeBoolean(
+          minimumWageApplicable,
+          true
+        ),
+      });
+
+    const shouldApplyAdvances = normalizeBoolean(
+      applyEmployeeAdvances,
+      true
+    );
 
     const recoveryPlan = shouldApplyAdvances
       ? await buildEmployeeAdvanceRecoveryPlan({
           employeeId,
           payPeriod,
           availableNetPay: calculation.netPay,
-          requestedRecoveryAmount: requestedAdvanceRecovery,
+          requestedRecoveryAmount:
+            requestedAdvanceRecovery,
         })
       : {
           totalAdvanceRecovery: 0,
@@ -156,7 +472,8 @@ const previewPayroll = async (req, res) => {
     const netPayBeforeAdvance = calculation.netPay;
 
     const finalNetPay = roundMoney(
-      netPayBeforeAdvance - recoveryPlan.totalAdvanceRecovery
+      netPayBeforeAdvance -
+        recoveryPlan.totalAdvanceRecovery
     );
 
     return res.json({
@@ -164,17 +481,31 @@ const previewPayroll = async (req, res) => {
       message: "Payroll preview calculated successfully",
       data: {
         ...calculation,
+        compensationType:
+          normalizedCompensationType,
+        statutoryTreatment:
+          normalizedStatutoryTreatment,
+        applyEmployeeStatutoryDeductions,
+        applyEmployerStatutoryContributions,
+        targetNetPay: finalTargetNetPay,
+        employerSupportAllowance,
+        minimumWageAssessment,
         netPayBeforeAdvance,
-        advanceRecovery: recoveryPlan.totalAdvanceRecovery,
-        advanceRecoveries: recoveryPlan.allocations,
+        advanceRecovery:
+          recoveryPlan.totalAdvanceRecovery,
+        advanceRecoveries:
+          recoveryPlan.allocations,
         netPay: finalNetPay,
       },
     });
   } catch (error) {
     console.error("Error previewing Payroll:", error);
+
     return res.status(400).json({
       success: false,
-      message: error.message || "Could not calculate Payroll preview",
+      message:
+        error.message ||
+        "Could not calculate Payroll preview",
     });
   }
 };
@@ -189,34 +520,62 @@ const createPayroll = async (req, res) => {
       payDate,
       payFrequency,
       grossPay,
-      deductions,
-      status,
-      nisEmployee,
-      nhtEmployee,
-      educationTax,
-      incomeTax,
-      pensionEmployee,
-            autoCalculateStatutoryDeductions,
+      pensionEmployee = 0,
       paidFromAccountNumber,
+      compensationType = "Salary",
+      statutoryTreatment = "Standard",
+      targetNetPay = 0,
+      statutoryExemption = {},
+      workedHours = 0,
       applyEmployeeAdvances = true,
       requestedAdvanceRecovery,
     } = req.body;
 
-    if (!payPeriod || Number(grossPay || 0) <= 0 || !paidFromAccountNumber) {
+    if (
+      !payPeriod ||
+      Number(grossPay || 0) <= 0 ||
+      !paidFromAccountNumber
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Pay period, valid gross pay, and payment account are required",
+        message:
+          "Pay period, valid gross pay, and payment account are required",
       });
     }
 
+    const normalizedCompensationType =
+      COMPENSATION_TYPES.includes(compensationType)
+        ? compensationType
+        : "Salary";
+
+    const normalizedStatutoryTreatment =
+      STATUTORY_TREATMENTS.includes(statutoryTreatment)
+        ? statutoryTreatment
+        : "Standard";
+
+    validateStatutorySelection({
+      statutoryTreatment:
+        normalizedStatutoryTreatment,
+      compensationType:
+        normalizedCompensationType,
+      statutoryExemption,
+      user: req.user,
+    });
+
     let finalEmployeeId = "";
-    let finalEmployeeName = String(employeeName || "").trim();
+    let finalEmployeeName = String(
+      employeeName || ""
+    ).trim();
     let finalRole = String(role || "").trim();
-    let finalPayFrequency = payFrequency || "Monthly";
-    const finalGrossPay = roundMoney(grossPay);
+    let finalPayFrequency =
+      payFrequency || "Monthly";
+
+    const enteredGrossPay = roundMoney(grossPay);
 
     if (employeeId) {
-      const employee = await HREmployee.findOne({ employeeId });
+      const employee = await HREmployee.findOne({
+        employeeId,
+      });
 
       if (!employee) {
         return res.status(404).json({
@@ -228,14 +587,16 @@ const createPayroll = async (req, res) => {
       if (employee.employmentStatus !== "Active") {
         return res.status(400).json({
           success: false,
-          message: "Payroll can only be created for an active employee",
+          message:
+            "Payroll can only be created for an active employee",
         });
       }
 
       if (employee.payrollEnabled === false) {
         return res.status(400).json({
           success: false,
-          message: "Payroll is disabled for the selected employee",
+          message:
+            "Payroll is disabled for the selected employee",
         });
       }
 
@@ -244,12 +605,14 @@ const createPayroll = async (req, res) => {
       finalRole = employee.jobTitle;
 
       if (!payFrequency) {
-        if (employee.payType === "Weekly Wage") finalPayFrequency = "Weekly";
-        else finalPayFrequency = "Monthly";
+        finalPayFrequency =
+          employee.payType === "Weekly Wage"
+            ? "Weekly"
+            : "Monthly";
       }
     }
 
-        if (!finalEmployeeName || !finalRole) {
+    if (!finalEmployeeName || !finalRole) {
       return res.status(400).json({
         success: false,
         message: "Employee name and role are required",
@@ -275,20 +638,26 @@ const createPayroll = async (req, res) => {
       });
     }
 
-    const selectedFinancialAccount = await FinancialAccount.findOne({
-      accountNumber: paidFromAccountNumber,
-      status: "Active",
-      accountType: { $in: ["Bank", "Cash"] },
-    });
+    const selectedFinancialAccount =
+      await FinancialAccount.findOne({
+        accountNumber: paidFromAccountNumber,
+        status: "Active",
+        accountType: {
+          $in: ["Bank", "Cash"],
+        },
+      });
 
     if (!selectedFinancialAccount) {
       return res.status(404).json({
         success: false,
-        message: "Select an active Bank or Cash account for Payroll payment",
+        message:
+          "Select an active Bank or Cash account for Payroll payment",
       });
     }
 
-    if (!selectedFinancialAccount.linkedChartAccountCode) {
+    if (
+      !selectedFinancialAccount.linkedChartAccountCode
+    ) {
       return res.status(400).json({
         success: false,
         message:
@@ -296,97 +665,147 @@ const createPayroll = async (req, res) => {
       });
     }
 
-    const calculationDate = normalizePayrollDate(payDate || payPeriod);
-    const automaticCalculation = await calculateJamaicanPayroll({
-      grossPay: finalGrossPay,
-      pensionEmployee: Number(pensionEmployee || 0),
-      payPeriod,
-      payDate: calculationDate,
-      payFrequency: finalPayFrequency,
-    });
+    const calculationDate = normalizePayrollDate(
+      payDate || payPeriod
+    );
 
-    const autoCalculate =
-      autoCalculateStatutoryDeductions === true ||
-      autoCalculateStatutoryDeductions === "true" ||
-      autoCalculateStatutoryDeductions === undefined;
-    const hasDetailedManualDeductions =
-      nisEmployee !== undefined ||
-      nhtEmployee !== undefined ||
-      educationTax !== undefined ||
-      incomeTax !== undefined;
+    let payrollBreakdown;
+    let finalTargetNetPay = 0;
+    let employerSupportAllowance = 0;
 
-    let payrollBreakdown = { ...automaticCalculation };
-    let calculationMode = "Automatic";
+    if (
+      normalizedStatutoryTreatment ===
+      "Employer-Assisted Net Pay"
+    ) {
+      const assistedResult =
+        await calculateEmployerAssistedPayroll({
+          baseGrossPay: enteredGrossPay,
+          targetNetPay,
+          pensionEmployee: Number(
+            pensionEmployee || 0
+          ),
+          payPeriod,
+          payDate: calculationDate,
+          payFrequency: finalPayFrequency,
+        });
 
-    if (!autoCalculate && hasDetailedManualDeductions) {
-      payrollBreakdown.nisEmployee = Math.max(0, roundMoney(nisEmployee));
-      payrollBreakdown.nhtEmployee = Math.max(0, roundMoney(nhtEmployee));
-      payrollBreakdown.educationTax = Math.max(0, roundMoney(educationTax));
-      payrollBreakdown.incomeTax = Math.max(0, roundMoney(incomeTax));
-      payrollBreakdown.pensionEmployee = Math.max(
-        0,
-        roundMoney(pensionEmployee)
-      );
-      payrollBreakdown.totalDeductions = roundMoney(
-        payrollBreakdown.nisEmployee +
-          payrollBreakdown.nhtEmployee +
-          payrollBreakdown.educationTax +
-          payrollBreakdown.incomeTax +
-          payrollBreakdown.pensionEmployee
-      );
-      payrollBreakdown.totalEmployeeDeductions =
-        payrollBreakdown.totalDeductions;
-      payrollBreakdown.netPay = roundMoney(
-        finalGrossPay - payrollBreakdown.totalDeductions
-      );
-      calculationMode = "Manual";
-    } else if (!autoCalculate && deductions !== undefined) {
-      const safeDeductions = Math.max(0, roundMoney(deductions));
-      payrollBreakdown.nisEmployee = 0;
-      payrollBreakdown.nhtEmployee = 0;
-      payrollBreakdown.educationTax = 0;
-      payrollBreakdown.incomeTax = 0;
-      payrollBreakdown.pensionEmployee = 0;
-      payrollBreakdown.totalDeductions = safeDeductions;
-      payrollBreakdown.totalEmployeeDeductions = safeDeductions;
-      payrollBreakdown.netPay = roundMoney(finalGrossPay - safeDeductions);
-      calculationMode = "Manual";
+      payrollBreakdown =
+        assistedResult.calculation;
+      finalTargetNetPay =
+        assistedResult.targetNetPay;
+      employerSupportAllowance =
+        assistedResult.employerSupportAllowance;
+    } else {
+      payrollBreakdown =
+        await calculateJamaicanPayroll({
+          grossPay: enteredGrossPay,
+          pensionEmployee: Number(
+            pensionEmployee || 0
+          ),
+          payPeriod,
+          payDate: calculationDate,
+          payFrequency: finalPayFrequency,
+        });
     }
 
-        if (payrollBreakdown.netPay < 0) {
+    if (
+      normalizedStatutoryTreatment ===
+      "Documented Exemption"
+    ) {
+      payrollBreakdown =
+        applyDocumentedExemption(
+          payrollBreakdown
+        );
+    }
+
+    if (payrollBreakdown.netPay < 0) {
       return res.status(400).json({
         success: false,
-        message: "Payroll deductions cannot exceed gross pay",
+        message:
+          "Payroll deductions cannot exceed gross pay",
       });
     }
 
-    const shouldApplyAdvances =
-      applyEmployeeAdvances === true ||
-      applyEmployeeAdvances === "true";
+    const applyEmployeeStatutoryDeductions =
+      normalizedStatutoryTreatment !==
+      "Documented Exemption";
 
-    const netPayBeforeAdvance = payrollBreakdown.netPay;
+    const applyEmployerStatutoryContributions =
+      normalizedStatutoryTreatment !==
+      "Documented Exemption";
+
+    const minimumWageAssessment =
+      buildMinimumWageAssessment({
+        payDate: calculationDate,
+        workedHours,
+        grossPay: payrollBreakdown.grossPay,
+        applicable: true,
+      });
+
+    const shouldApplyAdvances = normalizeBoolean(
+      applyEmployeeAdvances,
+      true
+    );
+
+    const netPayBeforeAdvance =
+      payrollBreakdown.netPay;
 
     const recoveryPlan = shouldApplyAdvances
       ? await buildEmployeeAdvanceRecoveryPlan({
           employeeId: finalEmployeeId,
           payPeriod,
-          availableNetPay: netPayBeforeAdvance,
-          requestedRecoveryAmount: requestedAdvanceRecovery,
+          availableNetPay:
+            netPayBeforeAdvance,
+          requestedRecoveryAmount:
+            requestedAdvanceRecovery,
         })
       : {
           totalAdvanceRecovery: 0,
           allocations: [],
         };
 
-    payrollBreakdown.netPayBeforeAdvance = netPayBeforeAdvance;
+    payrollBreakdown.netPayBeforeAdvance =
+      netPayBeforeAdvance;
+
     payrollBreakdown.advanceRecovery =
       recoveryPlan.totalAdvanceRecovery;
+
     payrollBreakdown.advanceRecoveries =
       recoveryPlan.allocations;
 
     payrollBreakdown.netPay = roundMoney(
-      netPayBeforeAdvance - recoveryPlan.totalAdvanceRecovery
+      netPayBeforeAdvance -
+        recoveryPlan.totalAdvanceRecovery
     );
+
+    const exemptionRecord =
+      normalizedStatutoryTreatment ===
+      "Documented Exemption"
+        ? {
+            reason: String(
+              statutoryExemption.reason || ""
+            ).trim(),
+            legalBasis: String(
+              statutoryExemption.legalBasis || ""
+            ).trim(),
+            supportingReference: String(
+              statutoryExemption.supportingReference ||
+                ""
+            ).trim(),
+            supportingDocumentUrl: String(
+              statutoryExemption.supportingDocumentUrl ||
+                ""
+            ).trim(),
+            effectiveFrom:
+              statutoryExemption.effectiveFrom ||
+              null,
+            effectiveTo:
+              statutoryExemption.effectiveTo ||
+              null,
+            authorizedBy: getUserName(req.user),
+            authorizedAt: new Date(),
+          }
+        : undefined;
 
     const newPayroll = await Payroll.create({
       payrollNumber: `PAY-${Date.now()}`,
@@ -396,41 +815,111 @@ const createPayroll = async (req, res) => {
       payPeriod,
       payDate: calculationDate,
       payFrequency: finalPayFrequency,
+
+      compensationType:
+        normalizedCompensationType,
+
+      statutoryTreatment:
+        normalizedStatutoryTreatment,
+
+      applyEmployeeStatutoryDeductions,
+
+      applyEmployerStatutoryContributions,
+
+      targetNetPay: finalTargetNetPay,
+
+      employerSupportAllowance,
+
+      statutoryExemption: exemptionRecord,
+
+      minimumWageAssessment,
+
       grossPay: payrollBreakdown.grossPay,
-      statutoryIncome: payrollBreakdown.statutoryIncome,
-      chargeableIncome: payrollBreakdown.chargeableIncome,
-      nisInsurablePay: payrollBreakdown.nisInsurablePay,
-      deductions: payrollBreakdown.totalDeductions,
-      nisEmployee: payrollBreakdown.nisEmployee,
-      nhtEmployee: payrollBreakdown.nhtEmployee,
-      educationTax: payrollBreakdown.educationTax,
-      incomeTax: payrollBreakdown.incomeTax,
-      pensionEmployee: payrollBreakdown.pensionEmployee,
-            totalDeductions: payrollBreakdown.totalDeductions,
-      netPayBeforeAdvance: payrollBreakdown.netPayBeforeAdvance,
-      advanceRecovery: payrollBreakdown.advanceRecovery,
-      advanceRecoveries: payrollBreakdown.advanceRecoveries,
+
+      statutoryIncome:
+        payrollBreakdown.statutoryIncome,
+
+      chargeableIncome:
+        payrollBreakdown.chargeableIncome,
+
+      nisInsurablePay:
+        payrollBreakdown.nisInsurablePay,
+
+      deductions:
+        payrollBreakdown.totalDeductions,
+
+      nisEmployee:
+        payrollBreakdown.nisEmployee,
+
+      nhtEmployee:
+        payrollBreakdown.nhtEmployee,
+
+      educationTax:
+        payrollBreakdown.educationTax,
+
+      incomeTax:
+        payrollBreakdown.incomeTax,
+
+      pensionEmployee:
+        payrollBreakdown.pensionEmployee,
+
+      totalDeductions:
+        payrollBreakdown.totalDeductions,
+
+      netPayBeforeAdvance:
+        payrollBreakdown.netPayBeforeAdvance,
+
+      advanceRecovery:
+        payrollBreakdown.advanceRecovery,
+
+      advanceRecoveries:
+        payrollBreakdown.advanceRecoveries,
+
       netPay: payrollBreakdown.netPay,
-      nisEmployer: payrollBreakdown.nisEmployer,
-      nhtEmployer: payrollBreakdown.nhtEmployer,
-      educationTaxEmployer: payrollBreakdown.educationTaxEmployer,
-      heartEmployer: payrollBreakdown.heartEmployer,
+
+      nisEmployer:
+        payrollBreakdown.nisEmployer,
+
+      nhtEmployer:
+        payrollBreakdown.nhtEmployer,
+
+      educationTaxEmployer:
+        payrollBreakdown.educationTaxEmployer,
+
+      heartEmployer:
+        payrollBreakdown.heartEmployer,
+
       totalEmployerContributions:
         payrollBreakdown.totalEmployerContributions,
-      totalPayrollCost: payrollBreakdown.totalPayrollCost,
-      statutoryRuleId: payrollBreakdown.statutoryRuleId,
-      statutoryRuleCode: payrollBreakdown.statutoryRuleCode,
+
+      totalPayrollCost:
+        payrollBreakdown.totalPayrollCost,
+
+      statutoryRuleId:
+        payrollBreakdown.statutoryRuleId,
+
+      statutoryRuleCode:
+        payrollBreakdown.statutoryRuleCode,
+
       statutoryRuleEffectiveFrom:
         payrollBreakdown.statutoryRuleEffectiveFrom,
-      statutoryRuleSnapshot: payrollBreakdown.statutoryRuleSnapshot,
-      calculationMode,
+
+      statutoryRuleSnapshot:
+        payrollBreakdown.statutoryRuleSnapshot,
+
+      calculationMode: "Automatic",
+
       paidFromAccountNumber,
-      paidFromAccountName: selectedFinancialAccount.accountName,
-            status: "Pending",
+
+      paidFromAccountName:
+        selectedFinancialAccount.accountName,
+
+      status: "Pending",
+
       createdBy: getUserName(req.user),
     });
 
-        try {
+    try {
       if (req.user) {
         await writeAuditLog({
           req,
@@ -443,17 +932,43 @@ const createPayroll = async (req, res) => {
           targetId: newPayroll.payrollNumber,
           metadata: {
             employeeId: newPayroll.employeeId,
-            employeeName: newPayroll.employeeName,
+            employeeName:
+              newPayroll.employeeName,
             payPeriod: newPayroll.payPeriod,
+            compensationType:
+              newPayroll.compensationType,
+            statutoryTreatment:
+              newPayroll.statutoryTreatment,
+            applyEmployeeStatutoryDeductions:
+              newPayroll.applyEmployeeStatutoryDeductions,
+            applyEmployerStatutoryContributions:
+              newPayroll.applyEmployerStatutoryContributions,
+            enteredGrossPay,
             grossPay: newPayroll.grossPay,
-            totalEmployeeDeductions: newPayroll.totalDeductions,
-            netPayBeforeAdvance: newPayroll.netPayBeforeAdvance,
-            advanceRecovery: newPayroll.advanceRecovery,
+            targetNetPay:
+              newPayroll.targetNetPay,
+            employerSupportAllowance:
+              newPayroll.employerSupportAllowance,
+            totalEmployeeDeductions:
+              newPayroll.totalDeductions,
+            netPayBeforeAdvance:
+              newPayroll.netPayBeforeAdvance,
+            advanceRecovery:
+              newPayroll.advanceRecovery,
             netPay: newPayroll.netPay,
             totalEmployerContributions:
               newPayroll.totalEmployerContributions,
-            totalPayrollCost: newPayroll.totalPayrollCost,
-            statutoryRuleCode: newPayroll.statutoryRuleCode,
+            totalPayrollCost:
+              newPayroll.totalPayrollCost,
+            statutoryRuleCode:
+              newPayroll.statutoryRuleCode,
+            minimumWageAssessment:
+              newPayroll.minimumWageAssessment,
+            statutoryExemption:
+              newPayroll.statutoryTreatment ===
+              "Documented Exemption"
+                ? newPayroll.statutoryExemption
+                : undefined,
             paidFromAccountNumber:
               newPayroll.paidFromAccountNumber,
             paidFromAccountName:
@@ -476,10 +991,16 @@ const createPayroll = async (req, res) => {
       data: newPayroll,
     });
   } catch (error) {
-    return res.status(500).json({
+    console.error(
+      "Error creating Payroll:",
+      error
+    );
+
+    return res.status(400).json({
       success: false,
-      message: "Failed to create Payroll record",
-      error: error.message,
+      message:
+        error.message ||
+        "Failed to create Payroll record",
     });
   }
 };
