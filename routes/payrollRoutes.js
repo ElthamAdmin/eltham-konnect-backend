@@ -7,8 +7,10 @@ const {
   getEmployeePayrollYtd,
   reassessPayrollCompliance,
   previewPayroll,
+  previewPayrollBatch,
   createPayroll,
-   approvePayroll,
+  createPayrollBatch,
+  approvePayroll,
   payPayroll,
   cancelPayroll,
 } = require("../controllers/payrollController");
@@ -71,6 +73,13 @@ router.post(
   previewPayroll
 );
 
+router.post(
+  "/batch/preview",
+  protect,
+  canManagePayroll,
+  previewPayrollBatch
+);
+
 router.get(
   "/reports/register",
   protect,
@@ -99,6 +108,13 @@ router.post(
   protect,
   canApprovePayroll,
   reassessPayrollCompliance
+);
+
+router.post(
+  "/batch",
+  protect,
+  canManagePayroll,
+  createPayrollBatch
 );
 
 router.post(

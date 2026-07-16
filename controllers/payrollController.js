@@ -1809,6 +1809,551 @@ const createPayroll = async (req, res) => {
   }
 };
 
+const executePayrollController = async ({
+  controller,
+  req,
+  body,
+}) => {
+  return new Promise((resolve) => {
+    let statusCode = 200;
+
+    const internalResponse = {
+      status(code) {
+        statusCode = code;
+        return internalResponse;
+      },
+
+      json(payload) {
+        resolve({
+          statusCode,
+          payload,
+        });
+
+        return internalResponse;
+      },
+    };
+
+    const internalRequest = {
+      ...req,
+      body,
+      params: {},
+      query: {},
+    };
+
+    Promise.resolve(
+      controller(
+        internalRequest,
+        internalResponse
+      )
+    ).catch((error) => {
+      resolve({
+        statusCode: 500,
+        payload: {
+          success: false,
+          message:
+            error.message ||
+            "Internal Payroll processing failed",
+        },
+      });
+    });
+  });
+};
+
+const validateBatchRequest = ({
+  records,
+  maximumRecords = 100,
+}) => {
+  if (
+    !Array.isArray(records) ||
+    records.length === 0
+  ) {
+    throw new Error(
+      "Batch Payroll requires at least one employee record."
+    );
+  }
+
+  if (records.length > maximumRecords) {
+    throw new Error(
+      `A maximum of ${maximumRecords} employees can be processed in one Payroll batch.`
+    );
+  }
+
+  const duplicateEmployeeIds = [];
+
+  const employeeIds = records
+    .map((record) =>
+      String(
+        record?.employeeId || ""
+      ).trim()
+    )
+    .filter(Boolean);
+
+  const employeeIdCounts =
+    employeeIds.reduce(
+      (counts, employeeId) => ({
+        ...counts,
+        [employeeId]:
+          Number(counts[employeeId] || 0) +
+          1,
+      }),
+      {}
+    );
+
+  Object.entries(employeeIdCounts).forEach(
+    ([employeeId, count]) => {
+      if (count > 1) {
+        duplicateEmployeeIds.push(
+          employeeId
+        );
+      }
+    }
+  );
+
+  if (duplicateEmployeeIds.length) {
+    throw new Error(
+      "The following employees appear more than once in the batch: " +
+        duplicateEmployeeIds.join(", ")
+    );
+  }
+};
+
+const buildBatchRecordBody = ({
+  defaults,
+  record,
+}) => ({
+  ...(defaults || {}),
+  ...(record || {}),
+  employeeId: String(
+    record?.employeeId || ""
+  ).trim(),
+});
+
+const previewPayrollBatch = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      records = [],
+      defaults = {},
+    } = req.body;
+
+    validateBatchRequest({
+      records,
+    });
+
+    const results = [];
+
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+
+      const body = buildBatchRecordBody({
+        defaults,
+        record,
+      });
+
+      const result =
+        await executePayrollController({
+          controller: previewPayroll,
+          req,
+          body,
+        });
+
+      results.push({
+        rowNumber: index + 1,
+        employeeId:
+          body.employeeId || "",
+        employeeName:
+          String(
+            record?.employeeName || ""
+          ).trim(),
+        success:
+          result.statusCode >= 200 &&
+          result.statusCode < 300 &&
+          result.payload?.success !== false,
+        statusCode: result.statusCode,
+        message:
+          result.payload?.message || "",
+        data:
+          result.payload?.data || null,
+      });
+    }
+
+    const successfulRecords =
+      results.filter(
+        (result) => result.success
+      );
+
+    const failedRecords =
+      results.filter(
+        (result) => !result.success
+      );
+
+    const totals =
+      successfulRecords.reduce(
+        (summary, result) => {
+          const payroll =
+            result.data || {};
+
+          summary.grossPay =
+            roundMoney(
+              summary.grossPay +
+                Number(
+                  payroll.grossPay || 0
+                )
+            );
+
+          summary.totalEmployeeDeductions =
+            roundMoney(
+              summary.totalEmployeeDeductions +
+                Number(
+                  payroll.totalDeductions ??
+                    payroll.totalEmployeeDeductions ??
+                    0
+                )
+            );
+
+          summary.netPayBeforeAdvance =
+            roundMoney(
+              summary.netPayBeforeAdvance +
+                Number(
+                  payroll.netPayBeforeAdvance ||
+                    0
+                )
+            );
+
+          summary.advanceRecovery =
+            roundMoney(
+              summary.advanceRecovery +
+                Number(
+                  payroll.advanceRecovery ||
+                    0
+                )
+            );
+
+          summary.netPay =
+            roundMoney(
+              summary.netPay +
+                Number(
+                  payroll.netPay || 0
+                )
+            );
+
+          summary.totalEmployerContributions =
+            roundMoney(
+              summary.totalEmployerContributions +
+                Number(
+                  payroll.totalEmployerContributions ||
+                    0
+                )
+            );
+
+          summary.totalPayrollCost =
+            roundMoney(
+              summary.totalPayrollCost +
+                Number(
+                  payroll.totalPayrollCost ||
+                    0
+                )
+            );
+
+          summary.governmentObligations.nis =
+            roundMoney(
+              summary.governmentObligations.nis +
+                Number(
+                  payroll.nisEmployee || 0
+                ) +
+                Number(
+                  payroll.nisEmployer || 0
+                )
+            );
+
+          summary.governmentObligations.nht =
+            roundMoney(
+              summary.governmentObligations.nht +
+                Number(
+                  payroll.nhtEmployee || 0
+                ) +
+                Number(
+                  payroll.nhtEmployer || 0
+                )
+            );
+
+          summary.governmentObligations.educationTax =
+            roundMoney(
+              summary.governmentObligations.educationTax +
+                Number(
+                  payroll.educationTax || 0
+                ) +
+                Number(
+                  payroll.educationTaxEmployer ||
+                    0
+                )
+            );
+
+          summary.governmentObligations.paye =
+            roundMoney(
+              summary.governmentObligations.paye +
+                Number(
+                  payroll.incomeTax || 0
+                )
+            );
+
+          summary.governmentObligations.heart =
+            roundMoney(
+              summary.governmentObligations.heart +
+                Number(
+                  payroll.heartEmployer || 0
+                )
+            );
+
+          summary.governmentObligations.pension =
+            roundMoney(
+              summary.governmentObligations.pension +
+                Number(
+                  payroll.pensionEmployee ||
+                    0
+                )
+            );
+
+          return summary;
+        },
+        {
+          grossPay: 0,
+          totalEmployeeDeductions: 0,
+          netPayBeforeAdvance: 0,
+          advanceRecovery: 0,
+          netPay: 0,
+          totalEmployerContributions: 0,
+          totalPayrollCost: 0,
+          governmentObligations: {
+            nis: 0,
+            nht: 0,
+            educationTax: 0,
+            paye: 0,
+            heart: 0,
+            pension: 0,
+            total: 0,
+          },
+        }
+      );
+
+    totals.governmentObligations.total =
+      roundMoney(
+        totals.governmentObligations.nis +
+          totals.governmentObligations.nht +
+          totals.governmentObligations
+            .educationTax +
+          totals.governmentObligations.paye +
+          totals.governmentObligations.heart +
+          totals.governmentObligations.pension
+      );
+
+    return res.json({
+      success:
+        failedRecords.length === 0,
+      message:
+        failedRecords.length === 0
+          ? "Payroll batch preview calculated successfully"
+          : "Payroll batch preview completed with validation failures",
+      summary: {
+        requestedRecords:
+          records.length,
+        successfulRecords:
+          successfulRecords.length,
+        failedRecords:
+          failedRecords.length,
+        totals,
+      },
+      data: results,
+    });
+  } catch (error) {
+    console.error(
+      "Error previewing Payroll batch:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.message ||
+        "Could not preview Payroll batch",
+    });
+  }
+};
+
+const createPayrollBatch = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      records = [],
+      defaults = {},
+    } = req.body;
+
+    validateBatchRequest({
+      records,
+    });
+
+    const results = [];
+
+    for (let index = 0; index < records.length; index += 1) {
+      const record = records[index];
+
+      const body = buildBatchRecordBody({
+        defaults,
+        record,
+      });
+
+      const result =
+        await executePayrollController({
+          controller: createPayroll,
+          req,
+          body,
+        });
+
+      const succeeded =
+        result.statusCode >= 200 &&
+        result.statusCode < 300 &&
+        result.payload?.success !== false;
+
+      results.push({
+        rowNumber: index + 1,
+        employeeId:
+          body.employeeId || "",
+        employeeName:
+          result.payload?.data
+            ?.employeeName ||
+          String(
+            record?.employeeName || ""
+          ).trim(),
+        payrollNumber:
+          result.payload?.data
+            ?.payrollNumber || "",
+        success: succeeded,
+        statusCode:
+          result.statusCode,
+        message:
+          result.payload?.message || "",
+        data:
+          result.payload?.data || null,
+      });
+    }
+
+    const successfulRecords =
+      results.filter(
+        (result) => result.success
+      );
+
+    const failedRecords =
+      results.filter(
+        (result) => !result.success
+      );
+
+    try {
+      if (req.user) {
+        await writeAuditLog({
+          req,
+          action:
+            "CREATE_PAYROLL_BATCH",
+          module: "Payroll",
+          description:
+            `Payroll batch completed: ` +
+            `${successfulRecords.length} created, ` +
+            `${failedRecords.length} failed`,
+          targetType:
+            "Payroll Batch",
+          targetId:
+            `PAY-BATCH-${Date.now()}`,
+          metadata: {
+            requestedRecords:
+              records.length,
+            successfulRecords:
+              successfulRecords.length,
+            failedRecords:
+              failedRecords.length,
+            payPeriod:
+              defaults?.payPeriod || "",
+            paidFromAccountNumber:
+              defaults
+                ?.paidFromAccountNumber ||
+              "",
+            createdPayrollNumbers:
+              successfulRecords
+                .map(
+                  (result) =>
+                    result.payrollNumber
+                )
+                .filter(Boolean),
+            failures:
+              failedRecords.map(
+                (result) => ({
+                  employeeId:
+                    result.employeeId,
+                  message:
+                    result.message,
+                  statusCode:
+                    result.statusCode,
+                })
+              ),
+          },
+        });
+      }
+    } catch (auditError) {
+      console.error(
+        "Audit log error while recording Payroll batch:",
+        auditError
+      );
+    }
+
+    const responseStatus =
+      successfulRecords.length ===
+      records.length
+        ? 201
+        : successfulRecords.length > 0
+        ? 207
+        : 400;
+
+    return res.status(
+      responseStatus
+    ).json({
+      success:
+        failedRecords.length === 0,
+      partialSuccess:
+        successfulRecords.length > 0 &&
+        failedRecords.length > 0,
+      message:
+        failedRecords.length === 0
+          ? `${successfulRecords.length} Payroll records created successfully and are pending approval`
+          : successfulRecords.length > 0
+          ? `${successfulRecords.length} Payroll records created and ${failedRecords.length} failed`
+          : "No Payroll records were created",
+      summary: {
+        requestedRecords:
+          records.length,
+        successfulRecords:
+          successfulRecords.length,
+        failedRecords:
+          failedRecords.length,
+      },
+      data: results,
+    });
+  } catch (error) {
+    console.error(
+      "Error creating Payroll batch:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.message ||
+        "Could not create Payroll batch",
+    });
+  }
+};
+
 const approvePayroll = async (req, res) => {
   try {
     const { payrollNumber } = req.params;
@@ -2186,7 +2731,9 @@ module.exports = {
   getEmployeePayrollYtd,
   reassessPayrollCompliance,
   previewPayroll,
+  previewPayrollBatch,
   createPayroll,
+  createPayrollBatch,
   approvePayroll,
   payPayroll,
   cancelPayroll,
