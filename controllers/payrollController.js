@@ -258,7 +258,15 @@ const calculateEmployerAssistedPayroll = async ({
   payPeriod,
   payDate,
   payFrequency,
+  priorYtdNisInsurablePay = 0,
 }) => {
+  const calculatePayroll = (
+    calculationInput
+  ) =>
+    calculateJamaicanPayroll({
+      ...calculationInput,
+      priorYtdNisInsurablePay,
+    });
   const safeBaseGrossPay =
     roundMoney(baseGrossPay);
 
@@ -276,7 +284,7 @@ const calculateEmployerAssistedPayroll = async ({
   let upperGrossPay = lowerGrossPay;
 
   let upperCalculation =
-    await calculateJamaicanPayroll({
+    await calculatePayroll({
       grossPay: upperGrossPay,
       pensionEmployee,
       payPeriod,
@@ -296,7 +304,7 @@ const calculateEmployerAssistedPayroll = async ({
     );
 
     upperCalculation =
-      await calculateJamaicanPayroll({
+      await calculatePayroll({
         grossPay: upperGrossPay,
         pensionEmployee,
         payPeriod,
@@ -322,7 +330,7 @@ const calculateEmployerAssistedPayroll = async ({
     );
 
     const midpointCalculation =
-      await calculateJamaicanPayroll({
+      await calculatePayroll({
         grossPay: midpoint,
         pensionEmployee,
         payPeriod,
@@ -352,7 +360,7 @@ const calculateEmployerAssistedPayroll = async ({
   let finalGrossPay = upperGrossPay;
 
   let finalCalculation =
-    await calculateJamaicanPayroll({
+    await calculatePayroll({
       grossPay: finalGrossPay,
       pensionEmployee,
       payPeriod,
@@ -369,7 +377,7 @@ const calculateEmployerAssistedPayroll = async ({
     );
 
     finalCalculation =
-      await calculateJamaicanPayroll({
+      await calculatePayroll({
         grossPay: finalGrossPay,
         pensionEmployee,
         payPeriod,
@@ -469,6 +477,80 @@ const validateStatutorySelection = ({
       "A documented exemption requires a reason, legal basis, and supporting reference."
     );
   }
+};
+
+const getPriorYtdNisContext = async ({
+  employeeId,
+  payDate,
+}) => {
+  const normalizedEmployeeId =
+    String(
+      employeeId || ""
+    ).trim();
+
+  if (!normalizedEmployeeId) {
+    return {
+      priorYtdNisInsurablePay: 0,
+      includedPayrollNumbers: [],
+    };
+  }
+
+  const calculationDate =
+    normalizePayrollDate(payDate);
+
+  const year =
+    calculationDate.getUTCFullYear();
+
+  const yearStart = new Date(
+    Date.UTC(year, 0, 1)
+  );
+
+  const priorPayrolls =
+    await Payroll.find({
+      employeeId:
+        normalizedEmployeeId,
+      status: {
+        $in: [
+          "Approved",
+          "Paid",
+        ],
+      },
+      payDate: {
+        $gte: yearStart,
+        $lt: calculationDate,
+      },
+      statutoryRuleCode: {
+        $ne: "",
+      },
+    })
+      .select(
+        "payrollNumber nisInsurablePay"
+      )
+      .lean();
+
+  const priorYtdNisInsurablePay =
+    priorPayrolls.reduce(
+      (total, payroll) =>
+        roundMoney(
+          total +
+            Number(
+              payroll.nisInsurablePay ||
+                0
+            )
+        ),
+      0
+    );
+
+  return {
+    priorYtdNisInsurablePay,
+    includedPayrollNumbers:
+      priorPayrolls
+        .map(
+          (payroll) =>
+            payroll.payrollNumber
+        )
+        .filter(Boolean),
+  };
 };
 
 const buildPayrollReportFilter = async (query = {}) => {
@@ -1239,7 +1321,16 @@ const previewPayroll = async (req, res) => {
           );
 
     const calculationDate =
-      normalizePayrollDate(scheduledPayDate);
+      normalizePayrollDate(
+        scheduledPayDate
+      );
+
+    const ytdNisContext =
+      await getPriorYtdNisContext({
+        employeeId,
+        payDate:
+          calculationDate,
+      });
 
     let calculation;
     let finalTargetNetPay = 0;
@@ -1257,6 +1348,9 @@ const previewPayroll = async (req, res) => {
           payPeriod,
           payDate: calculationDate,
           payFrequency,
+          priorYtdNisInsurablePay:
+            ytdNisContext
+              .priorYtdNisInsurablePay,
         });
 
       calculation = assistedResult.calculation;
@@ -1270,6 +1364,9 @@ const previewPayroll = async (req, res) => {
         payPeriod,
         payDate: calculationDate,
         payFrequency,
+        priorYtdNisInsurablePay:
+          ytdNisContext
+            .priorYtdNisInsurablePay,
       });
     }
 
@@ -1329,6 +1426,14 @@ const previewPayroll = async (req, res) => {
       message: "Payroll preview calculated successfully",
       data: {
                 ...calculation,
+        ytdNisContext: {
+          priorYtdNisInsurablePay:
+            ytdNisContext
+              .priorYtdNisInsurablePay,
+          includedPayrollNumbers:
+            ytdNisContext
+              .includedPayrollNumbers,
+        },
         scheduledPayDate,
         payDate: scheduledPayDate,
         compensationType:
@@ -1523,7 +1628,17 @@ const createPayroll = async (req, res) => {
           );
 
     const calculationDate =
-      normalizePayrollDate(scheduledPayDate);
+      normalizePayrollDate(
+        scheduledPayDate
+      );
+
+    const ytdNisContext =
+      await getPriorYtdNisContext({
+        employeeId:
+          finalEmployeeId,
+        payDate:
+          calculationDate,
+      });
 
     let payrollBreakdown;
     let finalTargetNetPay = 0;
@@ -1542,7 +1657,11 @@ const createPayroll = async (req, res) => {
           ),
           payPeriod,
           payDate: calculationDate,
-          payFrequency: finalPayFrequency,
+          payFrequency:
+            finalPayFrequency,
+          priorYtdNisInsurablePay:
+            ytdNisContext
+              .priorYtdNisInsurablePay,
         });
 
       payrollBreakdown =
@@ -1560,7 +1679,11 @@ const createPayroll = async (req, res) => {
           ),
           payPeriod,
           payDate: calculationDate,
-          payFrequency: finalPayFrequency,
+          payFrequency:
+            finalPayFrequency,
+          priorYtdNisInsurablePay:
+            ytdNisContext
+              .priorYtdNisInsurablePay,
         });
     }
 

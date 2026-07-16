@@ -192,6 +192,7 @@ const calculateJamaicanPayroll = async ({
   payPeriod,
   payDate,
   payFrequency = "Monthly",
+  priorYtdNisInsurablePay = 0,
 }) => {
   const gross = roundMoney(grossPay);
   const pension = Math.max(0, roundMoney(pensionEmployee));
@@ -206,9 +207,66 @@ const calculateJamaicanPayroll = async ({
 
   const payrollDate = normalizePayrollDate(payDate || payPeriod);
   const rule = await getStatutoryRuleForDate(payrollDate);
-  const frequency = getFrequencySettings(rule, payFrequency);
-  const nisPeriodicCeiling = roundMoney(
-    rule.nisAnnualWageCeiling / frequency.divisor
+  const frequency =
+  getFrequencySettings(
+    rule,
+    payFrequency
+  );
+
+const nisAnnualWageCeiling =
+  roundMoney(
+    rule.nisAnnualWageCeiling
+  );
+
+const priorYtdInsurablePay =
+  Math.max(
+    0,
+    Math.min(
+      nisAnnualWageCeiling,
+      roundMoney(
+        priorYtdNisInsurablePay
+      )
+    )
+  );
+
+const remainingAnnualNisCeiling =
+  Math.max(
+    0,
+    roundMoney(
+      nisAnnualWageCeiling -
+        priorYtdInsurablePay
+    )
+  );
+
+const nisPeriodicCeiling =
+  roundMoney(
+    nisAnnualWageCeiling /
+      frequency.divisor
+  );
+
+const nisInsurablePay =
+  Math.min(
+    gross,
+    nisPeriodicCeiling,
+    remainingAnnualNisCeiling
+  );
+
+const ytdNisInsurablePay =
+  roundMoney(
+    priorYtdInsurablePay +
+      nisInsurablePay
+  );
+
+const nisEmployee =
+  roundMoney(
+    nisInsurablePay *
+      rule.employeeRates.nis
+  );
+
+const nisEmployer =
+  roundMoney(
+    nisInsurablePay *
+      rule.employerRates.nis
   );
   const nisInsurablePay = Math.min(gross, nisPeriodicCeiling);
   const nisEmployee = roundMoney(
@@ -282,6 +340,10 @@ const calculateJamaicanPayroll = async ({
     statutoryIncome,
     chargeableIncome: paye.chargeableIncome,
     nisInsurablePay,
+    priorYtdNisInsurablePay:
+      priorYtdInsurablePay,
+    remainingAnnualNisCeiling,
+    ytdNisInsurablePay,
     nisEmployee,
     nhtEmployee,
     educationTax: educationTaxEmployee,
@@ -307,6 +369,14 @@ const calculateJamaicanPayroll = async ({
       employeeRates: JSON.parse(JSON.stringify(rule.employeeRates)),
       employerRates: JSON.parse(JSON.stringify(rule.employerRates)),
       nisAnnualWageCeiling: rule.nisAnnualWageCeiling,
+      priorYtdNisInsurablePay:
+        priorYtdInsurablePay,
+      currentNisInsurablePay:
+        nisInsurablePay,
+      remainingAnnualNisCeilingBeforePayroll:
+        remainingAnnualNisCeiling,
+      ytdNisInsurablePayAfterPayroll:
+        ytdNisInsurablePay,
       payeThresholds: JSON.parse(JSON.stringify(rule.payeThresholds)),
       payeRates: JSON.parse(JSON.stringify(rule.payeRates)),
       calculationSettings: JSON.parse(
