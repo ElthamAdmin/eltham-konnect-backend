@@ -3,6 +3,8 @@ const express = require("express");
 const {
   getPayroll,
   getMyPayroll,
+  getPayrollRegister,
+  getEmployeePayrollYtd,
   previewPayroll,
   createPayroll,
    approvePayroll,
@@ -66,6 +68,20 @@ router.post(
   protect,
   canViewPayroll,
   previewPayroll
+);
+
+router.get(
+  "/reports/register",
+  protect,
+  canViewPayroll,
+  getPayrollRegister
+);
+
+router.get(
+  "/reports/ytd/:employeeId",
+  protect,
+  canViewPayroll,
+  getEmployeePayrollYtd
 );
 
 router.get("/", protect, canViewPayroll, getPayroll);

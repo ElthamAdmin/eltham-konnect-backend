@@ -413,6 +413,507 @@ const validateStatutorySelection = ({
   }
 };
 
+const buildPayrollReportFilter = async (query = {}) => {
+  const filter = {};
+
+  if (query.employeeId) {
+    filter.employeeId = String(
+      query.employeeId
+    ).trim();
+  }
+
+  if (query.status) {
+    filter.status = String(query.status).trim();
+  } else {
+    filter.status = {
+      $nin: ["Cancelled", "Reversed"],
+    };
+  }
+
+  if (query.payPeriod) {
+    filter.payPeriod = String(
+      query.payPeriod
+    ).trim();
+  } else if (
+    query.periodFrom ||
+    query.periodTo
+  ) {
+    filter.payPeriod = {};
+
+    if (query.periodFrom) {
+      filter.payPeriod.$gte = String(
+        query.periodFrom
+      ).trim();
+    }
+
+    if (query.periodTo) {
+      filter.payPeriod.$lte = String(
+        query.periodTo
+      ).trim();
+    }
+  }
+
+  if (query.compensationType) {
+    filter.compensationType = String(
+      query.compensationType
+    ).trim();
+  }
+
+  if (query.statutoryTreatment) {
+    filter.statutoryTreatment = String(
+      query.statutoryTreatment
+    ).trim();
+  }
+
+  if (query.legacy === "true") {
+    filter.statutoryRuleCode = {
+      $in: ["", null],
+    };
+  }
+
+  if (query.legacy === "false") {
+    filter.statutoryRuleCode = {
+      $nin: ["", null],
+    };
+  }
+
+  if (query.search) {
+    const safeSearch = String(query.search)
+      .trim()
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    filter.$or = [
+      {
+        employeeName: {
+          $regex: safeSearch,
+          $options: "i",
+        },
+      },
+      {
+        employeeId: {
+          $regex: safeSearch,
+          $options: "i",
+        },
+      },
+      {
+        payrollNumber: {
+          $regex: safeSearch,
+          $options: "i",
+        },
+      },
+    ];
+  }
+
+  if (query.branch) {
+    const employees = await HREmployee.find({
+      branch: String(query.branch).trim(),
+    })
+      .select("employeeId")
+      .lean();
+
+    const branchEmployeeIds = employees.map(
+      (employee) => employee.employeeId
+    );
+
+    if (
+      filter.employeeId &&
+      !branchEmployeeIds.includes(
+        filter.employeeId
+      )
+    ) {
+      filter.employeeId = {
+        $in: [],
+      };
+    } else if (!filter.employeeId) {
+      filter.employeeId = {
+        $in: branchEmployeeIds,
+      };
+    }
+  }
+
+  return filter;
+};
+
+const buildPayrollTotals = (records = []) =>
+  records.reduce(
+    (totals, payroll) => {
+      const status =
+        payroll.status || "Pending";
+
+      totals.recordCount += 1;
+
+      totals.statusCounts[status] =
+        Number(
+          totals.statusCounts[status] || 0
+        ) + 1;
+
+      totals.grossPay = roundMoney(
+        totals.grossPay +
+          Number(payroll.grossPay || 0)
+      );
+
+      totals.employerSupportAllowance =
+        roundMoney(
+          totals.employerSupportAllowance +
+            Number(
+              payroll.employerSupportAllowance ||
+                0
+            )
+        );
+
+      totals.nisEmployee = roundMoney(
+        totals.nisEmployee +
+          Number(payroll.nisEmployee || 0)
+      );
+
+      totals.nhtEmployee = roundMoney(
+        totals.nhtEmployee +
+          Number(payroll.nhtEmployee || 0)
+      );
+
+      totals.educationTaxEmployee =
+        roundMoney(
+          totals.educationTaxEmployee +
+            Number(payroll.educationTax || 0)
+        );
+
+      totals.paye = roundMoney(
+        totals.paye +
+          Number(payroll.incomeTax || 0)
+      );
+
+      totals.pensionEmployee = roundMoney(
+        totals.pensionEmployee +
+          Number(
+            payroll.pensionEmployee || 0
+          )
+      );
+
+      totals.totalEmployeeDeductions =
+        roundMoney(
+          totals.totalEmployeeDeductions +
+            Number(
+              payroll.totalDeductions ??
+                payroll.deductions ??
+                0
+            )
+        );
+
+      totals.netPayBeforeAdvance =
+        roundMoney(
+          totals.netPayBeforeAdvance +
+            Number(
+              payroll.netPayBeforeAdvance ??
+                payroll.netPay ??
+                0
+            )
+        );
+
+      totals.advanceRecovery = roundMoney(
+        totals.advanceRecovery +
+          Number(payroll.advanceRecovery || 0)
+      );
+
+      totals.netPay = roundMoney(
+        totals.netPay +
+          Number(payroll.netPay || 0)
+      );
+
+      totals.nisEmployer = roundMoney(
+        totals.nisEmployer +
+          Number(payroll.nisEmployer || 0)
+      );
+
+      totals.nhtEmployer = roundMoney(
+        totals.nhtEmployer +
+          Number(payroll.nhtEmployer || 0)
+      );
+
+      totals.educationTaxEmployer =
+        roundMoney(
+          totals.educationTaxEmployer +
+            Number(
+              payroll.educationTaxEmployer ||
+                0
+            )
+        );
+
+      totals.heartEmployer = roundMoney(
+        totals.heartEmployer +
+          Number(payroll.heartEmployer || 0)
+      );
+
+      totals.totalEmployerContributions =
+        roundMoney(
+          totals.totalEmployerContributions +
+            Number(
+              payroll.totalEmployerContributions ||
+                0
+            )
+        );
+
+      totals.totalPayrollCost = roundMoney(
+        totals.totalPayrollCost +
+          Number(payroll.totalPayrollCost || 0)
+      );
+
+      if (!payroll.statutoryRuleCode) {
+        totals.legacyRecordCount += 1;
+      }
+
+      return totals;
+    },
+    {
+      recordCount: 0,
+      legacyRecordCount: 0,
+      statusCounts: {},
+      grossPay: 0,
+      employerSupportAllowance: 0,
+      nisEmployee: 0,
+      nhtEmployee: 0,
+      educationTaxEmployee: 0,
+      paye: 0,
+      pensionEmployee: 0,
+      totalEmployeeDeductions: 0,
+      netPayBeforeAdvance: 0,
+      advanceRecovery: 0,
+      netPay: 0,
+      nisEmployer: 0,
+      nhtEmployer: 0,
+      educationTaxEmployer: 0,
+      heartEmployer: 0,
+      totalEmployerContributions: 0,
+      totalPayrollCost: 0,
+    }
+  );
+
+const addGovernmentLiabilities = (
+  totals = {}
+) => ({
+  ...totals,
+
+  governmentLiabilities: {
+    nis: roundMoney(
+      Number(totals.nisEmployee || 0) +
+        Number(totals.nisEmployer || 0)
+    ),
+
+    nht: roundMoney(
+      Number(totals.nhtEmployee || 0) +
+        Number(totals.nhtEmployer || 0)
+    ),
+
+    educationTax: roundMoney(
+      Number(
+        totals.educationTaxEmployee || 0
+      ) +
+        Number(
+          totals.educationTaxEmployer || 0
+        )
+    ),
+
+    paye: roundMoney(
+      totals.paye || 0
+    ),
+
+    heart: roundMoney(
+      totals.heartEmployer || 0
+    ),
+
+    pension: roundMoney(
+      totals.pensionEmployee || 0
+    ),
+
+    total: roundMoney(
+      Number(totals.nisEmployee || 0) +
+        Number(totals.nisEmployer || 0) +
+        Number(totals.nhtEmployee || 0) +
+        Number(totals.nhtEmployer || 0) +
+        Number(
+          totals.educationTaxEmployee || 0
+        ) +
+        Number(
+          totals.educationTaxEmployer || 0
+        ) +
+        Number(totals.paye || 0) +
+        Number(totals.heartEmployer || 0) +
+        Number(
+          totals.pensionEmployee || 0
+        )
+    ),
+  },
+});
+
+const getPayrollRegister = async (req, res) => {
+  try {
+    const filter =
+      await buildPayrollReportFilter(
+        req.query
+      );
+
+    const limit = Math.min(
+      1000,
+      Math.max(
+        1,
+        Number(req.query.limit || 500)
+      )
+    );
+
+    const [records, totalRecords] =
+      await Promise.all([
+        Payroll.find(filter)
+          .sort({
+            payDate: -1,
+            createdAt: -1,
+            _id: -1,
+          })
+          .limit(limit)
+          .lean(),
+
+        Payroll.countDocuments(filter),
+      ]);
+
+    const totals = addGovernmentLiabilities(
+      buildPayrollTotals(records)
+    );
+
+    return res.json({
+      success: true,
+      message:
+        "Payroll register generated successfully",
+      filters: {
+        employeeId:
+          req.query.employeeId || "",
+        status: req.query.status || "",
+        payPeriod:
+          req.query.payPeriod || "",
+        periodFrom:
+          req.query.periodFrom || "",
+        periodTo:
+          req.query.periodTo || "",
+        branch: req.query.branch || "",
+        compensationType:
+          req.query.compensationType || "",
+        statutoryTreatment:
+          req.query.statutoryTreatment || "",
+        legacy: req.query.legacy || "",
+        search: req.query.search || "",
+      },
+      totalRecords,
+      returnedRecords: records.length,
+      totals,
+      data: records,
+    });
+  } catch (error) {
+    console.error(
+      "Payroll register error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Could not generate Payroll register",
+      error: error.message,
+    });
+  }
+};
+
+const getEmployeePayrollYtd = async (
+  req,
+  res
+) => {
+  try {
+    const employeeId = String(
+      req.params.employeeId || ""
+    ).trim();
+
+    const jamaicaYear = Number(
+      getJamaicaToday().slice(0, 4)
+    );
+
+    const year = Number(
+      req.query.year || jamaicaYear
+    );
+
+    if (
+      !employeeId ||
+      !Number.isInteger(year) ||
+      year < 2000 ||
+      year > 2100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A valid employee ID and year are required",
+      });
+    }
+
+    const statuses =
+      req.query.includeApproved === "true"
+        ? ["Paid", "Approved"]
+        : ["Paid"];
+
+    const employee = await HREmployee.findOne({
+      employeeId,
+    })
+      .select(
+        "employeeId fullName jobTitle department branch employmentStatus payType payRate"
+      )
+      .lean();
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    const records = await Payroll.find({
+      employeeId,
+      payPeriod: {
+        $regex: `^${year}-`,
+      },
+      status: {
+        $in: statuses,
+      },
+    })
+      .sort({
+        payPeriod: 1,
+        payDate: 1,
+        createdAt: 1,
+      })
+      .lean();
+
+    const totals = addGovernmentLiabilities(
+      buildPayrollTotals(records)
+    );
+
+    return res.json({
+      success: true,
+      message:
+        "Employee year-to-date Payroll generated successfully",
+      year,
+      includedStatuses: statuses,
+      employee,
+      totals,
+      data: records,
+    });
+  } catch (error) {
+    console.error(
+      "Employee Payroll YTD error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Could not generate employee Payroll YTD",
+      error: error.message,
+    });
+  }
+};
+
 const getPayroll = async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page || 1));
@@ -1550,6 +2051,8 @@ const cancelPayroll = async (req, res) => {
 module.exports = {
   getPayroll,
   getMyPayroll,
+  getPayrollRegister,
+  getEmployeePayrollYtd,
   previewPayroll,
   createPayroll,
   approvePayroll,
