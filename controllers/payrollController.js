@@ -40,6 +40,76 @@ const normalizeBoolean = (value, fallback = false) => {
   return value === true || value === "true";
 };
 
+const getScheduledMonthlyPayDate = (payPeriod) => {
+  const normalizedPeriod = String(
+    payPeriod || ""
+  ).trim();
+
+  if (!/^\d{4}-\d{2}$/.test(normalizedPeriod)) {
+    throw new Error(
+      "Pay period must use the YYYY-MM format."
+    );
+  }
+
+  const [yearValue, monthValue] =
+    normalizedPeriod.split("-");
+
+  const year = Number(yearValue);
+  const monthIndex = Number(monthValue) - 1;
+
+  const scheduledDate = new Date(
+    Date.UTC(year, monthIndex, 25)
+  );
+
+  const scheduledDay = scheduledDate.getUTCDay();
+
+  if ([0, 1, 6].includes(scheduledDay)) {
+    while (scheduledDate.getUTCDay() !== 4) {
+      scheduledDate.setUTCDate(
+        scheduledDate.getUTCDate() - 1
+      );
+    }
+  }
+
+  return scheduledDate
+    .toISOString()
+    .slice(0, 10);
+};
+
+const getJamaicaToday = () => {
+  const parts = new Intl.DateTimeFormat(
+    "en-CA",
+    {
+      timeZone: "America/Jamaica",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }
+  ).formatToParts(new Date());
+
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== "literal") {
+      values[part.type] = part.value;
+    }
+  }
+
+    return `${values.year}-${values.month}-${values.day}`;
+};
+
+const formatDateForComparison = (value) => {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toISOString().slice(0, 10);
+};
+
 const getMinimumWageRule = (payDate) => {
   const normalizedDate = normalizePayrollDate(payDate);
   const date = new Date(`${normalizedDate}T00:00:00.000Z`);
@@ -389,9 +459,15 @@ const previewPayroll = async (req, res) => {
       user: req.user,
     });
 
-    const calculationDate = normalizePayrollDate(
-      payDate || payPeriod
-    );
+        const scheduledPayDate =
+      payFrequency === "Monthly"
+        ? getScheduledMonthlyPayDate(payPeriod)
+        : normalizePayrollDate(
+            payDate || payPeriod
+          );
+
+    const calculationDate =
+      normalizePayrollDate(scheduledPayDate);
 
     let calculation;
     let finalTargetNetPay = 0;
@@ -480,7 +556,9 @@ const previewPayroll = async (req, res) => {
       success: true,
       message: "Payroll preview calculated successfully",
       data: {
-        ...calculation,
+                ...calculation,
+        scheduledPayDate,
+        payDate: scheduledPayDate,
         compensationType:
           normalizedCompensationType,
         statutoryTreatment:
@@ -665,9 +743,15 @@ const createPayroll = async (req, res) => {
       });
     }
 
-    const calculationDate = normalizePayrollDate(
-      payDate || payPeriod
-    );
+        const scheduledPayDate =
+      finalPayFrequency === "Monthly"
+        ? getScheduledMonthlyPayDate(payPeriod)
+        : normalizePayrollDate(
+            payDate || payPeriod
+          );
+
+    const calculationDate =
+      normalizePayrollDate(scheduledPayDate);
 
     let payrollBreakdown;
     let finalTargetNetPay = 0;
@@ -1103,6 +1187,27 @@ const payPayroll = async (req, res) => {
         success: false,
         message:
           `Payroll ${payroll.payrollNumber} has already been posted`,
+      });
+    }
+
+        const scheduledPayDate = formatDateForComparison(
+      payroll.payDate
+    );
+
+        const jamaicaToday = getJamaicaToday();
+
+    if (
+      scheduledPayDate &&
+      jamaicaToday < scheduledPayDate
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          `Payroll ${payroll.payrollNumber} is scheduled for ` +
+          `${scheduledPayDate}. Pay & Post is unavailable before ` +
+          `the scheduled payment date in Jamaica.`,
+        scheduledPayDate,
+        currentDate: jamaicaToday,
       });
     }
 
