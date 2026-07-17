@@ -1,16 +1,16 @@
 const express = require("express");
 
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
+
 const router = express.Router();
 
 const canManageTaxCenter = requireAnyPermission([
   "taxCenter",
   "finance",
 ]);
-
-const {
-  protect,
-  requireAnyPermission,
-} = require("../middleware/authMiddleware");
 
 const {
   getTaxCenterDashboard,
