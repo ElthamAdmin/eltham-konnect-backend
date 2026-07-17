@@ -6,6 +6,23 @@ const Invoice = require("../models/Invoice");
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
 
+const TAX_WORKFLOW_ACTIONS = {
+  Review: {
+    fromStatus: "Calculated",
+    toStatus: "Reviewed",
+  },
+
+  Approve: {
+    fromStatus: "Reviewed",
+    toStatus: "Approved",
+  },
+
+  Submit: {
+    fromStatus: "Approved",
+    toStatus: "Submitted",
+  },
+};
+
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
@@ -702,6 +719,194 @@ const generatePayrollLiabilities = async (req, res) => {
   }
 };
 
+const transitionTaxRecordWorkflow = async (req, res) => {
+  try {
+    const {
+      action,
+      taxNumbers = [],
+      periodKey = "",
+      sourceType = "",
+      notes = "",
+      filingReference = "",
+      filingMethod = "",
+      filedDate = "",
+    } = req.body;
+
+    const workflowAction =
+      TAX_WORKFLOW_ACTIONS[String(action || "").trim()];
+
+    if (!workflowAction) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Action must be Review, Approve, or Submit.",
+      });
+    }
+
+    const normalizedTaxNumbers = Array.isArray(taxNumbers)
+      ? taxNumbers
+          .map((taxNumber) =>
+            String(taxNumber || "").trim()
+          )
+          .filter(Boolean)
+      : [];
+
+    const query = {
+      status: {
+        $ne: "Cancelled",
+      },
+    };
+
+    if (normalizedTaxNumbers.length > 0) {
+      query.taxNumber = {
+        $in: normalizedTaxNumbers,
+      };
+    } else {
+      if (!periodKey) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Provide taxNumbers or a periodKey.",
+        });
+      }
+
+      query.periodKey = String(periodKey).trim();
+
+      if (sourceType) {
+        query.sourceType = String(sourceType).trim();
+      }
+    }
+
+    const records = await TaxRecord.find(query).sort({
+      taxType: 1,
+      createdAt: 1,
+    });
+
+    if (records.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "No matching Tax Center records were found.",
+      });
+    }
+
+    if (
+      normalizedTaxNumbers.length > 0 &&
+      records.length !==
+        new Set(normalizedTaxNumbers).size
+    ) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "One or more selected tax records were not found.",
+      });
+    }
+
+    const invalidRecords = records.filter(
+      (record) =>
+        record.status !== workflowAction.fromStatus
+    );
+
+    if (invalidRecords.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${action} requires every selected record to have ` +
+          `${workflowAction.fromStatus} status.`,
+        invalidRecords: invalidRecords.map((record) => ({
+          taxNumber: record.taxNumber,
+          taxType: record.taxType,
+          currentStatus: record.status,
+          requiredStatus: workflowAction.fromStatus,
+        })),
+      });
+    }
+
+    if (
+      action === "Submit" &&
+      !String(filingReference || "").trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A filing or submission reference is required.",
+      });
+    }
+
+    const performedBy = getUserName(req.user);
+    const performedAt = new Date();
+
+    for (const record of records) {
+      const previousStatus = record.status;
+
+      record.status = workflowAction.toStatus;
+      record.updatedBy = performedBy;
+
+      if (action === "Review") {
+        record.reviewedBy = performedBy;
+        record.reviewedAt = performedAt;
+        record.reviewNotes = String(notes || "").trim();
+      }
+
+      if (action === "Approve") {
+        record.approvedBy = performedBy;
+        record.approvedAt = performedAt;
+        record.approvalNotes = String(notes || "").trim();
+      }
+
+      if (action === "Submit") {
+        record.submittedBy = performedBy;
+        record.submittedAt = performedAt;
+        record.submissionNotes = String(notes || "").trim();
+
+        record.filingReference = String(
+          filingReference || ""
+        ).trim();
+
+        record.filingMethod =
+          String(filingMethod || "").trim() ||
+          "TAJ Online";
+
+        record.filedDate =
+          String(filedDate || "").trim() ||
+          performedAt.toISOString().slice(0, 10);
+      }
+
+      record.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus: workflowAction.toStatus,
+        action,
+        notes: String(notes || "").trim(),
+        performedBy,
+        performedAt,
+      });
+
+      await record.save();
+    }
+
+    res.json({
+      success: true,
+      message:
+        `${records.length} tax record(s) moved from ` +
+        `${workflowAction.fromStatus} to ` +
+        `${workflowAction.toStatus}.`,
+      data: records,
+    });
+  } catch (error) {
+    console.error(
+      "Tax workflow transition error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not update the Tax Center workflow",
+      error: error.message,
+    });
+  }
+};
+
 const getTaxCenterDashboard = async (req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -823,4 +1028,5 @@ module.exports = {
   createTaxRecord,
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
+  transitionTaxRecordWorkflow,
 };

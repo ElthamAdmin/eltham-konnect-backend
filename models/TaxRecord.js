@@ -32,10 +32,12 @@ const BUSINESS_TYPES = [
 const RECORD_STATUSES = [
   "Draft",
   "Calculated",
-  "Ready to File",
-  "Filed",
+  "Reviewed",
+  "Approved",
+  "Submitted",
   "Partially Paid",
   "Paid",
+  "Reconciled",
   "Overdue",
   "Cancelled",
 ];
@@ -262,6 +264,113 @@ const taxRecordSchema = new mongoose.Schema(
       default: "Draft",
       index: true,
     },
+
+        reviewedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
+
+    reviewNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    approvedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    approvedAt: {
+      type: Date,
+      default: null,
+    },
+
+    approvalNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    submittedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    submittedAt: {
+      type: Date,
+      default: null,
+    },
+
+    submissionNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    reconciledBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    reconciledAt: {
+      type: Date,
+      default: null,
+    },
+
+    reconciliationNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    workflowHistory: [
+      {
+        fromStatus: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        toStatus: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+
+        action: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+
+        notes: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        performedBy: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        performedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
 
     remittances: [
       {

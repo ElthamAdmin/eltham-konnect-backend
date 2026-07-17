@@ -2,7 +2,15 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const canManageTaxCenter = requireAnyPermission([
+  "taxCenter",
+  "finance",
+]);
+
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
 const {
   getTaxCenterDashboard,
@@ -10,6 +18,7 @@ const {
   createTaxRecord,
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
+  transitionTaxRecordWorkflow,
 } = require("../controllers/taxCenterController");
 
 router.get("/dashboard", protect, getTaxCenterDashboard);
@@ -24,6 +33,13 @@ router.post(
   "/payroll-liabilities/generate",
   protect,
   generatePayrollLiabilities
+);
+
+router.post(
+  "/records/workflow",
+  protect,
+  canManageTaxCenter,
+  transitionTaxRecordWorkflow
 );
 
 module.exports = router;
