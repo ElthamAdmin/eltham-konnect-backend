@@ -227,6 +227,53 @@ const taxRecordSchema = new mongoose.Schema(
       default: null,
     },
 
+        deadlineRuleId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TaxDeadlineRule",
+      default: null,
+    },
+
+    deadlineRuleCode: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    deadlineRuleSnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
+
+    deadlineOverride: {
+      isOverridden: {
+        type: Boolean,
+        default: false,
+      },
+
+      originalDueDate: {
+        type: String,
+        default: "",
+      },
+
+      overrideReason: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      overriddenBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      overriddenAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     dueDate: {
       type: String,
       default: "",

@@ -20,6 +20,10 @@ const {
   generatePayrollLiabilities,
   transitionTaxRecordWorkflow,
   payTaxRecord,
+  getTaxDeadlineRules,
+  createTaxDeadlineRule,
+  activateTaxDeadlineRule,
+  applyTaxDeadlines,
 } = require("../controllers/taxCenterController");
 
 router.get("/dashboard", protect, getTaxCenterDashboard);
@@ -48,6 +52,34 @@ router.post(
   protect,
   canManageTaxCenter,
   payTaxRecord
+);
+
+router.get(
+  "/deadline-rules",
+  protect,
+  canManageTaxCenter,
+  getTaxDeadlineRules
+);
+
+router.post(
+  "/deadline-rules",
+  protect,
+  canManageTaxCenter,
+  createTaxDeadlineRule
+);
+
+router.post(
+  "/deadline-rules/:ruleCode/activate",
+  protect,
+  canManageTaxCenter,
+  activateTaxDeadlineRule
+);
+
+router.post(
+  "/deadlines/apply",
+  protect,
+  canManageTaxCenter,
+  applyTaxDeadlines
 );
 
 module.exports = router;

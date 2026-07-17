@@ -4,10 +4,15 @@ const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
+const TaxDeadlineRule = require("../models/TaxDeadlineRule");
 
 const {
   postTaxLiabilityPayment,
 } = require("../services/accountingService");
+
+const {
+  applyDeadlineRuleToRecord,
+} = require("../services/taxDeadlineService");
 
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
@@ -1213,6 +1218,364 @@ const payTaxRecord = async (req, res) => {
   }
 };
 
+const getTaxDeadlineRules = async (req, res) => {
+  try {
+    const {
+      taxType = "",
+      businessType = "",
+      status = "",
+    } = req.query;
+
+    const query = {};
+
+    if (taxType) query.taxType = taxType;
+    if (businessType) query.businessType = businessType;
+    if (status) query.status = status;
+
+    const rules = await TaxDeadlineRule.find(query).sort({
+      taxType: 1,
+      businessType: 1,
+      effectiveFrom: -1,
+    });
+
+    res.json({
+      success: true,
+      message:
+        "Tax deadline rules retrieved successfully",
+      totalRecords: rules.length,
+      data: rules,
+    });
+  } catch (error) {
+    console.error(
+      "Get tax deadline rules error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not retrieve tax deadline rules",
+      error: error.message,
+    });
+  }
+};
+
+const createTaxDeadlineRule = async (req, res) => {
+  try {
+    const {
+      ruleCode,
+      name,
+      taxType,
+      businessType = "All",
+      filingFrequency,
+      filingForm = "",
+      effectiveFrom,
+      effectiveTo = null,
+      dueDateRule = {},
+      reminderDays = [30, 14, 7, 3, 1],
+      sourceName = "",
+      sourceUrl = "",
+      sourceReference = "",
+      sourceVerifiedAt = null,
+      notes = "",
+    } = req.body;
+
+    if (
+      !ruleCode ||
+      !name ||
+      !taxType ||
+      !filingFrequency ||
+      !effectiveFrom
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Rule code, name, tax type, filing frequency and effective-from date are required.",
+      });
+    }
+
+    const existingRule =
+      await TaxDeadlineRule.findOne({
+        ruleCode: String(ruleCode).trim(),
+      });
+
+    if (existingRule) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `Deadline rule ${ruleCode} already exists.`,
+      });
+    }
+
+    const performedBy = getUserName(req.user);
+
+    const rule = await TaxDeadlineRule.create({
+      ruleCode: String(ruleCode).trim(),
+      name: String(name).trim(),
+      countryCode: "JM",
+      taxType,
+      businessType,
+      filingFrequency,
+      filingForm: String(filingForm).trim(),
+      effectiveFrom,
+      effectiveTo,
+      dueDateRule,
+      reminderDays,
+      sourceName: String(sourceName).trim(),
+      sourceUrl: String(sourceUrl).trim(),
+      sourceReference:
+        String(sourceReference).trim(),
+      sourceVerifiedAt,
+      notes: String(notes).trim(),
+      status: "Draft",
+      createdBy: performedBy,
+      updatedBy: performedBy,
+    });
+
+    res.status(201).json({
+      success: true,
+      message:
+        "Draft tax deadline rule created successfully",
+      data: rule,
+    });
+  } catch (error) {
+    console.error(
+      "Create tax deadline rule error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not create tax deadline rule",
+      error: error.message,
+    });
+  }
+};
+
+const activateTaxDeadlineRule = async (
+  req,
+  res
+) => {
+  try {
+    const { ruleCode } = req.params;
+
+    const rule = await TaxDeadlineRule.findOne({
+      ruleCode,
+    });
+
+    if (!rule) {
+      return res.status(404).json({
+        success: false,
+        message: "Tax deadline rule not found.",
+      });
+    }
+
+    if (rule.status === "Active") {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${rule.ruleCode} is already active.`,
+      });
+    }
+
+    if (
+      !rule.sourceName ||
+      (!rule.sourceUrl &&
+        !rule.sourceReference) ||
+      !rule.sourceVerifiedAt
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A rule cannot be activated until its source name, source URL or reference, and verification date are recorded.",
+      });
+    }
+
+    const overlappingRule =
+      await TaxDeadlineRule.findOne({
+        _id: {
+          $ne: rule._id,
+        },
+
+        countryCode: rule.countryCode,
+        taxType: rule.taxType,
+        businessType: rule.businessType,
+        filingFrequency: rule.filingFrequency,
+        status: "Active",
+
+        effectiveFrom: {
+          $lte:
+            rule.effectiveTo ||
+            new Date("9999-12-31T23:59:59.999Z"),
+        },
+
+        $or: [
+          {
+            effectiveTo: null,
+          },
+          {
+            effectiveTo: {
+              $gte: rule.effectiveFrom,
+            },
+          },
+        ],
+      });
+
+    if (overlappingRule) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${rule.ruleCode} overlaps active rule ${overlappingRule.ruleCode}.`,
+      });
+    }
+
+    rule.status = "Active";
+    rule.updatedBy = getUserName(req.user);
+
+    await rule.save();
+
+    res.json({
+      success: true,
+      message:
+        `${rule.ruleCode} activated successfully.`,
+      data: rule,
+    });
+  } catch (error) {
+    console.error(
+      "Activate tax deadline rule error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not activate tax deadline rule",
+      error: error.message,
+    });
+  }
+};
+
+const applyTaxDeadlines = async (req, res) => {
+  try {
+    const {
+      periodKey,
+      sourceType = "",
+    } = req.body;
+
+    if (!periodKey) {
+      return res.status(400).json({
+        success: false,
+        message: "Period key is required.",
+      });
+    }
+
+    const query = {
+      periodKey: String(periodKey).trim(),
+      status: {
+        $ne: "Cancelled",
+      },
+    };
+
+    if (sourceType) {
+      query.sourceType =
+        String(sourceType).trim();
+    }
+
+    const records = await TaxRecord.find(query).sort({
+      taxType: 1,
+    });
+
+    if (records.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "No matching Tax Center records were found.",
+      });
+    }
+
+    const updatedRecords = [];
+    const failedRecords = [];
+    const today =
+      new Date().toISOString().slice(0, 10);
+    const performedBy = getUserName(req.user);
+
+    for (const record of records) {
+      try {
+        await applyDeadlineRuleToRecord(record);
+
+        if (
+          record.dueDate &&
+          record.dueDate < today &&
+          Number(record.balanceDue || 0) > 0 &&
+          ![
+            "Paid",
+            "Reconciled",
+            "Cancelled",
+          ].includes(record.status)
+        ) {
+          const previousStatus = record.status;
+
+          record.status = "Overdue";
+
+          record.workflowHistory.push({
+            fromStatus: previousStatus,
+            toStatus: "Overdue",
+            action: "Deadline Assessment",
+            notes:
+              `Outstanding obligation became overdue on ${record.dueDate}.`,
+            performedBy,
+            performedAt: new Date(),
+          });
+        }
+
+        record.updatedBy = performedBy;
+        await record.save();
+
+        updatedRecords.push(record);
+      } catch (error) {
+        failedRecords.push({
+          taxNumber: record.taxNumber,
+          taxType: record.taxType,
+          message: error.message,
+        });
+      }
+    }
+
+    res.status(
+      failedRecords.length > 0 ? 207 : 200
+    ).json({
+      success: failedRecords.length === 0,
+
+      message:
+        failedRecords.length === 0
+          ? "Tax deadlines applied successfully."
+          : "Tax deadline application completed with missing or invalid rules.",
+
+      summary: {
+        requestedRecords: records.length,
+        updatedRecords: updatedRecords.length,
+        failedRecords: failedRecords.length,
+      },
+
+      data: updatedRecords,
+      errors: failedRecords,
+    });
+  } catch (error) {
+    console.error(
+      "Apply tax deadlines error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not apply Tax Center deadlines",
+      error: error.message,
+    });
+  }
+};
+
 const getTaxCenterDashboard = async (req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -1336,4 +1699,8 @@ module.exports = {
   generatePayrollLiabilities,
   transitionTaxRecordWorkflow,
   payTaxRecord,
+  getTaxDeadlineRules,
+  createTaxDeadlineRule,
+  activateTaxDeadlineRule,
+  applyTaxDeadlines,
 };
