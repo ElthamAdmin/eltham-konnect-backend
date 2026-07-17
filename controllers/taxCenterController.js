@@ -3,38 +3,309 @@ const Payroll = require("../models/Payroll");
 const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 
+const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
+const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
+
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
+const getUserName = (user) =>
+  user?.fullName || user?.name || user?.email || "System User";
+
+const getPeriodDates = (payPeriod) => {
+  if (!PAY_PERIOD_PATTERN.test(String(payPeriod || ""))) {
+    throw new Error("Pay period must use YYYY-MM format.");
+  }
+
+  const [year, month] = String(payPeriod).split("-").map(Number);
+
+  const periodStart = `${payPeriod}-01`;
+  const periodEnd = new Date(Date.UTC(year, month, 0))
+    .toISOString()
+    .slice(0, 10);
+
+  return {
+    periodKey: payPeriod,
+    periodStart,
+    periodEnd,
+  };
+};
+
+const getTaxCategory = (taxType) => {
+  if (
+    [
+      "PAYE",
+      "NIS",
+      "NHT",
+      "Education Tax",
+      "HEART",
+      "Pension",
+    ].includes(taxType)
+  ) {
+    return "Payroll Statutory";
+  }
+
+  if (taxType === "GCT") {
+    return "Consumption Tax";
+  }
+
+  if (
+    [
+      "Income Tax",
+      "Individual Income Tax",
+      "Company Tax",
+      "Company Income Tax",
+    ].includes(taxType)
+  ) {
+    return "Income Tax";
+  }
+
+  return "Other";
+};
+
+const getPayrollQuery = (payPeriod = "") => {
+  const query = {
+    status: {
+      $in: ACTIVE_PAYROLL_STATUSES,
+    },
+  };
+
+  if (payPeriod) {
+    query.payPeriod = payPeriod;
+  }
+
+  return query;
+};
+
+const calculatePayrollLiabilities = (payrolls = []) => {
+  const totals = payrolls.reduce(
+    (sum, payroll) => {
+      sum.grossPay += Number(payroll.grossPay || 0);
+
+      sum.nisEmployee += Number(payroll.nisEmployee || 0);
+      sum.nisEmployer += Number(payroll.nisEmployer || 0);
+
+      sum.nhtEmployee += Number(payroll.nhtEmployee || 0);
+      sum.nhtEmployer += Number(payroll.nhtEmployer || 0);
+
+      sum.educationTaxEmployee += Number(payroll.educationTax || 0);
+      sum.educationTaxEmployer += Number(
+        payroll.educationTaxEmployer || 0
+      );
+
+      sum.paye += Number(payroll.incomeTax || 0);
+      sum.heartEmployer += Number(payroll.heartEmployer || 0);
+
+      sum.pensionEmployee += Number(payroll.pensionEmployee || 0);
+      sum.pensionEmployer += Number(payroll.pensionEmployer || 0);
+
+      sum.totalEmployeeDeductions += Number(
+        payroll.totalDeductions || 0
+      );
+
+      sum.totalEmployerContributions += Number(
+        payroll.totalEmployerContributions || 0
+      );
+
+      sum.netPayBeforeAdvance += Number(
+        payroll.netPayBeforeAdvance ??
+          Number(payroll.grossPay || 0) -
+            Number(payroll.totalDeductions || 0)
+      );
+
+      sum.advanceRecovery += Number(payroll.advanceRecovery || 0);
+      sum.netPay += Number(payroll.netPay || 0);
+      sum.totalPayrollCost += Number(
+        payroll.totalPayrollCost ||
+          Number(payroll.grossPay || 0) +
+            Number(payroll.totalEmployerContributions || 0)
+      );
+
+      return sum;
+    },
+    {
+      grossPay: 0,
+
+      nisEmployee: 0,
+      nisEmployer: 0,
+
+      nhtEmployee: 0,
+      nhtEmployer: 0,
+
+      educationTaxEmployee: 0,
+      educationTaxEmployer: 0,
+
+      paye: 0,
+      heartEmployer: 0,
+
+      pensionEmployee: 0,
+      pensionEmployer: 0,
+
+      totalEmployeeDeductions: 0,
+      totalEmployerContributions: 0,
+
+      netPayBeforeAdvance: 0,
+      advanceRecovery: 0,
+      netPay: 0,
+      totalPayrollCost: 0,
+    }
+  );
+
+  Object.keys(totals).forEach((key) => {
+    totals[key] = roundMoney(totals[key]);
+  });
+
+  totals.nisPayable = roundMoney(
+    totals.nisEmployee + totals.nisEmployer
+  );
+
+  totals.nhtPayable = roundMoney(
+    totals.nhtEmployee + totals.nhtEmployer
+  );
+
+  totals.educationTaxPayable = roundMoney(
+    totals.educationTaxEmployee +
+      totals.educationTaxEmployer
+  );
+
+  totals.payePayable = roundMoney(totals.paye);
+
+  totals.heartPayable = roundMoney(totals.heartEmployer);
+
+  totals.pensionPayable = roundMoney(
+    totals.pensionEmployee + totals.pensionEmployer
+  );
+
+  totals.totalGovernmentLiability = roundMoney(
+    totals.nisPayable +
+      totals.nhtPayable +
+      totals.educationTaxPayable +
+      totals.payePayable +
+      totals.heartPayable +
+      totals.pensionPayable
+  );
+
+  return totals;
+};
+
+const buildLiabilityBreakdown = ({
+  taxType,
+  employeePortion,
+  employerPortion,
+}) => {
+  const breakdown = {
+    paye: 0,
+
+    nisEmployee: 0,
+    nisEmployer: 0,
+
+    nhtEmployee: 0,
+    nhtEmployer: 0,
+
+    educationTaxEmployee: 0,
+    educationTaxEmployer: 0,
+
+    heartEmployer: 0,
+
+    pensionEmployee: 0,
+    pensionEmployer: 0,
+
+    gctOutputTax: 0,
+    gctInputTaxCredit: 0,
+
+    individualIncomeTax: 0,
+    companyIncomeTax: 0,
+
+    otherAmount: 0,
+  };
+
+  if (taxType === "NIS") {
+    breakdown.nisEmployee = employeePortion;
+    breakdown.nisEmployer = employerPortion;
+  }
+
+  if (taxType === "NHT") {
+    breakdown.nhtEmployee = employeePortion;
+    breakdown.nhtEmployer = employerPortion;
+  }
+
+  if (taxType === "Education Tax") {
+    breakdown.educationTaxEmployee = employeePortion;
+    breakdown.educationTaxEmployer = employerPortion;
+  }
+
+  if (taxType === "PAYE") {
+    breakdown.paye = employeePortion;
+  }
+
+  if (taxType === "HEART") {
+    breakdown.heartEmployer = employerPortion;
+  }
+
+  if (taxType === "Pension") {
+    breakdown.pensionEmployee = employeePortion;
+    breakdown.pensionEmployer = employerPortion;
+  }
+
+  return breakdown;
+};
+
 const getTaxRecords = async (req, res) => {
   try {
-    const records = await TaxRecord.find().sort({
+    const {
+      taxType = "",
+      taxCategory = "",
+      status = "",
+      periodKey = "",
+      sourceType = "",
+    } = req.query;
+
+    const query = {};
+
+    if (taxType) query.taxType = taxType;
+    if (taxCategory) query.taxCategory = taxCategory;
+    if (status) query.status = status;
+    if (periodKey) query.periodKey = periodKey;
+    if (sourceType) query.sourceType = sourceType;
+
+    const records = await TaxRecord.find(query).sort({
+      periodStart: -1,
+      taxType: 1,
       createdAt: -1,
     });
 
-    const totalTaxDue = records.reduce(
-      (sum, item) => sum + Number(item.taxDue || 0),
-      0
+    const summary = records.reduce(
+      (sum, item) => {
+        sum.totalTaxDue += Number(item.taxDue || 0);
+        sum.totalPaid += Number(item.amountPaid || 0);
+        sum.totalBalance += Number(item.balanceDue || 0);
+
+        if (
+          item.status !== "Paid" &&
+          item.status !== "Reconciled" &&
+          item.status !== "Cancelled"
+        ) {
+          sum.openRecords += 1;
+        }
+
+        return sum;
+      },
+      {
+        totalRecords: records.length,
+        openRecords: 0,
+        totalTaxDue: 0,
+        totalPaid: 0,
+        totalBalance: 0,
+      }
     );
 
-    const totalPaid = records.reduce(
-      (sum, item) => sum + Number(item.amountPaid || 0),
-      0
-    );
-
-    const totalBalance = records.reduce(
-      (sum, item) => sum + Number(item.balanceDue || 0),
-      0
-    );
+    summary.totalTaxDue = roundMoney(summary.totalTaxDue);
+    summary.totalPaid = roundMoney(summary.totalPaid);
+    summary.totalBalance = roundMoney(summary.totalBalance);
 
     res.json({
       success: true,
-      summary: {
-        totalRecords: records.length,
-        totalTaxDue,
-        totalPaid,
-        totalBalance,
-      },
+      summary,
       data: records,
     });
   } catch (error) {
@@ -56,27 +327,57 @@ const createTaxRecord = async (req, res) => {
       periodEnd,
       taxableAmount,
       taxRate,
+      taxDue: suppliedTaxDue,
       dueDate,
       notes,
     } = req.body;
 
-    const taxDue = roundMoney(
-      Number(taxableAmount || 0) * (Number(taxRate || 0) / 100)
-    );
+    if (!taxType || !periodStart || !periodEnd) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Tax type, period start and period end are required.",
+      });
+    }
+
+    if (periodStart > periodEnd) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Period start cannot be later than period end.",
+      });
+    }
+
+    const calculatedTaxDue =
+      suppliedTaxDue !== undefined &&
+      suppliedTaxDue !== null &&
+      suppliedTaxDue !== ""
+        ? roundMoney(suppliedTaxDue)
+        : roundMoney(
+            Number(taxableAmount || 0) *
+              (Number(taxRate || 0) / 100)
+          );
 
     const record = await TaxRecord.create({
       taxNumber: `TAX-${Date.now()}`,
       taxType,
+      taxCategory: getTaxCategory(taxType),
+      periodKey: String(periodStart).slice(0, 7),
       periodStart,
       periodEnd,
+      filingFrequency: "Monthly",
+      sourceType: "Manual",
+      sourceModule: "Tax Center",
       taxableAmount: roundMoney(taxableAmount),
       taxRate: Number(taxRate || 0),
-      taxDue,
+      taxDue: calculatedTaxDue,
       amountPaid: 0,
-      balanceDue: taxDue,
-      dueDate,
+      balanceDue: calculatedTaxDue,
+      dueDate: dueDate || "",
       status: "Draft",
-      notes,
+      notes: notes || "",
+      createdBy: getUserName(req.user),
+      updatedBy: getUserName(req.user),
     });
 
     res.status(201).json({
@@ -97,33 +398,85 @@ const createTaxRecord = async (req, res) => {
 
 const generatePayrollTaxSummary = async (req, res) => {
   try {
-    const payrolls = await Payroll.find();
+    const payPeriod = String(req.query.payPeriod || "").trim();
 
-    const summary = payrolls.reduce(
-      (sum, item) => ({
-        grossPay: sum.grossPay + Number(item.grossPay || 0),
-        nisEmployee: sum.nisEmployee + Number(item.nisEmployee || 0),
-        nhtEmployee: sum.nhtEmployee + Number(item.nhtEmployee || 0),
-        educationTax: sum.educationTax + Number(item.educationTax || 0),
-        incomeTax: sum.incomeTax + Number(item.incomeTax || 0),
-        totalDeductions:
-          sum.totalDeductions + Number(item.totalDeductions || 0),
-        netPay: sum.netPay + Number(item.netPay || 0),
-      }),
-      {
-        grossPay: 0,
-        nisEmployee: 0,
-        nhtEmployee: 0,
-        educationTax: 0,
-        incomeTax: 0,
-        totalDeductions: 0,
-        netPay: 0,
-      }
+    if (payPeriod && !PAY_PERIOD_PATTERN.test(payPeriod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Pay period must use YYYY-MM format.",
+      });
+    }
+
+    const payrolls = await Payroll.find(
+      getPayrollQuery(payPeriod)
+    ).sort({
+      payPeriod: 1,
+      employeeName: 1,
+    });
+
+    const summary = calculatePayrollLiabilities(payrolls);
+
+    const periodQuery = {
+      sourceType: "Payroll",
+      taxCategory: "Payroll Statutory",
+      status: {
+        $ne: "Cancelled",
+      },
+    };
+
+    if (payPeriod) {
+      periodQuery.periodKey = payPeriod;
+    }
+
+    const taxRecords = await TaxRecord.find(periodQuery);
+
+    const recordedLiability = roundMoney(
+      taxRecords.reduce(
+        (sum, record) => sum + Number(record.taxDue || 0),
+        0
+      )
+    );
+
+    const amountPaid = roundMoney(
+      taxRecords.reduce(
+        (sum, record) => sum + Number(record.amountPaid || 0),
+        0
+      )
+    );
+
+    const balanceDue = roundMoney(
+      taxRecords.reduce(
+        (sum, record) => sum + Number(record.balanceDue || 0),
+        0
+      )
+    );
+
+    const reconciliationDifference = roundMoney(
+      summary.totalGovernmentLiability - recordedLiability
     );
 
     res.json({
       success: true,
-      data: summary,
+      message:
+        "Payroll statutory summary generated successfully",
+      filters: {
+        payPeriod,
+        payrollStatuses: ACTIVE_PAYROLL_STATUSES,
+      },
+      data: {
+        ...summary,
+        payrollRecordCount: payrolls.length,
+        payrollNumbers: payrolls.map(
+          (payroll) => payroll.payrollNumber
+        ),
+        taxCenterRecordedLiability: recordedLiability,
+        taxCenterAmountPaid: amountPaid,
+        taxCenterBalanceDue: balanceDue,
+        reconciliationDifference,
+        reconciled:
+          payrolls.length > 0 &&
+          reconciliationDifference === 0,
+      },
     });
   } catch (error) {
     console.error("Payroll tax summary error:", error);
@@ -136,32 +489,298 @@ const generatePayrollTaxSummary = async (req, res) => {
   }
 };
 
+const generatePayrollLiabilities = async (req, res) => {
+  try {
+    const payPeriod = String(
+      req.body.payPeriod || ""
+    ).trim();
+
+    if (!PAY_PERIOD_PATTERN.test(payPeriod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Pay period must use YYYY-MM format.",
+      });
+    }
+
+    const payrolls = await Payroll.find(
+      getPayrollQuery(payPeriod)
+    ).sort({
+      employeeName: 1,
+      payrollNumber: 1,
+    });
+
+    if (payrolls.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message:
+          `No Approved or Paid payroll records were found for ${payPeriod}.`,
+      });
+    }
+
+    const existingRecords = await TaxRecord.find({
+      sourceType: "Payroll",
+      sourceReference: `PAYROLL-${payPeriod}`,
+      status: {
+        $ne: "Cancelled",
+      },
+    });
+
+    if (existingRecords.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `Payroll statutory liabilities have already been generated for ${payPeriod}.`,
+        data: existingRecords,
+      });
+    }
+
+    const period = getPeriodDates(payPeriod);
+    const totals = calculatePayrollLiabilities(payrolls);
+
+    const payrollNumbers = payrolls.map(
+      (payroll) => payroll.payrollNumber
+    );
+
+    const ruleCodes = [
+      ...new Set(
+        payrolls
+          .map((payroll) => payroll.statutoryRuleCode)
+          .filter(Boolean)
+      ),
+    ];
+
+    const calculationRuleCode =
+      ruleCodes.length === 1
+        ? ruleCodes[0]
+        : ruleCodes.length > 1
+          ? "MULTIPLE-RULES"
+          : "";
+
+    const commonRecord = {
+      taxCategory: "Payroll Statutory",
+      businessType: "Sole Proprietorship",
+      businessName: "Eltham Konnect",
+
+      periodKey: period.periodKey,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
+      filingFrequency: "Monthly",
+
+      sourceType: "Payroll",
+      sourceModule: "Payroll",
+      sourceReference: `PAYROLL-${payPeriod}`,
+
+      payrollNumbers,
+      payrollRecordCount: payrolls.length,
+
+      taxableAmount: totals.grossPay,
+      taxRate: 0,
+
+      amountPaid: 0,
+      adjustmentAmount: 0,
+      penaltyAmount: 0,
+      interestAmount: 0,
+
+      calculationRuleCode,
+
+      calculationSnapshot: {
+        payPeriod,
+        generatedAt: new Date(),
+        payrollStatuses: ACTIVE_PAYROLL_STATUSES,
+        payrollNumbers,
+        ruleCodes,
+        totals,
+      },
+
+      status: "Calculated",
+      notes:
+        `Generated from ${payrolls.length} Approved or Paid payroll record(s) for ${payPeriod}.`,
+
+      createdBy: getUserName(req.user),
+      updatedBy: getUserName(req.user),
+    };
+
+    const definitions = [
+      {
+        taxType: "NIS",
+        employeePortion: totals.nisEmployee,
+        employerPortion: totals.nisEmployer,
+      },
+      {
+        taxType: "NHT",
+        employeePortion: totals.nhtEmployee,
+        employerPortion: totals.nhtEmployer,
+      },
+      {
+        taxType: "Education Tax",
+        employeePortion: totals.educationTaxEmployee,
+        employerPortion: totals.educationTaxEmployer,
+      },
+      {
+        taxType: "PAYE",
+        employeePortion: totals.paye,
+        employerPortion: 0,
+      },
+      {
+        taxType: "HEART",
+        employeePortion: 0,
+        employerPortion: totals.heartEmployer,
+      },
+      {
+        taxType: "Pension",
+        employeePortion: totals.pensionEmployee,
+        employerPortion: totals.pensionEmployer,
+      },
+    ];
+
+    const timestamp = Date.now();
+
+    const recordsToCreate = definitions.map(
+      (definition, index) => {
+        const employeePortion = roundMoney(
+          definition.employeePortion
+        );
+
+        const employerPortion = roundMoney(
+          definition.employerPortion
+        );
+
+        const taxDue = roundMoney(
+          employeePortion + employerPortion
+        );
+
+        return {
+          ...commonRecord,
+
+          taxNumber:
+            `TAX-PAY-${payPeriod.replace("-", "")}-` +
+            `${String(index + 1).padStart(2, "0")}-${timestamp}`,
+
+          taxType: definition.taxType,
+          employeePortion,
+          employerPortion,
+          taxDue,
+          balanceDue: taxDue,
+
+          liabilityBreakdown: buildLiabilityBreakdown({
+            taxType: definition.taxType,
+            employeePortion,
+            employerPortion,
+          }),
+        };
+      }
+    );
+
+    const createdRecords = await TaxRecord.insertMany(
+      recordsToCreate
+    );
+
+    res.status(201).json({
+      success: true,
+      message:
+        `Payroll statutory liabilities generated successfully for ${payPeriod}.`,
+      summary: {
+        payPeriod,
+        payrollRecordCount: payrolls.length,
+        liabilityRecordCount: createdRecords.length,
+        totals,
+      },
+      data: createdRecords,
+    });
+  } catch (error) {
+    console.error(
+      "Payroll liability generation error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not generate payroll statutory liabilities",
+      error: error.message,
+    });
+  }
+};
+
 const getTaxCenterDashboard = async (req, res) => {
   try {
-    const [taxRecords, payrolls, expenses, invoices] = await Promise.all([
-      TaxRecord.find(),
-      Payroll.find(),
+    const today = new Date().toISOString().slice(0, 10);
+
+    const [
+      taxRecords,
+      payrolls,
+      expenses,
+      invoices,
+    ] = await Promise.all([
+      TaxRecord.find({
+        status: {
+          $ne: "Cancelled",
+        },
+      }),
+      Payroll.find(getPayrollQuery()),
       Expense.find(),
       Invoice.find(),
     ]);
 
-    const totalRevenue = invoices
-      .filter((invoice) => invoice.status === "Paid")
-      .reduce((sum, invoice) => sum + Number(invoice.finalTotal || 0), 0);
-
-    const totalExpenses = expenses.reduce(
-      (sum, expense) => sum + Number(expense.amount || 0),
-      0
+    const totalRevenue = roundMoney(
+      invoices
+        .filter((invoice) => invoice.status === "Paid")
+        .reduce(
+          (sum, invoice) =>
+            sum + Number(invoice.finalTotal || 0),
+          0
+        )
     );
 
-    const payrollDeductions = payrolls.reduce(
-      (sum, payroll) => sum + Number(payroll.totalDeductions || 0),
-      0
+    const totalExpenses = roundMoney(
+      expenses.reduce(
+        (sum, expense) =>
+          sum + Number(expense.amount || 0),
+        0
+      )
     );
 
-    const taxBalanceDue = taxRecords.reduce(
-      (sum, record) => sum + Number(record.balanceDue || 0),
-      0
+    const payrollLiabilities =
+      calculatePayrollLiabilities(payrolls);
+
+    const totalTaxDue = roundMoney(
+      taxRecords.reduce(
+        (sum, record) => sum + Number(record.taxDue || 0),
+        0
+      )
+    );
+
+    const totalPaid = roundMoney(
+      taxRecords.reduce(
+        (sum, record) =>
+          sum + Number(record.amountPaid || 0),
+        0
+      )
+    );
+
+    const currentLiabilities = roundMoney(
+      taxRecords.reduce(
+        (sum, record) =>
+          sum + Number(record.balanceDue || 0),
+        0
+      )
+    );
+
+    const overdueRecords = taxRecords.filter(
+      (record) =>
+        record.dueDate &&
+        record.dueDate < today &&
+        Number(record.balanceDue || 0) > 0 &&
+        record.status !== "Paid" &&
+        record.status !== "Reconciled"
+    );
+
+    const overdueAmount = roundMoney(
+      overdueRecords.reduce(
+        (sum, record) =>
+          sum + Number(record.balanceDue || 0),
+        0
+      )
     );
 
     res.json({
@@ -169,9 +788,22 @@ const getTaxCenterDashboard = async (req, res) => {
       data: {
         totalRevenue,
         totalExpenses,
-        payrollDeductions,
-        taxBalanceDue,
+
+        payrollDeductions:
+          payrollLiabilities.totalEmployeeDeductions,
+
+        payrollGovernmentLiability:
+          payrollLiabilities.totalGovernmentLiability,
+
+        totalTaxDue,
+        totalPaid,
+        currentLiabilities,
+
+        taxBalanceDue: currentLiabilities,
         taxRecordCount: taxRecords.length,
+
+        overdueObligationCount: overdueRecords.length,
+        overdueAmount,
       },
     });
   } catch (error) {
@@ -190,4 +822,5 @@ module.exports = {
   getTaxRecords,
   createTaxRecord,
   generatePayrollTaxSummary,
+  generatePayrollLiabilities,
 };
