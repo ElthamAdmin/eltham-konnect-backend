@@ -409,7 +409,7 @@ taxRecordSchema.index({
   sourceReference: 1,
 });
 
-taxRecordSchema.pre("validate", function setCalculatedValues(next) {
+taxRecordSchema.pre("validate", function setCalculatedValues() {
   const employeePortion = Number(this.employeePortion || 0);
   const employerPortion = Number(this.employerPortion || 0);
   const adjustmentAmount = Number(this.adjustmentAmount || 0);
@@ -434,14 +434,15 @@ taxRecordSchema.pre("validate", function setCalculatedValues(next) {
     );
   }
 
-  this.amountPaid = Math.max(0, Number(this.amountPaid || 0));
+  this.amountPaid = Math.max(
+    0,
+    Number(this.amountPaid || 0)
+  );
 
   this.balanceDue = Math.max(
     0,
     Number(this.taxDue || 0) - this.amountPaid
   );
-
-  next();
 });
 
 module.exports = mongoose.model("TaxRecord", taxRecordSchema);
