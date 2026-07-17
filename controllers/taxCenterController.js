@@ -5,6 +5,7 @@ const Invoice = require("../models/Invoice");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const TaxDeadlineRule = require("../models/TaxDeadlineRule");
+const TaxRegistrationProfile = require("../models/TaxRegistrationProfile");
 
 const {
   postTaxLiabilityPayment,
@@ -13,6 +14,10 @@ const {
 const {
   applyDeadlineRuleToRecord,
 } = require("../services/taxDeadlineService");
+
+const {
+  generateGctTurnoverMonitor,
+} = require("../services/gctMonitoringService");
 
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
@@ -1576,6 +1581,316 @@ const applyTaxDeadlines = async (req, res) => {
   }
 };
 
+const getGctRegistrationProfiles = async (req, res) => {
+  try {
+    const {
+      entityCode = "",
+      registrationStatus = "",
+      status = "",
+    } = req.query;
+
+    const query = {
+      taxType: "GCT",
+    };
+
+    if (entityCode) {
+      query.entityCode = String(entityCode).trim();
+    }
+
+    if (registrationStatus) {
+      query.registrationStatus =
+        String(registrationStatus).trim();
+    }
+
+    if (status) {
+      query.status = String(status).trim();
+    }
+
+    const profiles = await TaxRegistrationProfile.find(query).sort({
+      effectiveFrom: -1,
+      createdAt: -1,
+    });
+
+    res.json({
+      success: true,
+      message: "GCT registration profiles retrieved successfully",
+      totalRecords: profiles.length,
+      data: profiles,
+    });
+  } catch (error) {
+    console.error("Get GCT registration profiles error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not retrieve GCT registration profiles",
+      error: error.message,
+    });
+  }
+};
+
+const createGctRegistrationProfile = async (req, res) => {
+  try {
+    const {
+      registrationCode,
+      entityCode = "EK-SP-2026",
+      entityName = "Eltham Konnect",
+      businessType = "Sole Proprietorship",
+      registrationStatus = "Not Registered",
+      registrationNumber = "",
+      trn = "",
+      effectiveFrom,
+      effectiveTo = null,
+      thresholdAmount,
+      thresholdCurrency = "JMD",
+      monitoringMonths = 12,
+      standardRate = 0,
+      thresholdRuleEffectiveFrom = null,
+      thresholdRuleEffectiveTo = null,
+      sourceName = "",
+      sourceUrl = "",
+      sourceReference = "",
+      sourceVerifiedAt = null,
+      notes = "",
+    } = req.body;
+
+    if (!registrationCode || !effectiveFrom) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Registration code and effective-from date are required.",
+      });
+    }
+
+    if (
+      thresholdAmount === undefined ||
+      thresholdAmount === null ||
+      thresholdAmount === "" ||
+      Number(thresholdAmount) <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A valid GCT registration threshold is required.",
+      });
+    }
+
+    const normalizedRegistrationCode =
+      String(registrationCode).trim();
+
+    const existingProfile =
+      await TaxRegistrationProfile.findOne({
+        registrationCode: normalizedRegistrationCode,
+      });
+
+    if (existingProfile) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `GCT registration profile ${normalizedRegistrationCode} already exists.`,
+      });
+    }
+
+    const performedBy = getUserName(req.user);
+
+    const profile = await TaxRegistrationProfile.create({
+      registrationCode: normalizedRegistrationCode,
+
+      entityCode: String(entityCode).trim(),
+      entityName: String(entityName).trim(),
+      businessType,
+
+      countryCode: "JM",
+      taxType: "GCT",
+
+      registrationStatus,
+      registrationNumber:
+        String(registrationNumber).trim(),
+      trn: String(trn).trim(),
+
+      effectiveFrom,
+      effectiveTo,
+
+      thresholdAmount: roundMoney(thresholdAmount),
+      thresholdCurrency,
+      monitoringMonths: Number(monitoringMonths || 12),
+
+      standardRate: Number(standardRate || 0),
+
+      thresholdRuleEffectiveFrom,
+      thresholdRuleEffectiveTo,
+
+      sourceName: String(sourceName).trim(),
+      sourceUrl: String(sourceUrl).trim(),
+      sourceReference:
+        String(sourceReference).trim(),
+      sourceVerifiedAt,
+
+      notes: String(notes).trim(),
+
+      status: "Draft",
+      createdBy: performedBy,
+      updatedBy: performedBy,
+    });
+
+    res.status(201).json({
+      success: true,
+      message:
+        "Draft GCT registration profile created successfully",
+      data: profile,
+    });
+  } catch (error) {
+    console.error("Create GCT registration profile error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not create GCT registration profile",
+      error: error.message,
+    });
+  }
+};
+
+const activateGctRegistrationProfile = async (req, res) => {
+  try {
+    const { registrationCode } = req.params;
+
+    const profile = await TaxRegistrationProfile.findOne({
+      registrationCode,
+      taxType: "GCT",
+    });
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "GCT registration profile not found.",
+      });
+    }
+
+    if (profile.status === "Active") {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${profile.registrationCode} is already active.`,
+      });
+    }
+
+    if (
+      !profile.sourceName ||
+      (!profile.sourceUrl &&
+        !profile.sourceReference) ||
+      !profile.sourceVerifiedAt
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The GCT profile cannot be activated until its official source and verification date are recorded.",
+      });
+    }
+
+    if (
+      profile.registrationStatus === "Registered" &&
+      !profile.registrationNumber
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A GCT registration number is required for a Registered profile.",
+      });
+    }
+
+    const overlappingProfile =
+      await TaxRegistrationProfile.findOne({
+        _id: {
+          $ne: profile._id,
+        },
+
+        entityCode: profile.entityCode,
+        taxType: "GCT",
+        status: "Active",
+
+        effectiveFrom: {
+          $lte:
+            profile.effectiveTo ||
+            new Date("9999-12-31T23:59:59.999Z"),
+        },
+
+        $or: [
+          {
+            effectiveTo: null,
+          },
+          {
+            effectiveTo: {
+              $gte: profile.effectiveFrom,
+            },
+          },
+        ],
+      });
+
+    if (overlappingProfile) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${profile.registrationCode} overlaps active profile ${overlappingProfile.registrationCode}.`,
+      });
+    }
+
+    profile.status = "Active";
+    profile.updatedBy = getUserName(req.user);
+
+    await profile.save();
+
+    res.json({
+      success: true,
+      message:
+        `${profile.registrationCode} activated successfully.`,
+      data: profile,
+    });
+  } catch (error) {
+    console.error("Activate GCT registration profile error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Could not activate GCT registration profile",
+      error: error.message,
+    });
+  }
+};
+
+const getGctTurnoverMonitor = async (req, res) => {
+  try {
+    const entityCode = String(
+      req.query.entityCode || "EK-SP-2026"
+    ).trim();
+
+    const asOfDate = String(
+      req.query.asOfDate || ""
+    ).trim();
+
+    const monitor = await generateGctTurnoverMonitor({
+      entityCode,
+      asOfDate: asOfDate || new Date(),
+    });
+
+    res.json({
+      success: true,
+      message: "GCT turnover monitor generated successfully",
+      data: monitor,
+    });
+  } catch (error) {
+    console.error("GCT turnover monitor error:", error);
+
+    const notFound =
+      String(error.message || "").includes(
+        "registration profile"
+      );
+
+    res.status(notFound ? 404 : 500).json({
+      success: false,
+      message: "Could not generate the GCT turnover monitor",
+      error: error.message,
+    });
+  }
+};
+
 const getTaxCenterDashboard = async (req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -1810,12 +2125,20 @@ module.exports = {
   getTaxCenterDashboard,
   getTaxRecords,
   createTaxRecord,
+
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
+
   transitionTaxRecordWorkflow,
   payTaxRecord,
+
   getTaxDeadlineRules,
   createTaxDeadlineRule,
   activateTaxDeadlineRule,
   applyTaxDeadlines,
+
+  getGctRegistrationProfiles,
+  createGctRegistrationProfile,
+  activateGctRegistrationProfile,
+  getGctTurnoverMonitor,
 };

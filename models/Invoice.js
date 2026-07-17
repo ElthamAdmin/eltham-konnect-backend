@@ -176,6 +176,195 @@ const InvoiceSchema = new mongoose.Schema({
     default: 0,
   },
 
+    businessEntitySnapshot: {
+    entityCode: {
+      type: String,
+      default: "EK-SP-2026",
+      trim: true,
+    },
+
+    legalName: {
+      type: String,
+      default: "Eltham Konnect",
+      trim: true,
+    },
+
+    businessType: {
+      type: String,
+      enum: [
+        "Sole Proprietorship",
+        "Limited Liability Company",
+        "Partnership",
+      ],
+      default: "Sole Proprietorship",
+    },
+
+    registrationNumber: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    trn: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    effectiveFrom: {
+      type: String,
+      default: "",
+    },
+  },
+
+  gctTreatment: {
+    registrationStatus: {
+      type: String,
+      enum: [
+        "Not Registered",
+        "Registered",
+        "Suspended",
+        "Deregistered",
+      ],
+      default: "Not Registered",
+      index: true,
+    },
+
+    registrationNumber: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    registrationEffectiveDate: {
+      type: String,
+      default: "",
+    },
+
+    treatment: {
+      type: String,
+      enum: [
+        "Not Registered",
+        "Taxable Supply",
+        "Zero-Rated Supply",
+        "Exempt Supply",
+        "Outside Scope",
+        "Mixed Supply",
+      ],
+      default: "Not Registered",
+      index: true,
+    },
+
+    rate: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    taxableAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    outputGct: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    reason: {
+      type: String,
+      default:
+        "Business is not currently registered for GCT.",
+      trim: true,
+    },
+
+    ruleCode: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    calculatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+
+  turnoverClassification: {
+    grossInvoiceAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    customerPurchaseRecovery: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    serviceRevenue: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    potentiallyTaxableTurnover: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    exemptTurnover: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    zeroRatedTurnover: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    outsideScopeAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    classificationStatus: {
+      type: String,
+      enum: [
+        "Not Classified",
+        "Automatically Classified",
+        "Reviewed",
+        "Adjusted",
+      ],
+      default: "Not Classified",
+      index: true,
+    },
+
+    classificationNotes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    classifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    classifiedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+  },
+
   gct: {
     type: Number,
     default: 0,

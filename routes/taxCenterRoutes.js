@@ -16,14 +16,22 @@ const {
   getTaxCenterDashboard,
   getTaxRecords,
   createTaxRecord,
+
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
+
   transitionTaxRecordWorkflow,
   payTaxRecord,
+
   getTaxDeadlineRules,
   createTaxDeadlineRule,
   activateTaxDeadlineRule,
   applyTaxDeadlines,
+
+  getGctRegistrationProfiles,
+  createGctRegistrationProfile,
+  activateGctRegistrationProfile,
+  getGctTurnoverMonitor,
 } = require("../controllers/taxCenterController");
 
 router.get("/dashboard", protect, getTaxCenterDashboard);
@@ -80,6 +88,34 @@ router.post(
   protect,
   canManageTaxCenter,
   applyTaxDeadlines
+);
+
+router.get(
+  "/gct/profiles",
+  protect,
+  canManageTaxCenter,
+  getGctRegistrationProfiles
+);
+
+router.post(
+  "/gct/profiles",
+  protect,
+  canManageTaxCenter,
+  createGctRegistrationProfile
+);
+
+router.post(
+  "/gct/profiles/:registrationCode/activate",
+  protect,
+  canManageTaxCenter,
+  activateGctRegistrationProfile
+);
+
+router.get(
+  "/gct/turnover-monitor",
+  protect,
+  canManageTaxCenter,
+  getGctTurnoverMonitor
 );
 
 module.exports = router;
