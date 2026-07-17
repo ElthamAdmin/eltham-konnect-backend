@@ -19,6 +19,7 @@ const {
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
   transitionTaxRecordWorkflow,
+  payTaxRecord,
 } = require("../controllers/taxCenterController");
 
 router.get("/dashboard", protect, getTaxCenterDashboard);
@@ -40,6 +41,13 @@ router.post(
   protect,
   canManageTaxCenter,
   transitionTaxRecordWorkflow
+);
+
+router.post(
+  "/records/:taxNumber/pay",
+  protect,
+  canManageTaxCenter,
+  payTaxRecord
 );
 
 module.exports = router;

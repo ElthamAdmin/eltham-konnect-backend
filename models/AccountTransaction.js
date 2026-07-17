@@ -51,6 +51,7 @@ const accountTransactionSchema = new mongoose.Schema(
         "Credit Card Payment",
         "Credit Card Charge",
         "Payroll Payment",
+        "Tax Payment",
         "Employee Advance Payment",
         "Employee Advance Recovery",
         "Bank Fee",
@@ -176,6 +177,27 @@ const accountTransactionSchema = new mongoose.Schema(
     customerName: {
       type: String,
       default: "",
+    },
+
+        taxNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    taxType: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    taxPeriodKey: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
     },
 
     invoiceNumber: {

@@ -2,6 +2,12 @@ const TaxRecord = require("../models/TaxRecord");
 const Payroll = require("../models/Payroll");
 const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
+const FinancialAccount = require("../models/FinancialAccount");
+const AccountTransaction = require("../models/AccountTransaction");
+
+const {
+  postTaxLiabilityPayment,
+} = require("../services/accountingService");
 
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
@@ -907,6 +913,306 @@ const transitionTaxRecordWorkflow = async (req, res) => {
   }
 };
 
+const payTaxRecord = async (req, res) => {
+  try {
+    const { taxNumber } = req.params;
+
+    const {
+      amount,
+      paymentAccountNumber,
+      paymentDate,
+      paymentMethod = "",
+      paymentReference,
+      receiptUrl = "",
+      notes = "",
+    } = req.body;
+
+    if (!taxNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Tax number is required.",
+      });
+    }
+
+    if (!paymentAccountNumber) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A payment account is required.",
+      });
+    }
+
+    if (!paymentReference) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A payment confirmation or reference is required.",
+      });
+    }
+
+    const paymentAmount = roundMoney(amount);
+
+    if (paymentAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Payment amount must be greater than zero.",
+      });
+    }
+
+    const record = await TaxRecord.findOne({
+      taxNumber,
+    });
+
+    if (!record) {
+      return res.status(404).json({
+        success: false,
+        message: "Tax record not found.",
+      });
+    }
+
+    const payableStatuses = [
+      "Submitted",
+      "Partially Paid",
+      "Overdue",
+    ];
+
+    if (!payableStatuses.includes(record.status)) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${record.taxType} ${record.taxNumber} cannot be paid ` +
+          `while its status is ${record.status}. ` +
+          "It must be Submitted first.",
+      });
+    }
+
+    const outstandingBalance = roundMoney(
+      record.balanceDue
+    );
+
+    if (outstandingBalance <= 0) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This tax obligation has no outstanding balance.",
+      });
+    }
+
+    if (paymentAmount > outstandingBalance) {
+      return res.status(400).json({
+        success: false,
+        message:
+          `Payment cannot exceed the outstanding balance of ` +
+          `JMD ${outstandingBalance.toFixed(2)}.`,
+      });
+    }
+
+    const duplicateReference = await TaxRecord.findOne({
+      "remittances.paymentReference":
+        String(paymentReference).trim(),
+    });
+
+    if (duplicateReference) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "That tax payment reference has already been recorded.",
+      });
+    }
+
+    const paymentAccount =
+      await FinancialAccount.findOne({
+        accountNumber: paymentAccountNumber,
+        status: "Active",
+      });
+
+    if (!paymentAccount) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Active payment account not found.",
+      });
+    }
+
+    if (!paymentAccount.linkedChartAccountCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          `${paymentAccount.accountName} is not linked to the Chart of Accounts.`,
+      });
+    }
+
+    if (
+      paymentAccount.accountType !== "Credit Card" &&
+      roundMoney(paymentAccount.currentBalance) <
+        paymentAmount
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The selected payment account has insufficient funds.",
+      });
+    }
+
+    const normalizedPaymentDate =
+      String(paymentDate || "").trim() ||
+      new Date().toISOString().slice(0, 10);
+
+    const journalEntry =
+      await postTaxLiabilityPayment({
+        taxRecord: record,
+        paymentAccount,
+        amount: paymentAmount,
+        paymentDate: normalizedPaymentDate,
+        paymentReference:
+          String(paymentReference).trim(),
+        user: req.user,
+      });
+
+    const remittanceNumber =
+      `TAXPAY-${Date.now()}`;
+
+    const accountTransaction =
+      await AccountTransaction.create({
+        transactionNumber:
+          `TRN-${Date.now()}-TAX`,
+
+        accountNumber:
+          paymentAccount.accountNumber,
+
+        accountName:
+          paymentAccount.accountName,
+
+        linkedChartAccountCode:
+          paymentAccount.linkedChartAccountCode,
+
+        journalEntryNumber:
+          journalEntry.entryNumber,
+
+        ledgerReference:
+          journalEntry.entryNumber,
+
+        transactionType: "Tax Payment",
+
+        amount: paymentAmount,
+
+        paymentMethod:
+          String(paymentMethod || "").trim(),
+
+        reference:
+          String(paymentReference).trim(),
+
+        notes:
+          String(notes || "").trim() ||
+          `${record.taxType} payment for ${record.periodKey}`,
+
+        transactionDate:
+          new Date(
+            `${normalizedPaymentDate}T12:00:00.000Z`
+          ),
+
+        taxNumber: record.taxNumber,
+        taxType: record.taxType,
+        taxPeriodKey: record.periodKey,
+      });
+
+    const performedBy = getUserName(req.user);
+    const previousStatus = record.status;
+
+    record.amountPaid = roundMoney(
+      Number(record.amountPaid || 0) +
+        paymentAmount
+    );
+
+    record.balanceDue = roundMoney(
+      Number(record.taxDue || 0) -
+        record.amountPaid
+    );
+
+    record.status =
+      record.balanceDue === 0
+        ? "Paid"
+        : "Partially Paid";
+
+    record.journalEntryNumber =
+      journalEntry.entryNumber;
+
+    record.updatedBy = performedBy;
+
+    record.remittances.push({
+      remittanceNumber,
+      paymentDate: normalizedPaymentDate,
+      amount: paymentAmount,
+      paymentMethod:
+        String(paymentMethod || "").trim(),
+      paymentReference:
+        String(paymentReference).trim(),
+
+      paymentAccountNumber:
+        paymentAccount.accountNumber,
+
+      paymentAccountName:
+        paymentAccount.accountName,
+
+      journalEntryNumber:
+        journalEntry.entryNumber,
+
+      receiptUrl:
+        String(receiptUrl || "").trim(),
+
+      notes:
+        String(notes || "").trim(),
+
+      recordedBy: performedBy,
+      recordedAt: new Date(),
+    });
+
+    record.workflowHistory.push({
+      fromStatus: previousStatus,
+      toStatus: record.status,
+      action: "Payment",
+      notes:
+        `${remittanceNumber} - JMD ` +
+        `${paymentAmount.toFixed(2)} paid from ` +
+        `${paymentAccount.accountName}.`,
+      performedBy,
+      performedAt: new Date(),
+    });
+
+    await record.save();
+
+    res.status(201).json({
+      success: true,
+      message:
+        `${record.taxType} payment recorded successfully.`,
+      data: {
+        taxRecord: record,
+        remittanceNumber,
+        journalEntryNumber:
+          journalEntry.entryNumber,
+        transactionNumber:
+          accountTransaction.transactionNumber,
+        paymentAccount: {
+          accountNumber:
+            paymentAccount.accountNumber,
+          accountName:
+            paymentAccount.accountName,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Tax payment error:", error);
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not process the tax payment",
+      error: error.message,
+    });
+  }
+};
+
 const getTaxCenterDashboard = async (req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -1029,4 +1335,5 @@ module.exports = {
   generatePayrollTaxSummary,
   generatePayrollLiabilities,
   transitionTaxRecordWorkflow,
+  payTaxRecord,
 };

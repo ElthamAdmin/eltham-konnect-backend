@@ -11,6 +11,16 @@ const requirePositiveAmount = (amount, label = "Amount") => {
   return value;
 };
 
+const TAX_PAYABLE_ACCOUNT_MAP = {
+  PAYE: SYSTEM_ACCOUNTS.PAYE_PAYABLE,
+  NIS: SYSTEM_ACCOUNTS.NIS_PAYABLE,
+  NHT: SYSTEM_ACCOUNTS.NHT_PAYABLE,
+  "Education Tax":
+    SYSTEM_ACCOUNTS.EDUCATION_TAX_PAYABLE,
+  Pension: SYSTEM_ACCOUNTS.PENSION_PAYABLE,
+  HEART: SYSTEM_ACCOUNTS.HEART_PAYABLE,
+};
+
 const requireLinkedAccount = (financialAccount, label = "Financial account") => {
   if (!financialAccount?.linkedChartAccountCode) {
     throw new Error(`${label} is not linked to the Chart of Accounts.`);
@@ -385,6 +395,52 @@ const buildPayrollPaymentLines = ({
   return lines;
 };
 
+const buildTaxLiabilityPaymentLines = ({
+  paymentAccount,
+  taxType,
+  amount,
+  description = "",
+}) => {
+  requireLinkedAccount(
+    paymentAccount,
+    "Tax payment account"
+  );
+
+  const value = requirePositiveAmount(
+    amount,
+    "Tax payment amount"
+  );
+
+  const payableAccountCode =
+    TAX_PAYABLE_ACCOUNT_MAP[String(taxType || "").trim()];
+
+  if (!payableAccountCode) {
+    throw new Error(
+      `No statutory payable account is configured for ${taxType}.`
+    );
+  }
+
+  const paymentDescription =
+    description ||
+    `${taxType} statutory liability payment`;
+
+  return [
+    {
+      accountCode: payableAccountCode,
+      debit: value,
+      credit: 0,
+      description: paymentDescription,
+    },
+    {
+      accountCode:
+        paymentAccount.linkedChartAccountCode,
+      debit: 0,
+      credit: value,
+      description: paymentDescription,
+    },
+  ];
+};
+
 const buildCustomerPurchaseFundingLines = ({
   paymentAccount,
   amount,
@@ -537,6 +593,7 @@ module.exports = {
   buildExpensePaymentLines,
   buildEmployeeAdvanceFundingLines,
   buildPayrollPaymentLines,
+  buildTaxLiabilityPaymentLines,
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,
   buildCustomerPurchaseRecoveryInvoiceLines,

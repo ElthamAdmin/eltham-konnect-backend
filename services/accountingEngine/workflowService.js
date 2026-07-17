@@ -259,6 +259,43 @@ const postPayrollPayment = async ({
   });
 };
 
+const postTaxLiabilityPayment = async ({
+  taxRecord,
+  paymentAccount,
+  amount,
+  paymentDate,
+  paymentReference,
+  user,
+}) => {
+  const paymentAmount = roundMoney(amount);
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(
+      paymentDate || new Date()
+    ),
+
+    memo:
+      `${taxRecord.taxType} payment for ` +
+      `${taxRecord.periodKey || taxRecord.periodStart}`,
+
+    reference:
+      paymentReference || taxRecord.taxNumber,
+
+    sourceModule: "Tax Center",
+
+    createdBy: getUserName(user),
+
+    lines: templates.buildTaxLiabilityPaymentLines({
+      paymentAccount,
+      taxType: taxRecord.taxType,
+      amount: paymentAmount,
+      description:
+        `${taxRecord.taxType} liability payment ` +
+        `${taxRecord.taxNumber}`,
+    }),
+  });
+};
+
 const postCustomerPurchase = async ({
   purchase,
   paymentAccount,
@@ -352,6 +389,7 @@ module.exports = {
   postExpensePayment,
   postEmployeeAdvanceFunding,
   postPayrollPayment,
+  postTaxLiabilityPayment,
   postCustomerPurchase,
   refundCustomerPurchase,
   postCustomerPurchaseRecoveryInvoice,
