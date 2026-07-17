@@ -1649,12 +1649,74 @@ const getTaxCenterDashboard = async (req, res) => {
         record.status !== "Reconciled"
     );
 
-    const overdueAmount = roundMoney(
+        const overdueAmount = roundMoney(
       overdueRecords.reduce(
         (sum, record) =>
           sum + Number(record.balanceDue || 0),
         0
       )
+    );
+
+    const upcomingCutoff = new Date();
+    upcomingCutoff.setUTCDate(
+      upcomingCutoff.getUTCDate() + 30
+    );
+
+    const upcomingCutoffYmd =
+      upcomingCutoff.toISOString().slice(0, 10);
+
+    const upcomingRecords = taxRecords.filter(
+      (record) =>
+        record.dueDate &&
+        record.dueDate >= today &&
+        record.dueDate <= upcomingCutoffYmd &&
+        Number(record.balanceDue || 0) > 0 &&
+        ![
+          "Paid",
+          "Reconciled",
+          "Cancelled",
+        ].includes(record.status)
+    );
+
+    const upcomingAmount = roundMoney(
+      upcomingRecords.reduce(
+        (sum, record) =>
+          sum + Number(record.balanceDue || 0),
+        0
+      )
+    );
+
+    const unfiledRecords = taxRecords.filter(
+      (record) =>
+        !record.filingReference &&
+        ![
+          "Submitted",
+          "Paid",
+          "Reconciled",
+          "Cancelled",
+        ].includes(record.status)
+    );
+
+    const missingDeadlineRecords =
+      taxRecords.filter(
+        (record) =>
+          !record.dueDate &&
+          Number(record.balanceDue || 0) > 0 &&
+          ![
+            "Paid",
+            "Reconciled",
+            "Cancelled",
+          ].includes(record.status)
+      );
+
+    const statusCounts = taxRecords.reduce(
+      (counts, record) => {
+        counts[record.status] =
+          Number(counts[record.status] || 0) + 1;
+
+        return counts;
+      },
+      {}
     );
 
     res.json({
@@ -1676,8 +1738,61 @@ const getTaxCenterDashboard = async (req, res) => {
         taxBalanceDue: currentLiabilities,
         taxRecordCount: taxRecords.length,
 
-        overdueObligationCount: overdueRecords.length,
+               overdueObligationCount:
+          overdueRecords.length,
         overdueAmount,
+
+        upcomingDeadlineCount:
+          upcomingRecords.length,
+        upcomingAmount,
+
+        unfiledPeriodCount:
+          unfiledRecords.length,
+
+        missingDeadlineRuleCount:
+          missingDeadlineRecords.length,
+
+        statusCounts,
+
+        upcomingDeadlines:
+          upcomingRecords.map((record) => ({
+            taxNumber: record.taxNumber,
+            taxType: record.taxType,
+            periodKey: record.periodKey,
+            dueDate: record.dueDate,
+            balanceDue: record.balanceDue,
+            status: record.status,
+          })),
+
+        overdueObligations:
+          overdueRecords.map((record) => ({
+            taxNumber: record.taxNumber,
+            taxType: record.taxType,
+            periodKey: record.periodKey,
+            dueDate: record.dueDate,
+            balanceDue: record.balanceDue,
+            status: record.status,
+          })),
+
+        unfiledPeriods:
+          unfiledRecords.map((record) => ({
+            taxNumber: record.taxNumber,
+            taxType: record.taxType,
+            periodKey: record.periodKey,
+            balanceDue: record.balanceDue,
+            status: record.status,
+          })),
+
+        missingDeadlineRules:
+          missingDeadlineRecords.map(
+            (record) => ({
+              taxNumber: record.taxNumber,
+              taxType: record.taxType,
+              periodKey: record.periodKey,
+              balanceDue: record.balanceDue,
+              status: record.status,
+            })
+          ),
       },
     });
   } catch (error) {
