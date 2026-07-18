@@ -1,5 +1,6 @@
 const IncomeTaxRule = require("../models/IncomeTaxRule");
 const IncomeTaxEstimate = require("../models/IncomeTaxEstimate");
+const TaxRecord = require("../models/TaxRecord");
 
 const {
   calculateIncomeTaxEstimate,
@@ -781,6 +782,301 @@ const createIncomeTaxEstimate = async (
   }
 };
 
+const transitionIncomeTaxEstimate = async (
+  req,
+  res
+) => {
+  try {
+    const { estimateNumber } = req.params;
+
+    const {
+      action,
+      notes,
+      filingReference,
+      filingMethod,
+      filedDate,
+    } = req.body;
+
+    const normalizedAction = String(
+      action || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const estimate =
+      await IncomeTaxEstimate.findOne({
+        estimateNumber: String(
+          estimateNumber || ""
+        )
+          .trim()
+          .toUpperCase(),
+      });
+
+    if (!estimate) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Income-tax estimate not found",
+      });
+    }
+
+    const transitions = {
+      review: {
+        from: ["Calculated"],
+        to: "Reviewed",
+      },
+
+      approve: {
+        from: ["Reviewed"],
+        to: "Approved",
+      },
+
+      submit: {
+        from: ["Approved"],
+        to: "Submitted",
+      },
+
+      reconcile: {
+        from: ["Submitted", "Paid"],
+        to: "Reconciled",
+      },
+
+      cancel: {
+        from: [
+          "Calculated",
+          "Reviewed",
+          "Approved",
+        ],
+        to: "Cancelled",
+      },
+    };
+
+    const transition =
+      transitions[normalizedAction];
+
+    if (!transition) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Action must be Review, Approve, Submit, Reconcile, or Cancel.",
+      });
+    }
+
+    if (
+      !transition.from.includes(estimate.status)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `${estimate.estimateNumber} cannot be ${normalizedAction}ed while its status is ${estimate.status}.`,
+      });
+    }
+
+    if (
+      normalizedAction === "submit" &&
+      !String(filingReference || "").trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A filing reference is required before an income-tax estimate can be submitted.",
+      });
+    }
+
+    if (
+      normalizedAction === "reconcile" &&
+      Number(estimate.balanceDue || 0) > 0 &&
+      estimate.status !== "Paid"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "An income-tax estimate with an outstanding balance must be paid before reconciliation.",
+      });
+    }
+
+    const userName = getUserName(req.user);
+    const now = new Date();
+    const previousStatus = estimate.status;
+
+    if (normalizedAction === "review") {
+      estimate.reviewedBy = userName;
+      estimate.reviewedAt = now;
+      estimate.reviewNotes = String(
+        notes || ""
+      ).trim();
+    }
+
+    if (normalizedAction === "approve") {
+      estimate.approvedBy = userName;
+      estimate.approvedAt = now;
+      estimate.approvalNotes = String(
+        notes || ""
+      ).trim();
+    }
+
+    if (normalizedAction === "submit") {
+      estimate.filingReference = String(
+        filingReference
+      ).trim();
+
+      estimate.filingMethod =
+        filingMethod || "Online";
+
+      estimate.filedDate = filedDate
+        ? new Date(
+            `${String(filedDate).slice(
+              0,
+              10
+            )}T12:00:00.000Z`
+          )
+        : now;
+
+      estimate.submittedBy = userName;
+      estimate.submittedAt = now;
+
+      let taxRecord = null;
+
+      if (estimate.taxRecordId) {
+        taxRecord = await TaxRecord.findById(
+          estimate.taxRecordId
+        );
+      }
+
+      if (!taxRecord) {
+        const effectiveTaxRate =
+          Number(
+            estimate.estimatedTaxableIncome ||
+              0
+          ) > 0
+            ? Number(
+                (
+                  (Number(
+                    estimate.grossIncomeTax ||
+                      0
+                  ) /
+                    Number(
+                      estimate.estimatedTaxableIncome
+                    )) *
+                  100
+                ).toFixed(6)
+              )
+            : 0;
+
+        taxRecord = await TaxRecord.create({
+          taxNumber: `TAX-ITX-${
+            estimate.entityCode
+          }-${estimate.periodKey}-${Date.now()}`,
+          taxType: "Income Tax",
+          periodStart: new Date(
+            estimate.periodStart
+          )
+            .toISOString()
+            .slice(0, 10),
+          periodEnd: new Date(
+            estimate.periodEnd
+          )
+            .toISOString()
+            .slice(0, 10),
+          taxableAmount: Number(
+            estimate.estimatedTaxableIncome ||
+              0
+          ),
+          taxRate: effectiveTaxRate,
+          taxDue: Number(
+            estimate.estimatedTaxDue || 0
+          ),
+          amountPaid: Number(
+            estimate.amountPaid || 0
+          ),
+          balanceDue: Number(
+            estimate.balanceDue || 0
+          ),
+          dueDate: estimate.dueDate
+            ? new Date(estimate.dueDate)
+                .toISOString()
+                .slice(0, 10)
+            : "",
+          status: "Submitted",
+          filingReference:
+            estimate.filingReference,
+          notes: `Income-tax filing for ${estimate.entityCode}, period ${estimate.periodKey}. Estimate ${estimate.estimateNumber}. ${String(
+            notes || ""
+          ).trim()}`,
+        });
+
+        estimate.taxRecordId =
+          taxRecord._id;
+
+        estimate.taxNumber =
+          taxRecord.taxNumber;
+      }
+    }
+
+    if (normalizedAction === "reconcile") {
+      estimate.reconciledBy = userName;
+      estimate.reconciledAt = now;
+      estimate.reconciliationNotes =
+        String(notes || "").trim();
+
+      if (estimate.taxRecordId) {
+        await TaxRecord.findByIdAndUpdate(
+          estimate.taxRecordId,
+          {
+            $set: {
+              status: "Reconciled",
+              reconciliationNotes:
+                estimate.reconciliationNotes,
+            },
+          },
+          {
+            runValidators: true,
+          }
+        );
+      }
+    }
+
+    estimate.status = transition.to;
+    estimate.updatedBy = userName;
+
+    estimate.workflowHistory.push({
+      fromStatus: previousStatus,
+      toStatus: transition.to,
+      action: `Income-tax estimate ${normalizedAction}`,
+      notes: String(notes || "").trim(),
+      performedBy: userName,
+      performedAt: now,
+    });
+
+    await estimate.save();
+
+    res.json({
+      success: true,
+      message: `${estimate.estimateNumber} moved from ${previousStatus} to ${estimate.status} successfully.`,
+      data: estimate,
+    });
+  } catch (error) {
+    console.error(
+      "Income-tax workflow error:",
+      error
+    );
+
+    const statusCode =
+      error.name === "ValidationError"
+        ? 400
+        : 500;
+
+    res.status(statusCode).json({
+      success: false,
+      message:
+        statusCode === 400
+          ? error.message
+          : "Could not update the income-tax estimate workflow",
+      error: error.message,
+    });
+  }
+};
+
+
 
 
 module.exports = {
@@ -791,4 +1087,5 @@ module.exports = {
   previewIncomeTaxEstimate,
   getIncomeTaxEstimates,
 createIncomeTaxEstimate,
+transitionIncomeTaxEstimate,
 };
