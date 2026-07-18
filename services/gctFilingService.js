@@ -664,10 +664,7 @@ const generateGctFilingPeriod = async ({
       ""
     )}-${Date.now()}`;
 
-  const invoices = await Invoice.find({
-    "businessEntitySnapshot.entityCode":
-      entityCode,
-
+    const invoiceQuery = {
     createdAt: {
       $gte: period.periodStart,
       $lte: period.periodEnd,
@@ -680,15 +677,37 @@ const generateGctFilingPeriod = async ({
         "Refunded",
       ],
     },
-  }).sort({
+  };
+
+  if (entityCode === "EK-SP-2026") {
+    invoiceQuery.$or = [
+      {
+        "businessEntitySnapshot.entityCode":
+          entityCode,
+      },
+      {
+        "businessEntitySnapshot.entityCode": {
+          $exists: false,
+        },
+      },
+      {
+        "businessEntitySnapshot.entityCode": "",
+      },
+    ];
+  } else {
+    invoiceQuery[
+      "businessEntitySnapshot.entityCode"
+    ] = entityCode;
+  }
+
+  const invoices = await Invoice.find(
+    invoiceQuery
+  ).sort({
     createdAt: 1,
     invoiceNumber: 1,
   });
 
-  const expenses = await Expense.find({
-    "businessEntitySnapshot.entityCode":
-      entityCode,
-
+    const expenseQuery = {
     date: {
       $gte: period.periodStart,
       $lte: period.periodEnd,
@@ -697,7 +716,32 @@ const generateGctFilingPeriod = async ({
     status: {
       $ne: "Cancelled",
     },
-  }).sort({
+  };
+
+  if (entityCode === "EK-SP-2026") {
+    expenseQuery.$or = [
+      {
+        "businessEntitySnapshot.entityCode":
+          entityCode,
+      },
+      {
+        "businessEntitySnapshot.entityCode": {
+          $exists: false,
+        },
+      },
+      {
+        "businessEntitySnapshot.entityCode": "",
+      },
+    ];
+  } else {
+    expenseQuery[
+      "businessEntitySnapshot.entityCode"
+    ] = entityCode;
+  }
+
+  const expenses = await Expense.find(
+    expenseQuery
+  ).sort({
     date: 1,
     expenseNumber: 1,
   });
