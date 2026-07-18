@@ -68,6 +68,12 @@ createIncomeTaxEstimate,
 transitionIncomeTaxEstimate,
 } = require("../controllers/incomeTaxController");
 
+const {
+  getTaxDocuments,
+  createTaxDocument,
+  verifyTaxDocument,
+} = require("../controllers/taxDocumentController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -315,6 +321,27 @@ router.post(
   protect,
   canManageTaxCenter,
   transitionIncomeTaxEstimate
+);
+
+router.get(
+  "/documents",
+  protect,
+  canManageTaxCenter,
+  getTaxDocuments
+);
+
+router.post(
+  "/documents",
+  protect,
+  canManageTaxCenter,
+  createTaxDocument
+);
+
+router.post(
+  "/documents/:documentNumber/verification",
+  protect,
+  canManageTaxCenter,
+  verifyTaxDocument
 );
 
 module.exports = router;
