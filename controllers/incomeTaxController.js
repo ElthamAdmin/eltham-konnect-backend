@@ -1,4 +1,5 @@
 const IncomeTaxRule = require("../models/IncomeTaxRule");
+const IncomeTaxEstimate = require("../models/IncomeTaxEstimate");
 
 const {
   calculateIncomeTaxEstimate,
@@ -486,6 +487,301 @@ const previewIncomeTaxEstimate = async (
   }
 };
 
+const getIncomeTaxEstimates = async (
+  req,
+  res
+) => {
+  try {
+    const query = {};
+
+    if (req.query.entityCode) {
+      query.entityCode = String(
+        req.query.entityCode
+      )
+        .trim()
+        .toUpperCase();
+    }
+
+    if (req.query.periodKey) {
+      query.periodKey = String(
+        req.query.periodKey
+      ).trim();
+    }
+
+    if (req.query.status) {
+      query.status = String(
+        req.query.status
+      ).trim();
+    }
+
+    const estimates =
+      await IncomeTaxEstimate.find(query).sort({
+        periodEnd: -1,
+        createdAt: -1,
+      });
+
+    res.json({
+      success: true,
+      message:
+        "Income-tax estimates retrieved successfully",
+      totalRecords: estimates.length,
+      data: estimates,
+    });
+  } catch (error) {
+    console.error(
+      "Get income-tax estimates error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not retrieve income-tax estimates",
+      error: error.message,
+    });
+  }
+};
+
+const createIncomeTaxEstimate = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      periodKey,
+      periodStart,
+      periodEnd,
+      grossRevenue,
+      costOfSales,
+      operatingExpenses,
+      otherIncome,
+      nonDeductibleExpenses,
+      exemptIncome,
+      capitalAllowances,
+      lossCarryForwardApplied,
+      otherAddBacks,
+      otherDeductions,
+      adjustmentNotes,
+      taxCredits,
+      priorPayments,
+      manualTaxAmount,
+      dueDate,
+      notes,
+    } = req.body;
+
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Period start and period end are required.",
+      });
+    }
+
+    const normalizedPeriodKey = String(
+      periodKey ||
+        String(periodEnd).slice(0, 4)
+    ).trim();
+
+    if (!normalizedPeriodKey) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A valid income-tax period key is required.",
+      });
+    }
+
+    const calculation =
+      await calculateIncomeTaxEstimate({
+        periodStart,
+        periodEnd,
+        grossRevenue,
+        costOfSales,
+        operatingExpenses,
+        otherIncome,
+        nonDeductibleExpenses,
+        exemptIncome,
+        capitalAllowances,
+        lossCarryForwardApplied,
+        otherAddBacks,
+        otherDeductions,
+        taxCredits,
+        priorPayments,
+        manualTaxAmount,
+      });
+
+    const existingEstimate =
+      await IncomeTaxEstimate.findOne({
+        entityCode:
+          calculation.entity.entityCode,
+        incomeTaxType:
+          calculation.incomeTaxType,
+        periodKey: normalizedPeriodKey,
+      });
+
+    if (existingEstimate) {
+      return res.status(409).json({
+        success: false,
+        message: `${calculation.entity.entityCode} already has income-tax estimate ${existingEstimate.estimateNumber} for ${normalizedPeriodKey}.`,
+        data: {
+          existingEstimateNumber:
+            existingEstimate.estimateNumber,
+          existingStatus:
+            existingEstimate.status,
+        },
+      });
+    }
+
+    const estimateNumber = `ITX-${
+      calculation.entity.entityCode
+    }-${normalizedPeriodKey}-${Date.now()}`;
+
+    const userName = getUserName(req.user);
+    const calculatedAt = new Date();
+
+    const estimate =
+      await IncomeTaxEstimate.create({
+        estimateNumber,
+        entityId: calculation.entity._id,
+        entityCode:
+          calculation.entity.entityCode,
+        entitySnapshot:
+          calculation.entitySnapshot,
+        incomeTaxType:
+          calculation.incomeTaxType,
+        periodKey: normalizedPeriodKey,
+        periodStart:
+          calculation.periodStart,
+        periodEnd: calculation.periodEnd,
+        filingFrequency:
+          calculation.rule.filingFrequency,
+        calculationMode:
+          calculation.rule
+            .calculationMethod ===
+          "Manual Assessment"
+            ? "Manual Assessment"
+            : "System Calculated",
+        incomeTaxRuleId:
+          calculation.rule._id,
+        incomeTaxRuleCode:
+          calculation.rule.ruleCode,
+        ruleSnapshot:
+          calculation.ruleSnapshot,
+        financialSummary:
+          calculation.financialSummary,
+        taxAdjustments: {
+          ...calculation.taxAdjustments,
+          adjustmentNotes: String(
+            adjustmentNotes || ""
+          ).trim(),
+        },
+        estimatedTaxableIncome:
+          calculation.estimatedTaxableIncome,
+        grossIncomeTax:
+          calculation.grossIncomeTax,
+        taxCredits:
+          calculation.taxCredits,
+        priorPayments:
+          calculation.priorPayments,
+        estimatedTaxDue:
+          calculation.estimatedTaxDue,
+        amountPaid: 0,
+        balanceDue:
+          calculation.balanceDue,
+        dueDate: dueDate || null,
+        calculationSnapshot: {
+          calculatedAt,
+          source: "Manual Financial Summary",
+          requestInputs: {
+            grossRevenue: Number(
+              grossRevenue || 0
+            ),
+            costOfSales: Number(
+              costOfSales || 0
+            ),
+            operatingExpenses: Number(
+              operatingExpenses || 0
+            ),
+            otherIncome: Number(
+              otherIncome || 0
+            ),
+            nonDeductibleExpenses: Number(
+              nonDeductibleExpenses || 0
+            ),
+            exemptIncome: Number(
+              exemptIncome || 0
+            ),
+            capitalAllowances: Number(
+              capitalAllowances || 0
+            ),
+            lossCarryForwardApplied: Number(
+              lossCarryForwardApplied || 0
+            ),
+            otherAddBacks: Number(
+              otherAddBacks || 0
+            ),
+            otherDeductions: Number(
+              otherDeductions || 0
+            ),
+            taxCredits: Number(
+              taxCredits || 0
+            ),
+            priorPayments: Number(
+              priorPayments || 0
+            ),
+          },
+        },
+        calculatedBy: userName,
+        calculatedAt,
+        status: "Calculated",
+        workflowHistory: [
+          {
+            fromStatus: "",
+            toStatus: "Calculated",
+            action:
+              "Income-tax estimate calculated",
+            notes:
+              "Estimate created from the supplied financial summary.",
+            performedBy: userName,
+            performedAt: calculatedAt,
+          },
+        ],
+        notes: String(notes || "").trim(),
+        createdBy: userName,
+        updatedBy: userName,
+      });
+
+    res.status(201).json({
+      success: true,
+      message:
+        "Income-tax estimate created successfully. No TaxRecord or accounting liability was created.",
+      data: estimate,
+    });
+  } catch (error) {
+    console.error(
+      "Create income-tax estimate error:",
+      error
+    );
+
+    const statusCode =
+      error.code === 11000
+        ? 409
+        : /No effective business entity|No active .* rule/i.test(
+              error.message
+            )
+          ? 409
+          : 400;
+
+    res.status(statusCode).json({
+      success: false,
+      message:
+        error.code === 11000
+          ? "An income-tax estimate already exists for this entity and period."
+          : error.message,
+    });
+  }
+};
+
+
 
 module.exports = {
   getIncomeTaxRules,
@@ -493,4 +789,6 @@ module.exports = {
   updateDraftIncomeTaxRule,
   activateIncomeTaxRule,
   previewIncomeTaxEstimate,
+  getIncomeTaxEstimates,
+createIncomeTaxEstimate,
 };
