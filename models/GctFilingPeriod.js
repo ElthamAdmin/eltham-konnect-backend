@@ -265,11 +265,29 @@ const gctFilingPeriodSchema = new mongoose.Schema(
       default: null,
     },
 
-    taxNumber: {
+        taxNumber: {
       type: String,
       default: "",
       trim: true,
       index: true,
+    },
+
+    settlementJournalEntryNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    settlementPostedAt: {
+      type: Date,
+      default: null,
+    },
+
+    settlementPostedBy: {
+      type: String,
+      default: "",
+      trim: true,
     },
 
     calculationSnapshot: {

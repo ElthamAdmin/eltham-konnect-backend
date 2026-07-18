@@ -10,6 +10,7 @@ const GctFilingPeriod = require("../models/GctFilingPeriod");
 
 const {
   postTaxLiabilityPayment,
+  postGctFilingSettlement,
 } = require("../services/accountingService");
 
 const {
@@ -1587,6 +1588,451 @@ const applyTaxDeadlines = async (req, res) => {
   }
 };
 
+const transitionGctFilingWorkflow = async (
+  req,
+  res
+) => {
+  try {
+    const { filingNumber } = req.params;
+
+    const {
+      action,
+      notes = "",
+      filingReference = "",
+      filingMethod = "TAJ Online",
+      filedDate = "",
+    } = req.body;
+
+    const workflowActions = {
+      Review: {
+        fromStatus: "Calculated",
+        toStatus: "Reviewed",
+      },
+
+      Approve: {
+        fromStatus: "Reviewed",
+        toStatus: "Approved",
+      },
+
+      Submit: {
+        fromStatus: "Approved",
+        toStatus: "Submitted",
+      },
+    };
+
+    const workflowAction =
+      workflowActions[
+        String(action || "").trim()
+      ];
+
+    if (!workflowAction) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Action must be Review, Approve, or Submit.",
+      });
+    }
+
+    const filingPeriod =
+      await GctFilingPeriod.findOne({
+        filingNumber,
+      });
+
+    if (!filingPeriod) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "GCT filing period not found.",
+      });
+    }
+
+    if (
+      filingPeriod.calculationMode !==
+        "Compliance" ||
+      filingPeriod.registrationStatus !==
+        "Registered" ||
+      !filingPeriod.canFileReturn
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "This is a Preview-only GCT period. A return cannot enter the compliance workflow unless an effective Registered profile applies.",
+      });
+    }
+
+    if (
+      filingPeriod.status !==
+      workflowAction.fromStatus
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${action} requires ${workflowAction.fromStatus} status. ` +
+          `The current status is ${filingPeriod.status}.`,
+      });
+    }
+
+    if (action === "Review") {
+      if (
+        Number(
+          filingPeriod.unreviewedInvoiceCount ||
+            0
+        ) > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${filingPeriod.unreviewedInvoiceCount} invoice classification(s) still require review.`,
+        });
+      }
+
+      if (
+        Number(
+          filingPeriod.inputGctSummary
+            ?.pendingVerificationInputGct ||
+            0
+        ) > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Input GCT remains pending supplier-document verification.",
+        });
+      }
+    }
+
+    if (
+      action === "Submit" &&
+      !String(filingReference).trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A GCT filing or submission reference is required.",
+      });
+    }
+
+    const performedBy =
+      getUserName(req.user);
+
+    const performedAt = new Date();
+    const previousStatus =
+      filingPeriod.status;
+
+    let settlementJournal = null;
+    let taxRecord = null;
+
+    if (action === "Submit") {
+      filingPeriod.filingReference =
+        String(filingReference).trim();
+
+      filingPeriod.filingMethod =
+        String(filingMethod || "").trim() ||
+        "TAJ Online";
+
+      filingPeriod.filedDate =
+        String(filedDate || "").trim() ||
+        performedAt
+          .toISOString()
+          .slice(0, 10);
+
+      filingPeriod.submittedBy =
+        performedBy;
+
+      filingPeriod.submittedAt =
+        performedAt;
+
+      if (
+        !filingPeriod
+          .settlementJournalEntryNumber
+      ) {
+        settlementJournal =
+          await postGctFilingSettlement({
+            filingPeriod,
+            postingDate:
+              filingPeriod.filedDate,
+            user: req.user,
+          });
+
+        if (settlementJournal) {
+          filingPeriod.settlementJournalEntryNumber =
+            settlementJournal.entryNumber;
+
+          filingPeriod.settlementPostedAt =
+            performedAt;
+
+          filingPeriod.settlementPostedBy =
+            performedBy;
+        }
+      }
+
+      if (Number(filingPeriod.netGct || 0) > 0) {
+        taxRecord =
+          await TaxRecord.findOne({
+            sourceType: "GCT Return",
+            sourceReference:
+              filingPeriod.filingNumber,
+            status: {
+              $ne: "Cancelled",
+            },
+          });
+
+        if (!taxRecord) {
+          const netGct =
+            roundMoney(
+              filingPeriod.netGct
+            );
+
+          taxRecord =
+            await TaxRecord.create({
+              taxNumber:
+                `TAX-GCT-${filingPeriod.periodKey.replace(
+                  "-",
+                  ""
+                )}-${Date.now()}`,
+
+              taxType: "GCT",
+              taxCategory:
+                "Consumption Tax",
+
+              businessType:
+                filingPeriod.businessType,
+
+              businessName:
+                filingPeriod.entityName,
+
+              businessTrn:
+                filingPeriod.businessTrn ||
+                "",
+
+              periodKey:
+                filingPeriod.periodKey,
+
+              periodStart:
+                filingPeriod.periodStart,
+
+              periodEnd:
+                filingPeriod.periodEnd,
+
+              filingFrequency:
+                filingPeriod.filingFrequency,
+
+              sourceType:
+                "GCT Return",
+
+              sourceModule:
+                "Tax Center",
+
+              sourceReference:
+                filingPeriod.filingNumber,
+
+              taxableAmount:
+                roundMoney(
+                  filingPeriod
+                    .outputGctSummary
+                    ?.taxableSales
+                ),
+
+              taxRate:
+                Number(
+                  filingPeriod.standardRate ||
+                    0
+                ),
+
+              taxDue: netGct,
+              amountPaid: 0,
+              balanceDue: netGct,
+
+              liabilityBreakdown: {
+                gctOutputTax:
+                  roundMoney(
+                    filingPeriod.outputGct
+                  ),
+
+                gctInputTaxCredit:
+                  roundMoney(
+                    filingPeriod
+                      .inputGctCredit
+                  ),
+              },
+
+              calculationRuleCode:
+                filingPeriod.rateRuleCode ||
+                filingPeriod
+                  .registrationCode,
+
+              calculationSnapshot: {
+                filingNumber:
+                  filingPeriod.filingNumber,
+
+                registrationSnapshot:
+                  filingPeriod
+                    .registrationSnapshot,
+
+                outputGctSummary:
+                  filingPeriod
+                    .outputGctSummary,
+
+                inputGctSummary:
+                  filingPeriod
+                    .inputGctSummary,
+
+                outputGct:
+                  filingPeriod.outputGct,
+
+                inputGctCredit:
+                  filingPeriod
+                    .inputGctCredit,
+
+                netGct:
+                  filingPeriod.netGct,
+
+                netPosition:
+                  filingPeriod.netPosition,
+              },
+
+              filedDate:
+                filingPeriod.filedDate,
+
+              filingReference:
+                filingPeriod
+                  .filingReference,
+
+              filingMethod:
+                filingPeriod
+                  .filingMethod,
+
+              status: "Submitted",
+
+              submittedBy:
+                performedBy,
+
+              submittedAt:
+                performedAt,
+
+              submissionNotes:
+                String(notes || "").trim(),
+
+              journalEntryNumber:
+                filingPeriod
+                  .settlementJournalEntryNumber ||
+                "",
+
+              notes:
+                `Generated from GCT filing ${filingPeriod.filingNumber}.`,
+
+              createdBy:
+                performedBy,
+
+              updatedBy:
+                performedBy,
+
+              workflowHistory: [
+                {
+                  fromStatus:
+                    "Calculated",
+
+                  toStatus:
+                    "Submitted",
+
+                  action:
+                    "GCT Return Submission",
+
+                  notes:
+                    String(
+                      notes || ""
+                    ).trim(),
+
+                  performedBy,
+
+                  performedAt,
+                },
+              ],
+            });
+        }
+
+        filingPeriod.taxRecordId =
+          taxRecord._id;
+
+        filingPeriod.taxNumber =
+          taxRecord.taxNumber;
+      }
+    }
+
+    if (action === "Review") {
+      filingPeriod.reviewedBy =
+        performedBy;
+
+      filingPeriod.reviewedAt =
+        performedAt;
+
+      filingPeriod.reviewNotes =
+        String(notes || "").trim();
+    }
+
+    if (action === "Approve") {
+      filingPeriod.approvedBy =
+        performedBy;
+
+      filingPeriod.approvedAt =
+        performedAt;
+
+      filingPeriod.approvalNotes =
+        String(notes || "").trim();
+    }
+
+    filingPeriod.status =
+      workflowAction.toStatus;
+
+    filingPeriod.updatedBy =
+      performedBy;
+
+    filingPeriod.workflowHistory.push({
+      fromStatus: previousStatus,
+      toStatus:
+        workflowAction.toStatus,
+      action,
+      notes:
+        String(notes || "").trim(),
+      performedBy,
+      performedAt,
+    });
+
+    await filingPeriod.save();
+
+    res.json({
+      success: true,
+
+      message:
+        `GCT filing ${filingPeriod.filingNumber} moved from ` +
+        `${previousStatus} to ${filingPeriod.status}.`,
+
+      data: {
+        filingPeriod,
+
+        taxRecord,
+
+        settlementJournalEntryNumber:
+          filingPeriod
+            .settlementJournalEntryNumber ||
+          "",
+      },
+    });
+  } catch (error) {
+    console.error(
+      "GCT filing workflow error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not update the GCT filing workflow",
+      error: error.message,
+    });
+  }
+};
+
 const getGctFilingPeriods = async (req, res) => {
   try {
     const {
@@ -2737,7 +3183,8 @@ module.exports = {
   activateTaxDeadlineRule,
   applyTaxDeadlines,
 
-    getGctFilingPeriods,
+  transitionGctFilingWorkflow,
+  getGctFilingPeriods,
   calculateGctFilingPeriod,
   getGctFilingRegister,
 

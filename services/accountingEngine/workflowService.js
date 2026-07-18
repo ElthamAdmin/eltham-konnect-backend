@@ -296,6 +296,68 @@ const postTaxLiabilityPayment = async ({
   });
 };
 
+const postGctFilingSettlement = async ({
+  filingPeriod,
+  postingDate,
+  user,
+}) => {
+  if (!filingPeriod) {
+    throw new Error(
+      "A GCT filing period is required."
+    );
+  }
+
+  if (
+    filingPeriod.calculationMode !==
+      "Compliance" ||
+    filingPeriod.registrationStatus !==
+      "Registered" ||
+    !filingPeriod.canFileReturn
+  ) {
+    throw new Error(
+      "Only a registered Compliance GCT filing period can post a settlement journal."
+    );
+  }
+
+  const lines =
+    templates.buildGctFilingSettlementLines({
+      outputGct:
+        filingPeriod.outputGct,
+
+      inputGctCredit:
+        filingPeriod.inputGctCredit,
+
+      description:
+        `GCT filing settlement ${filingPeriod.filingNumber}`,
+    });
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(
+      postingDate ||
+        filingPeriod.periodEnd ||
+        new Date()
+    ),
+
+    memo:
+      `GCT input credit offset for ` +
+      `${filingPeriod.periodKey}`,
+
+    reference:
+      filingPeriod.filingNumber,
+
+    sourceModule: "Tax Center",
+
+    createdBy: getUserName(user),
+
+    lines,
+  });
+};
+
+
 const postCustomerPurchase = async ({
   purchase,
   paymentAccount,
@@ -390,6 +452,7 @@ module.exports = {
   postEmployeeAdvanceFunding,
   postPayrollPayment,
   postTaxLiabilityPayment,
+  postGctFilingSettlement,
   postCustomerPurchase,
   refundCustomerPurchase,
   postCustomerPurchaseRecoveryInvoice,

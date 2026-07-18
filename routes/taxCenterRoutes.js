@@ -28,7 +28,8 @@ const {
   activateTaxDeadlineRule,
   applyTaxDeadlines,
 
-    getGctFilingPeriods,
+  transitionGctFilingWorkflow,
+  getGctFilingPeriods,
   calculateGctFilingPeriod,
   getGctFilingRegister,
 
@@ -94,6 +95,14 @@ router.post(
   canManageTaxCenter,
   applyTaxDeadlines
 );
+
+router.post(
+  "/gct/filing-periods/:filingNumber/workflow",
+  protect,
+  canManageTaxCenter,
+  transitionGctFilingWorkflow
+);
+
 
 router.get(
   "/gct/filing-periods",

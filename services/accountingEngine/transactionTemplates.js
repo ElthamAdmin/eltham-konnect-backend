@@ -19,6 +19,7 @@ const TAX_PAYABLE_ACCOUNT_MAP = {
     SYSTEM_ACCOUNTS.EDUCATION_TAX_PAYABLE,
   Pension: SYSTEM_ACCOUNTS.PENSION_PAYABLE,
   HEART: SYSTEM_ACCOUNTS.HEART_PAYABLE,
+  GCT: SYSTEM_ACCOUNTS.GCT_OUTPUT_TAX_PAYABLE,
 };
 
 const requireLinkedAccount = (financialAccount, label = "Financial account") => {
@@ -395,6 +396,53 @@ const buildPayrollPaymentLines = ({
   return lines;
 };
 
+const buildGctFilingSettlementLines = ({
+  outputGct,
+  inputGctCredit,
+  description = "",
+}) => {
+  const outputTax = Math.max(
+    0,
+    roundMoney(outputGct)
+  );
+
+  const inputCredit = Math.max(
+    0,
+    roundMoney(inputGctCredit)
+  );
+
+  const offsetAmount = Math.min(
+    outputTax,
+    inputCredit
+  );
+
+  if (offsetAmount <= 0) {
+    return [];
+  }
+
+  const settlementDescription =
+    description ||
+    "GCT input tax credit offset against output GCT";
+
+  return [
+    {
+      accountCode:
+        SYSTEM_ACCOUNTS.GCT_OUTPUT_TAX_PAYABLE,
+      debit: offsetAmount,
+      credit: 0,
+      description: settlementDescription,
+    },
+    {
+      accountCode:
+        SYSTEM_ACCOUNTS.GCT_INPUT_TAX_RECOVERABLE,
+      debit: 0,
+      credit: offsetAmount,
+      description: settlementDescription,
+    },
+  ];
+};
+
+
 const buildTaxLiabilityPaymentLines = ({
   paymentAccount,
   taxType,
@@ -593,6 +641,7 @@ module.exports = {
   buildExpensePaymentLines,
   buildEmployeeAdvanceFundingLines,
   buildPayrollPaymentLines,
+  buildGctFilingSettlementLines,
   buildTaxLiabilityPaymentLines,
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,

@@ -31,6 +31,8 @@ module.exports = {
   postEmployeeAdvanceFunding:
   workflowService.postEmployeeAdvanceFunding,
     postPayrollPayment: workflowService.postPayrollPayment,
+      postGctFilingSettlement:
+    workflowService.postGctFilingSettlement,
 
   /**
    * Tax Center
