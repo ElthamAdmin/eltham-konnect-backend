@@ -6,6 +6,7 @@ const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const TaxDeadlineRule = require("../models/TaxDeadlineRule");
 const TaxRegistrationProfile = require("../models/TaxRegistrationProfile");
+const GctFilingPeriod = require("../models/GctFilingPeriod");
 
 const {
   postTaxLiabilityPayment,
@@ -18,6 +19,11 @@ const {
 const {
   generateGctTurnoverMonitor,
 } = require("../services/gctMonitoringService");
+
+const {
+  generateGctFilingPeriod,
+  getGctRegister,
+} = require("../services/gctFilingService");
 
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
@@ -1581,6 +1587,303 @@ const applyTaxDeadlines = async (req, res) => {
   }
 };
 
+const getGctFilingPeriods = async (req, res) => {
+  try {
+    const {
+      entityCode = "EK-SP-2026",
+      periodKey = "",
+      status = "",
+      calculationMode = "",
+    } = req.query;
+
+    const query = {
+      entityCode: String(entityCode).trim(),
+    };
+
+    if (periodKey) {
+      query.periodKey =
+        String(periodKey).trim();
+    }
+
+    if (status) {
+      query.status =
+        String(status).trim();
+    }
+
+    if (calculationMode) {
+      query.calculationMode =
+        String(calculationMode).trim();
+    }
+
+    const filingPeriods =
+      await GctFilingPeriod.find(query).sort({
+        periodStart: -1,
+        createdAt: -1,
+      });
+
+    res.json({
+      success: true,
+      message:
+        "GCT filing periods retrieved successfully",
+      totalRecords: filingPeriods.length,
+      data: filingPeriods,
+    });
+  } catch (error) {
+    console.error(
+      "Get GCT filing periods error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not retrieve GCT filing periods",
+      error: error.message,
+    });
+  }
+};
+
+const calculateGctFilingPeriod = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      entityCode = "EK-SP-2026",
+      periodKey,
+    } = req.body;
+
+    if (!periodKey) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A GCT filing period using YYYY-MM is required.",
+      });
+    }
+
+    const result =
+      await generateGctFilingPeriod({
+        entityCode:
+          String(entityCode).trim(),
+        periodKey:
+          String(periodKey).trim(),
+        user: req.user,
+      });
+
+    res.status(201).json({
+      success: true,
+
+      message:
+        result.filingPeriod.calculationMode ===
+        "Preview"
+          ? "Preview GCT filing period generated successfully. No GCT liability or filing was created."
+          : "GCT filing period calculated successfully.",
+
+      data: result.filingPeriod,
+      summary: result.summary,
+    });
+  } catch (error) {
+    console.error(
+      "Calculate GCT filing period error:",
+      error
+    );
+
+    const conflict =
+      String(error.message || "").includes(
+        "cannot be recalculated"
+      );
+
+    const missingProfile =
+      String(error.message || "").includes(
+        "No active GCT registration profile"
+      );
+
+    res.status(
+      conflict
+        ? 409
+        : missingProfile
+          ? 404
+          : 500
+    ).json({
+      success: false,
+      message:
+        "Could not calculate the GCT filing period",
+      error: error.message,
+    });
+  }
+};
+
+const getGctFilingRegister = async (
+  req,
+  res
+) => {
+  try {
+    const { periodKey } = req.params;
+
+    const entityCode = String(
+      req.query.entityCode ||
+        "EK-SP-2026"
+    ).trim();
+
+    const registerType = String(
+      req.query.registerType || ""
+    ).trim();
+
+    if (
+      registerType &&
+      ![
+        "Output GCT",
+        "Input GCT",
+      ].includes(registerType)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Register type must be Output GCT or Input GCT.",
+      });
+    }
+
+    const filingPeriod =
+      await GctFilingPeriod.findOne({
+        entityCode,
+        periodKey,
+      });
+
+    if (!filingPeriod) {
+      return res.status(404).json({
+        success: false,
+        message:
+          `No GCT filing period exists for ${periodKey}.`,
+      });
+    }
+
+    const register =
+      await getGctRegister({
+        entityCode,
+        periodKey,
+        registerType,
+      });
+
+    const summary = register.reduce(
+      (totals, entry) => {
+        totals.grossAmount +=
+          Number(entry.grossAmount || 0);
+
+        totals.taxableAmount +=
+          Number(entry.taxableAmount || 0);
+
+        totals.gctAmount +=
+          Number(entry.gctAmount || 0);
+
+        totals.claimableGctAmount +=
+          Number(
+            entry.claimableGctAmount || 0
+          );
+
+        totals.disallowedGctAmount +=
+          Number(
+            entry.disallowedGctAmount || 0
+          );
+
+        totals.pendingVerificationGctAmount +=
+          Number(
+            entry.pendingVerificationGctAmount ||
+              0
+          );
+
+        if (
+          entry.classificationStatus ===
+          "Preliminary"
+        ) {
+          totals.preliminaryEntries += 1;
+        }
+
+        if (
+          entry.eligibility
+            ?.includedInReturn
+        ) {
+          totals.includedInReturn += 1;
+        }
+
+        return totals;
+      },
+      {
+        recordCount: register.length,
+        preliminaryEntries: 0,
+        includedInReturn: 0,
+        grossAmount: 0,
+        taxableAmount: 0,
+        gctAmount: 0,
+        claimableGctAmount: 0,
+        disallowedGctAmount: 0,
+        pendingVerificationGctAmount: 0,
+      }
+    );
+
+    [
+      "grossAmount",
+      "taxableAmount",
+      "gctAmount",
+      "claimableGctAmount",
+      "disallowedGctAmount",
+      "pendingVerificationGctAmount",
+    ].forEach((field) => {
+      summary[field] =
+        roundMoney(summary[field]);
+    });
+
+    res.json({
+      success: true,
+      message:
+        "GCT register retrieved successfully",
+      filingPeriod: {
+        filingNumber:
+          filingPeriod.filingNumber,
+
+        entityCode:
+          filingPeriod.entityCode,
+
+        periodKey:
+          filingPeriod.periodKey,
+
+        calculationMode:
+          filingPeriod.calculationMode,
+
+        registrationStatus:
+          filingPeriod.registrationStatus,
+
+        status:
+          filingPeriod.status,
+
+        canFileReturn:
+          filingPeriod.canFileReturn,
+      },
+
+      filters: {
+        entityCode,
+        periodKey,
+        registerType:
+          registerType || "All",
+      },
+
+      summary,
+      data: register,
+    });
+  } catch (error) {
+    console.error(
+      "Get GCT filing register error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not retrieve the GCT filing register",
+      error: error.message,
+    });
+  }
+};
+
 const getGctRegistrationProfiles = async (req, res) => {
   try {
     const {
@@ -2433,6 +2736,10 @@ module.exports = {
   createTaxDeadlineRule,
   activateTaxDeadlineRule,
   applyTaxDeadlines,
+
+    getGctFilingPeriods,
+  calculateGctFilingPeriod,
+  getGctFilingRegister,
 
   getGctRegistrationProfiles,
   createGctRegistrationProfile,

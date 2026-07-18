@@ -28,6 +28,10 @@ const {
   activateTaxDeadlineRule,
   applyTaxDeadlines,
 
+    getGctFilingPeriods,
+  calculateGctFilingPeriod,
+  getGctFilingRegister,
+
   getGctRegistrationProfiles,
   createGctRegistrationProfile,
   updateDraftGctRegistrationProfile,
@@ -90,6 +94,28 @@ router.post(
   canManageTaxCenter,
   applyTaxDeadlines
 );
+
+router.get(
+  "/gct/filing-periods",
+  protect,
+  canManageTaxCenter,
+  getGctFilingPeriods
+);
+
+router.post(
+  "/gct/filing-periods/calculate",
+  protect,
+  canManageTaxCenter,
+  calculateGctFilingPeriod
+);
+
+router.get(
+  "/gct/filing-periods/:periodKey/register",
+  protect,
+  canManageTaxCenter,
+  getGctFilingRegister
+);
+
 
 router.get(
   "/gct/profiles",
