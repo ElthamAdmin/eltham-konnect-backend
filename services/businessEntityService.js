@@ -145,67 +145,72 @@ const getBusinessEntityForDate = async (
   return entities[0];
 };
 
-const getBusinessEntitySnapshot = async (
-  dateValue,
-  options = {}
-) => {
-  const entity =
-    await getBusinessEntityForDate(
-      dateValue,
-      options
-    );
+const getBusinessEntitySnapshot = (entity) => {
+  if (!entity) return null;
+
+  const source =
+    typeof entity.toObject === "function"
+      ? entity.toObject()
+      : entity;
 
   return {
-    entityId: entity._id,
-    entityCode: entity.entityCode,
-    legalName: entity.legalName,
-    tradingName: entity.tradingName,
-    businessType: entity.entityType,
-    registrationNumber:
-      entity.registrationNumber,
-    trn: entity.trn,
-    effectiveFrom:
-      entity.effectiveFrom,
-    effectiveTo:
-      entity.effectiveTo,
+    entityId: source._id || null,
+    entityCode: source.entityCode || "",
+    legalName: source.legalName || "",
+    tradingName: source.tradingName || "",
+    entityType: source.entityType || "",
+    lifecycleStatus: source.lifecycleStatus || "",
+    effectiveFrom: source.effectiveFrom || "",
+    effectiveTo: source.effectiveTo || null,
+    registrationNumber: source.registrationNumber || "",
+    registrationDate: source.registrationDate || "",
+    incorporationDate: source.incorporationDate || null,
+    trn: source.trn || "",
+    registeredAddress: source.registeredAddress || "",
+    fiscalYearStart: source.fiscalYearStart || "01-01",
+    fiscalYearEnd: source.fiscalYearEnd || "12-31",
 
-    fiscalYearStart:
-      entity.fiscalYearStart,
-    fiscalYearEnd:
-      entity.fiscalYearEnd,
+    taxTreatment: {
+      incomeTaxType:
+        source.taxTreatment?.incomeTaxType || "Not Configured",
+      incomeTaxRuleCode:
+        source.taxTreatment?.incomeTaxRuleCode || "",
+      gctRegistrationStatus:
+        source.taxTreatment?.gctRegistrationStatus ||
+        "Not Registered",
+      gctRegistrationCode:
+        source.taxTreatment?.gctRegistrationCode || "",
+      payrollEmployerReference:
+        source.taxTreatment?.payrollEmployerReference || "",
+      taxConfigurationStatus:
+        source.taxTreatment?.taxConfigurationStatus ||
+        "Not Configured",
+    },
 
-    incomeTaxType:
-      entity.taxTreatment
-        ?.incomeTaxType ||
-      "Not Configured",
+    accountingConfiguration: {
+      coaStructureCode:
+        source.accountingConfiguration?.coaStructureCode || "",
+      coaInitialized: Boolean(
+        source.accountingConfiguration?.coaInitialized
+      ),
+      openingBalancesPosted: Boolean(
+        source.accountingConfiguration?.openingBalancesPosted
+      ),
+      reportingInitialized: Boolean(
+        source.accountingConfiguration?.reportingInitialized
+      ),
+      openingBalanceBatchNumber:
+        source.accountingConfiguration
+          ?.openingBalanceBatchNumber || "",
+    },
 
-    incomeTaxRuleCode:
-      entity.taxTreatment
-        ?.incomeTaxRuleCode ||
-      "",
-
-    gctRegistrationStatus:
-      entity.taxTreatment
-        ?.gctRegistrationStatus ||
-      "Not Registered",
-
-    gctRegistrationCode:
-      entity.taxTreatment
-        ?.gctRegistrationCode ||
-      "",
-
-    coaStructureCode:
-      entity.accountingConfiguration
-        ?.coaStructureCode ||
-      "",
-
-    resolvedForDate:
-      normalizeEntityDate(dateValue),
-
-    snapshotCreatedAt:
-      new Date(),
+    predecessorEntityCode:
+      source.predecessorEntityCode || "",
+    successorEntityCode:
+      source.successorEntityCode || "",
   };
 };
+
 
 const assertEntityCanPost = (
   entity
