@@ -228,44 +228,40 @@ incomeTaxRuleSchema.index({
   status: 1,
 });
 
-incomeTaxRuleSchema.pre("validate", function validateRule(next) {
-  if (
-    this.effectiveTo &&
-    this.effectiveFrom &&
-    this.effectiveTo < this.effectiveFrom
-  ) {
-    return next(
-      new Error(
+incomeTaxRuleSchema.pre(
+  "validate",
+  function validateRule() {
+    if (
+      this.effectiveTo &&
+      this.effectiveFrom &&
+      this.effectiveTo < this.effectiveFrom
+    ) {
+      throw new Error(
         "The income-tax rule effective-to date cannot be earlier than its effective-from date."
-      )
-    );
-  }
+      );
+    }
 
-  if (
-    this.calculationMethod === "Flat Rate" &&
-    Number(this.flatRate || 0) <= 0
-  ) {
-    return next(
-      new Error(
+    if (
+      this.calculationMethod === "Flat Rate" &&
+      Number(this.flatRate || 0) <= 0
+    ) {
+      throw new Error(
         "A positive flat rate is required for a Flat Rate income-tax rule."
-      )
-    );
-  }
+      );
+    }
 
-  if (
-    this.calculationMethod === "Progressive" &&
-    (!Array.isArray(this.rateBands) ||
-      this.rateBands.length === 0)
-  ) {
-    return next(
-      new Error(
+    if (
+      this.calculationMethod === "Progressive" &&
+      (!Array.isArray(this.rateBands) ||
+        this.rateBands.length === 0)
+    ) {
+      throw new Error(
         "At least one rate band is required for a Progressive income-tax rule."
-      )
-    );
+      );
+    }
   }
+);
 
-  next();
-});
 
 module.exports = mongoose.model(
   "IncomeTaxRule",

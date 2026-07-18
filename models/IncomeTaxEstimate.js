@@ -427,16 +427,14 @@ incomeTaxEstimateSchema.index(
 
 incomeTaxEstimateSchema.pre(
   "validate",
-  function validateEstimate(next) {
+  function validateEstimate() {
     if (
       this.periodStart &&
       this.periodEnd &&
       this.periodEnd < this.periodStart
     ) {
-      return next(
-        new Error(
-          "The income-tax period end cannot be earlier than its start."
-        )
+      throw new Error(
+        "The income-tax period end cannot be earlier than its start."
       );
     }
 
@@ -444,16 +442,13 @@ incomeTaxEstimateSchema.pre(
       Number(this.amountPaid || 0) >
       Number(this.estimatedTaxDue || 0)
     ) {
-      return next(
-        new Error(
-          "The amount paid cannot exceed the estimated tax due."
-        )
+      throw new Error(
+        "The amount paid cannot exceed the estimated tax due."
       );
     }
-
-    next();
   }
 );
+
 
 module.exports = mongoose.model(
   "IncomeTaxEstimate",
