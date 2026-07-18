@@ -155,6 +155,7 @@ const businessEntitySchema = new mongoose.Schema(
       taxConfigurationStatus: {
         type: String,
         enum: [
+          "Configured",
           "Not Configured",
           "Draft",
           "Verified",
