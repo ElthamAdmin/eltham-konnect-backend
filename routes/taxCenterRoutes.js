@@ -5,6 +5,12 @@ const {
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
+const {
+  reviewInvoiceTurnoverClassification,
+  reviewExpenseInputGct,
+} = require("../controllers/gctReviewController");
+
+
 const router = express.Router();
 
 const canManageTaxCenter = requireAnyPermission([
@@ -102,6 +108,21 @@ router.post(
   canManageTaxCenter,
   transitionGctFilingWorkflow
 );
+
+router.patch(
+  "/gct/invoices/:invoiceNumber/classification",
+  protect,
+  canManageTaxCenter,
+  reviewInvoiceTurnoverClassification
+);
+
+router.patch(
+  "/gct/expenses/:expenseNumber/input-tax",
+  protect,
+  canManageTaxCenter,
+  reviewExpenseInputGct
+);
+
 
 
 router.get(
