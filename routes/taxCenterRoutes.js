@@ -46,6 +46,16 @@ const {
   getGctTurnoverMonitor,
 } = require("../controllers/taxCenterController");
 
+const {
+  getBusinessEntities,
+  getBusinessEntityByCode,
+  resolveBusinessEntityForDate,
+  createBusinessEntity,
+  updatePlannedBusinessEntity,
+  registerBusinessEntity,
+  activateBusinessEntity,
+} = require("../controllers/businessEntityController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -181,6 +191,55 @@ router.get(
   protect,
   canManageTaxCenter,
   getGctTurnoverMonitor
+);
+
+router.get(
+  "/entities/resolve",
+  protect,
+  canManageTaxCenter,
+  resolveBusinessEntityForDate
+);
+
+router.get(
+  "/entities",
+  protect,
+  canManageTaxCenter,
+  getBusinessEntities
+);
+
+router.get(
+  "/entities/:entityCode",
+  protect,
+  canManageTaxCenter,
+  getBusinessEntityByCode
+);
+
+router.post(
+  "/entities",
+  protect,
+  canManageTaxCenter,
+  createBusinessEntity
+);
+
+router.patch(
+  "/entities/:entityCode",
+  protect,
+  canManageTaxCenter,
+  updatePlannedBusinessEntity
+);
+
+router.post(
+  "/entities/:entityCode/register",
+  protect,
+  canManageTaxCenter,
+  registerBusinessEntity
+);
+
+router.post(
+  "/entities/:entityCode/activate",
+  protect,
+  canManageTaxCenter,
+  activateBusinessEntity
 );
 
 module.exports = router;
