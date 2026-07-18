@@ -2245,10 +2245,12 @@ const getTaxCenterDashboard = async (req, res) => {
     };
 
     try {
-      const gctMonitor =
+            const gctMonitor =
         await generateGctTurnoverMonitor({
           entityCode: "EK-SP-2026",
-          asOfDate: new Date(),
+          asOfDate: new Date()
+            .toISOString()
+            .slice(0, 10),
         });
 
       gctPosition = {
