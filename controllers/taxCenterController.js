@@ -1710,14 +1710,20 @@ const createGctRegistrationProfile = async (req, res) => {
       effectiveFrom,
       effectiveTo,
 
-      thresholdAmount: roundMoney(thresholdAmount),
-      thresholdCurrency,
-      monitoringMonths: Number(monitoringMonths || 12),
-
-      standardRate: Number(standardRate || 0),
-
-      thresholdRuleEffectiveFrom,
-      thresholdRuleEffectiveTo,
+            turnoverThreshold: {
+        amount: roundMoney(thresholdAmount),
+        currency:
+          String(thresholdCurrency || "JMD")
+            .trim()
+            .toUpperCase(),
+        monitoringMonths:
+          Number(monitoringMonths || 12),
+        effectiveFrom:
+          thresholdRuleEffectiveFrom || effectiveFrom,
+        effectiveTo:
+          thresholdRuleEffectiveTo || null,
+        ruleCode: "JM-GCT-THRESHOLD-2025-15M",
+      },
 
       sourceName: String(sourceName).trim(),
       sourceUrl: String(sourceUrl).trim(),
@@ -1744,6 +1750,193 @@ const createGctRegistrationProfile = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Could not create GCT registration profile",
+      error: error.message,
+    });
+  }
+};
+
+const updateDraftGctRegistrationProfile = async (
+  req,
+  res
+) => {
+  try {
+    const { registrationCode } = req.params;
+
+    const profile = await TaxRegistrationProfile.findOne({
+      registrationCode,
+      taxType: "GCT",
+    });
+
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "GCT registration profile not found.",
+      });
+    }
+
+    if (profile.status !== "Draft") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Only a Draft GCT registration profile can be corrected.",
+      });
+    }
+
+    const {
+      registrationStatus,
+      registrationNumber,
+      trn,
+      effectiveFrom,
+      effectiveTo,
+      thresholdAmount,
+      thresholdCurrency,
+      monitoringMonths,
+      thresholdRuleEffectiveFrom,
+      thresholdRuleEffectiveTo,
+      thresholdRuleCode,
+      standardRate,
+      sourceName,
+      sourceUrl,
+      sourceReference,
+      sourceVerifiedAt,
+      monitoringEnabled,
+      notes,
+    } = req.body;
+
+    if (registrationStatus !== undefined) {
+      profile.registrationStatus =
+        String(registrationStatus).trim();
+    }
+
+    if (registrationNumber !== undefined) {
+      profile.registrationNumber =
+        String(registrationNumber || "").trim();
+    }
+
+    if (trn !== undefined) {
+      profile.trn = String(trn || "").trim();
+    }
+
+    if (effectiveFrom !== undefined) {
+      profile.effectiveFrom = effectiveFrom;
+    }
+
+    if (effectiveTo !== undefined) {
+      profile.effectiveTo = effectiveTo || null;
+    }
+
+    if (thresholdAmount !== undefined) {
+      const normalizedThreshold =
+        roundMoney(thresholdAmount);
+
+      if (normalizedThreshold <= 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "The GCT monitoring threshold must be greater than zero.",
+        });
+      }
+
+      profile.turnoverThreshold.amount =
+        normalizedThreshold;
+    }
+
+    if (thresholdCurrency !== undefined) {
+      profile.turnoverThreshold.currency =
+        String(thresholdCurrency || "JMD")
+          .trim()
+          .toUpperCase();
+    }
+
+    if (monitoringMonths !== undefined) {
+      const normalizedMonths =
+        Number(monitoringMonths);
+
+      if (
+        !Number.isInteger(normalizedMonths) ||
+        normalizedMonths <= 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Monitoring months must be a positive whole number.",
+        });
+      }
+
+      profile.turnoverThreshold.monitoringMonths =
+        normalizedMonths;
+    }
+
+    if (thresholdRuleEffectiveFrom !== undefined) {
+      profile.turnoverThreshold.effectiveFrom =
+        thresholdRuleEffectiveFrom || null;
+    }
+
+    if (thresholdRuleEffectiveTo !== undefined) {
+      profile.turnoverThreshold.effectiveTo =
+        thresholdRuleEffectiveTo || null;
+    }
+
+    if (thresholdRuleCode !== undefined) {
+      profile.turnoverThreshold.ruleCode =
+        String(thresholdRuleCode || "").trim();
+    }
+
+    if (standardRate !== undefined) {
+      profile.standardRate =
+        Number(standardRate || 0);
+    }
+
+    if (sourceName !== undefined) {
+      profile.sourceName =
+        String(sourceName || "").trim();
+    }
+
+    if (sourceUrl !== undefined) {
+      profile.sourceUrl =
+        String(sourceUrl || "").trim();
+    }
+
+    if (sourceReference !== undefined) {
+      profile.sourceReference =
+        String(sourceReference || "").trim();
+    }
+
+    if (sourceVerifiedAt !== undefined) {
+      profile.sourceVerifiedAt =
+        sourceVerifiedAt || null;
+    }
+
+    if (monitoringEnabled !== undefined) {
+      profile.monitoringEnabled =
+        Boolean(monitoringEnabled);
+    }
+
+    if (notes !== undefined) {
+      profile.notes =
+        String(notes || "").trim();
+    }
+
+    profile.updatedBy = getUserName(req.user);
+
+    await profile.save();
+
+    res.json({
+      success: true,
+      message:
+        "Draft GCT registration profile updated successfully",
+      data: profile,
+    });
+  } catch (error) {
+    console.error(
+      "Update Draft GCT registration profile error:",
+      error
+    );
+
+    res.status(500).json({
+      success: false,
+      message:
+        "Could not update the Draft GCT registration profile",
       error: error.message,
     });
   }
@@ -2139,6 +2332,7 @@ module.exports = {
 
   getGctRegistrationProfiles,
   createGctRegistrationProfile,
+  updateDraftGctRegistrationProfile,
   activateGctRegistrationProfile,
   getGctTurnoverMonitor,
 };

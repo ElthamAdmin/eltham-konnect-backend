@@ -30,6 +30,7 @@ const {
 
   getGctRegistrationProfiles,
   createGctRegistrationProfile,
+  updateDraftGctRegistrationProfile,
   activateGctRegistrationProfile,
   getGctTurnoverMonitor,
 } = require("../controllers/taxCenterController");
@@ -103,6 +104,14 @@ router.post(
   canManageTaxCenter,
   createGctRegistrationProfile
 );
+
+router.patch(
+  "/gct/profiles/:registrationCode",
+  protect,
+  canManageTaxCenter,
+  updateDraftGctRegistrationProfile
+);
+
 
 router.post(
   "/gct/profiles/:registrationCode/activate",
