@@ -56,6 +56,13 @@ const {
   activateBusinessEntity,
 } = require("../controllers/businessEntityController");
 
+const {
+  getIncomeTaxRules,
+  createIncomeTaxRule,
+  updateDraftIncomeTaxRule,
+  activateIncomeTaxRule,
+} = require("../controllers/incomeTaxController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -240,6 +247,34 @@ router.post(
   protect,
   canManageTaxCenter,
   activateBusinessEntity
+);
+
+router.get(
+  "/income-tax/rules",
+  protect,
+  canManageTaxCenter,
+  getIncomeTaxRules
+);
+
+router.post(
+  "/income-tax/rules",
+  protect,
+  canManageTaxCenter,
+  createIncomeTaxRule
+);
+
+router.patch(
+  "/income-tax/rules/:ruleCode",
+  protect,
+  canManageTaxCenter,
+  updateDraftIncomeTaxRule
+);
+
+router.post(
+  "/income-tax/rules/:ruleCode/activate",
+  protect,
+  canManageTaxCenter,
+  activateIncomeTaxRule
 );
 
 module.exports = router;
