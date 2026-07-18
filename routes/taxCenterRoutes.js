@@ -54,6 +54,7 @@ const {
   updatePlannedBusinessEntity,
   registerBusinessEntity,
   activateBusinessEntity,
+  configureBusinessEntityIncomeTax,
 } = require("../controllers/businessEntityController");
 
 const {
@@ -283,6 +284,13 @@ router.post(
   protect,
   canManageTaxCenter,
   previewIncomeTaxEstimate
+);
+
+router.post(
+  "/entities/:entityCode/income-tax-rule",
+  protect,
+  canManageTaxCenter,
+  configureBusinessEntityIncomeTax
 );
 
 module.exports = router;

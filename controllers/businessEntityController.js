@@ -1,4 +1,5 @@
 const BusinessEntity = require("../models/BusinessEntity");
+const IncomeTaxRule = require("../models/IncomeTaxRule");
 
 const {
   normalizeEntityDate,
@@ -493,6 +494,140 @@ const activateBusinessEntity = async (req, res) => {
   }
 };
 
+const configureBusinessEntityIncomeTax = async (
+  req,
+  res
+) => {
+  try {
+    const { entityCode } = req.params;
+    const { ruleCode, effectiveDate } = req.body;
+
+    if (!ruleCode || !effectiveDate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Income-tax rule code and effective date are required.",
+      });
+    }
+
+    const entity = await BusinessEntity.findOne({
+      entityCode: String(entityCode || "")
+        .trim()
+        .toUpperCase(),
+    });
+
+    if (!entity) {
+      return res.status(404).json({
+        success: false,
+        message: "Business entity not found",
+      });
+    }
+
+    const rule = await IncomeTaxRule.findOne({
+      ruleCode: String(ruleCode || "")
+        .trim()
+        .toUpperCase(),
+    });
+
+    if (!rule) {
+      return res.status(404).json({
+        success: false,
+        message: "Income-tax rule not found",
+      });
+    }
+
+    if (rule.status !== "Active") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Only an Active income-tax rule may be assigned to an entity.",
+      });
+    }
+
+    if (
+      rule.incomeTaxType !==
+      entity.taxTreatment?.incomeTaxType
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `${rule.ruleCode} is configured for ${rule.incomeTaxType}, but ${entity.entityCode} uses ${entity.taxTreatment?.incomeTaxType || "an unconfigured income-tax type"}.`,
+      });
+    }
+
+    if (
+      !rule.applicableEntityTypes.includes(
+        entity.entityType
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `${rule.ruleCode} does not apply to ${entity.entityType} entities.`,
+      });
+    }
+
+    const normalizedEffectiveDate =
+      normalizeEntityDate(
+        effectiveDate,
+        "Effective date"
+      );
+
+    const checkDate = new Date(
+      `${normalizedEffectiveDate}T12:00:00.000Z`
+    );
+
+    if (
+      checkDate < new Date(rule.effectiveFrom) ||
+      (rule.effectiveTo &&
+        checkDate > new Date(rule.effectiveTo))
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `${rule.ruleCode} is not effective on ${normalizedEffectiveDate}.`,
+      });
+    }
+
+    if (
+      normalizedEffectiveDate <
+        entity.effectiveFrom ||
+      (entity.effectiveTo &&
+        normalizedEffectiveDate >
+          entity.effectiveTo)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: `${entity.entityCode} is not effective on ${normalizedEffectiveDate}.`,
+      });
+    }
+
+    entity.taxTreatment.incomeTaxRuleCode =
+      rule.ruleCode;
+
+    entity.taxTreatment.taxConfigurationStatus =
+      "Configured";
+
+    entity.updatedBy = getUserName(req.user);
+
+    await entity.save();
+
+    res.json({
+      success: true,
+      message: `${rule.ruleCode} assigned to ${entity.entityCode} successfully.`,
+      data: entity,
+    });
+  } catch (error) {
+    console.error(
+      "Configure entity income-tax error:",
+      error
+    );
+
+    res.status(400).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
 module.exports = {
   getBusinessEntities,
   getBusinessEntityByCode,
@@ -501,4 +636,5 @@ module.exports = {
   updatePlannedBusinessEntity,
   registerBusinessEntity,
   activateBusinessEntity,
+  configureBusinessEntityIncomeTax,
 };
