@@ -15,12 +15,19 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["1000", "Cash on Hand", "Asset", "Debit", "Cash"],
   ["1010", "NCB Bank", "Asset", "Debit", "Bank"],
   ["1100", "Accounts Receivable", "Asset", "Debit", "Current Asset"],
-  [
+    [
     "1160",
     "Employee Advances Receivable",
     "Asset",
     "Debit",
     "Current Asset",
+  ],
+  [
+    "1170",
+    "GCT Input Tax Recoverable",
+    "Asset",
+    "Debit",
+    "Current Tax Receivable",
   ],
   ["1200", "Inventory", "Asset", "Debit", "Current Asset"],
 
@@ -30,7 +37,14 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["2120", "NHT Payable", "Liability", "Credit", "Payroll Tax Payable"],
   ["2130", "Education Tax Payable", "Liability", "Credit", "Payroll Tax Payable"],
   ["2140", "Pension Payable", "Liability", "Credit", "Payroll Payable"],
-  ["2150", "HEART Payable", "Liability", "Credit", "Payroll Tax Payable"],
+    ["2150", "HEART Payable", "Liability", "Credit", "Payroll Tax Payable"],
+  [
+    "2160",
+    "GCT Output Tax Payable",
+    "Liability",
+    "Credit",
+    "Consumption Tax Payable",
+  ],
 
   ["3000", "Owner Capital", "Equity", "Credit", "Owner Capital"],
   ["3010", "Owner Contributions", "Equity", "Credit", "Owner Contributions"],
