@@ -61,6 +61,7 @@ const {
   createIncomeTaxRule,
   updateDraftIncomeTaxRule,
   activateIncomeTaxRule,
+  previewIncomeTaxEstimate,
 } = require("../controllers/incomeTaxController");
 
 router.get("/dashboard", protect, getTaxCenterDashboard);
@@ -275,6 +276,13 @@ router.post(
   protect,
   canManageTaxCenter,
   activateIncomeTaxRule
+);
+
+router.post(
+  "/income-tax/estimates/preview",
+  protect,
+  canManageTaxCenter,
+  previewIncomeTaxEstimate
 );
 
 module.exports = router;

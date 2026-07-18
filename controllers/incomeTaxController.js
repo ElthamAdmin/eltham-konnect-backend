@@ -1,5 +1,9 @@
 const IncomeTaxRule = require("../models/IncomeTaxRule");
 
+const {
+  calculateIncomeTaxEstimate,
+} = require("../services/incomeTaxService");
+
 const getUserName = (user) =>
   user?.fullName ||
   user?.name ||
@@ -380,9 +384,113 @@ const activateIncomeTaxRule = async (
   }
 };
 
+const previewIncomeTaxEstimate = async (
+  req,
+  res
+) => {
+  try {
+    const {
+      periodStart,
+      periodEnd,
+      grossRevenue,
+      costOfSales,
+      operatingExpenses,
+      otherIncome,
+      nonDeductibleExpenses,
+      exemptIncome,
+      capitalAllowances,
+      lossCarryForwardApplied,
+      otherAddBacks,
+      otherDeductions,
+      taxCredits,
+      priorPayments,
+      manualTaxAmount,
+    } = req.body;
+
+    if (!periodStart || !periodEnd) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Period start and period end are required.",
+      });
+    }
+
+    const calculation =
+      await calculateIncomeTaxEstimate({
+        periodStart,
+        periodEnd,
+        grossRevenue,
+        costOfSales,
+        operatingExpenses,
+        otherIncome,
+        nonDeductibleExpenses,
+        exemptIncome,
+        capitalAllowances,
+        lossCarryForwardApplied,
+        otherAddBacks,
+        otherDeductions,
+        taxCredits,
+        priorPayments,
+        manualTaxAmount,
+      });
+
+    res.json({
+      success: true,
+      message:
+        "Income-tax estimate preview calculated successfully. No estimate or tax liability was created.",
+      data: {
+        entitySnapshot:
+          calculation.entitySnapshot,
+        incomeTaxType:
+          calculation.incomeTaxType,
+        ruleSnapshot:
+          calculation.ruleSnapshot,
+        periodStart:
+          calculation.periodStart,
+        periodEnd: calculation.periodEnd,
+        financialSummary:
+          calculation.financialSummary,
+        taxAdjustments:
+          calculation.taxAdjustments,
+        estimatedTaxableIncome:
+          calculation.estimatedTaxableIncome,
+        chargeableIncome:
+          calculation.chargeableIncome,
+        grossIncomeTax:
+          calculation.grossIncomeTax,
+        taxCredits: calculation.taxCredits,
+        priorPayments:
+          calculation.priorPayments,
+        estimatedTaxDue:
+          calculation.estimatedTaxDue,
+        balanceDue: calculation.balanceDue,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Preview income-tax estimate error:",
+      error
+    );
+
+    const statusCode =
+      /No effective business entity|No active .* rule|does not have a configured income-tax type/i.test(
+        error.message
+      )
+        ? 409
+        : 400;
+
+    res.status(statusCode).json({
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+
 module.exports = {
   getIncomeTaxRules,
   createIncomeTaxRule,
   updateDraftIncomeTaxRule,
   activateIncomeTaxRule,
+  previewIncomeTaxEstimate,
 };
