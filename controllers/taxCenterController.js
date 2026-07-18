@@ -2227,6 +2227,106 @@ const getTaxCenterDashboard = async (req, res) => {
       {}
     );
 
+        let gctPosition = {
+      configured: false,
+      entityCode: "EK-SP-2026",
+      registrationStatus: "Not Configured",
+      canChargeGct: false,
+      thresholdAmount: 0,
+      monitoredTurnover: 0,
+      thresholdUtilization: 0,
+      remainingBeforeThreshold: 0,
+      alertLevel: "Not Configured",
+      invoiceCount: 0,
+      unreviewedInvoices: 0,
+      monitoringPeriod: null,
+      notice:
+        "No active GCT monitoring profile is configured.",
+    };
+
+    try {
+      const gctMonitor =
+        await generateGctTurnoverMonitor({
+          entityCode: "EK-SP-2026",
+          asOfDate: new Date(),
+        });
+
+      gctPosition = {
+        configured: true,
+
+        entityCode:
+          gctMonitor.entity.entityCode,
+
+        entityName:
+          gctMonitor.entity.entityName,
+
+        businessType:
+          gctMonitor.entity.businessType,
+
+        registrationStatus:
+          gctMonitor.registration.registrationStatus,
+
+        registrationNumber:
+          gctMonitor.registration.registrationNumber,
+
+        canChargeGct:
+          gctMonitor.canChargeGct,
+
+        thresholdAmount:
+          gctMonitor.threshold.amount,
+
+        thresholdCurrency:
+          gctMonitor.threshold.currency,
+
+        thresholdRuleCode:
+          gctMonitor.threshold.ruleCode,
+
+        monitoredTurnover:
+          gctMonitor.totals.potentiallyTaxableTurnover,
+
+        grossInvoiceAmount:
+          gctMonitor.totals.grossInvoiceAmount,
+
+        customerPurchaseRecovery:
+          gctMonitor.totals.customerPurchaseRecovery,
+
+        customsRecovery:
+          gctMonitor.totals.customsRecovery,
+
+        outputGct:
+          gctMonitor.totals.outputGct,
+
+        thresholdUtilization:
+          gctMonitor.thresholdUtilization,
+
+        remainingBeforeThreshold:
+          gctMonitor.remainingBeforeThreshold,
+
+        alertLevel:
+          gctMonitor.alertLevel,
+
+        invoiceCount:
+          gctMonitor.totals.invoiceCount,
+
+        unreviewedInvoices:
+          gctMonitor.totals.unreviewedInvoices,
+
+        monitoringPeriod:
+          gctMonitor.monitoringPeriod,
+
+        notice:
+          gctMonitor.notice,
+      };
+    } catch (gctError) {
+      console.error(
+        "Tax dashboard GCT monitor warning:",
+        gctError.message
+      );
+
+      gctPosition.notice =
+        `GCT monitoring is unavailable: ${gctError.message}`;
+    }
+
     res.json({
       success: true,
       data: {
@@ -2257,10 +2357,12 @@ const getTaxCenterDashboard = async (req, res) => {
         unfiledPeriodCount:
           unfiledRecords.length,
 
-        missingDeadlineRuleCount:
+                missingDeadlineRuleCount:
           missingDeadlineRecords.length,
 
         statusCounts,
+
+        gctPosition,
 
         upcomingDeadlines:
           upcomingRecords.map((record) => ({
