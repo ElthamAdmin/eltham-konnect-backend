@@ -78,6 +78,14 @@ const {
   getTaxGlReconciliation,
 } = require("../controllers/taxReconciliationController");
 
+const {
+  receiveTaxDocumentUpload,
+} = require("../middleware/taxDocumentUploadMiddleware");
+
+const {
+  uploadTaxDocument,
+} = require("../controllers/taxDocumentUploadController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -353,6 +361,14 @@ router.get(
   protect,
   canManageTaxCenter,
   getTaxGlReconciliation
+);
+
+router.post(
+  "/documents/upload",
+  protect,
+  canManageTaxCenter,
+  receiveTaxDocumentUpload,
+  uploadTaxDocument
 );
 
 module.exports = router;
