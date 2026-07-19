@@ -522,7 +522,64 @@ const generateEntityPeriodTaxReconciliation =
     };
   };
 
+const assertEntityPeriodTaxTypeReconciled =
+  async ({
+    entityCode,
+    periodKey,
+    taxType,
+  }) => {
+    const result =
+      await generateEntityPeriodTaxReconciliation({
+        entityCode,
+        periodKey,
+        taxType,
+      });
+
+    const reconciliation = result.data[0];
+
+    if (!reconciliation) {
+      const error = new Error(
+        `No reconciliation result was generated for ${taxType}, ${entityCode}, ${periodKey}.`
+      );
+
+      error.statusCode = 409;
+      throw error;
+    }
+
+    if (!reconciliation.reconciled) {
+      const error = new Error(
+        `${taxType} for ${entityCode}, period ${periodKey}, cannot be reconciled. Tax Center balance is JMD ${reconciliation.taxCenterBalance.toFixed(
+          2
+        )}, GL balance is JMD ${reconciliation.glBalance.toFixed(
+          2
+        )}, and the difference is JMD ${reconciliation.reconciliationDifference.toFixed(
+          2
+        )}.`
+      );
+
+      error.statusCode = 409;
+
+      error.reconciliation = {
+        entityCode,
+        periodKey,
+        taxType,
+        accountCode:
+          reconciliation.accountCode,
+        taxCenterBalance:
+          reconciliation.taxCenterBalance,
+        glBalance: reconciliation.glBalance,
+        reconciliationDifference:
+          reconciliation.reconciliationDifference,
+      };
+
+      throw error;
+    }
+
+    return reconciliation;
+  };
+
 module.exports = {
   TAX_ACCOUNT_MAP,
   generateEntityPeriodTaxReconciliation,
+  assertEntityPeriodTaxTypeReconciled,
 };

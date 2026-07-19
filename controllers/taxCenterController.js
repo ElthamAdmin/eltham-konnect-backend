@@ -18,8 +18,8 @@ const {
 } = require("../services/taxDeadlineService");
 
 const {
-  assertTaxTypeReconciled,
-} = require("../services/taxReconciliationService");
+  assertEntityPeriodTaxTypeReconciled,
+} = require("../services/taxEntityPeriodReconciliationService");
 
 const {
   generateGctTurnoverMonitor,
@@ -884,19 +884,37 @@ const transitionTaxRecordWorkflow = async (req, res) => {
       });
     }
 
-        if (action === "Reconcile") {
-      const taxTypes = [
-        ...new Set(
-          records.map((record) => record.taxType)
-        ),
+            if (action === "Reconcile") {
+      const reconciliationScopes = [
+        ...new Map(
+          records.map((record) => {
+            const scopeKey = [
+              record.entityCode,
+              record.periodKey,
+              record.taxType,
+            ].join("|");
+
+            return [
+              scopeKey,
+              {
+                entityCode: record.entityCode,
+                periodKey: record.periodKey,
+                taxType: record.taxType,
+              },
+            ];
+          })
+        ).values(),
       ];
 
-      for (const taxType of taxTypes) {
-        await assertTaxTypeReconciled(
-          taxType
-        );
+      for (const scope of reconciliationScopes) {
+        await assertEntityPeriodTaxTypeReconciled({
+          entityCode: scope.entityCode,
+          periodKey: scope.periodKey,
+          taxType: scope.taxType,
+        });
       }
     }
+
 
     const performedBy = getUserName(req.user);
     const performedAt = new Date();
@@ -957,18 +975,27 @@ const transitionTaxRecordWorkflow = async (req, res) => {
         `${workflowAction.toStatus}.`,
       data: records,
     });
-  } catch (error) {
+    } catch (error) {
     console.error(
       "Tax workflow transition error:",
       error
     );
 
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not update the Tax Center workflow",
-      error: error.message,
-    });
+    return res
+      .status(error.statusCode || 500)
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Could not update the Tax Center workflow",
+
+        ...(error.reconciliation
+          ? {
+              reconciliation:
+                error.reconciliation,
+            }
+          : {}),
+      });
   }
 };
 
