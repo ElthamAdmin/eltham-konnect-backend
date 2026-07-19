@@ -28,6 +28,73 @@ const PAY_TYPES = [
   "Hourly Rate",
 ];
 
+const EMPLOYMENT_CLASSIFICATIONS = [
+  "",
+  "Full-Time",
+  "Part-Time",
+  "Casual",
+  "Seasonal",
+  "Apprentice",
+  "Intern",
+  "Other",
+];
+
+const CONTRACT_TYPES = [
+  "",
+  "Permanent",
+  "Fixed-Term",
+  "Temporary",
+  "Casual",
+  "Probationary",
+  "Independent Contractor",
+  "Other",
+];
+
+const COMPENSATION_TYPES = [
+  "",
+  "Salary",
+  "Wage",
+  "Stipend",
+  "Allowance",
+  "Other",
+];
+
+const PAY_FREQUENCIES = [
+  "",
+  "Weekly",
+  "Fortnightly",
+  "Semi-Monthly",
+  "Monthly",
+  "Annual",
+];
+
+const WORKDAYS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+
+const PROBATION_STATUSES = [
+  "Not Applicable",
+  "Pending",
+  "In Progress",
+  "Review Due",
+  "Completed",
+  "Extended",
+  "Failed",
+];
+
+const PAYROLL_ELIGIBILITY_STATUSES = [
+  "Pending Review",
+  "Eligible",
+  "On Hold",
+  "Not Eligible",
+];
+
 const DOCUMENT_TYPES = [
   "Contract",
   "Job Letter",
@@ -202,10 +269,24 @@ reportsToName: {
       trim: true,
     },
 
-    employmentType: {
+        employmentType: {
       type: String,
       enum: EMPLOYMENT_TYPES,
       default: "Temporary",
+    },
+
+    employmentClassification: {
+      type: String,
+      enum: EMPLOYMENT_CLASSIFICATIONS,
+      default: "",
+      index: true,
+    },
+
+    contractType: {
+      type: String,
+      enum: CONTRACT_TYPES,
+      default: "",
+      index: true,
     },
 
     startDate: {
@@ -213,10 +294,79 @@ reportsToName: {
       default: "",
     },
 
-    endDate: {
+        endDate: {
       type: String,
       default: "",
     },
+
+    probation: {
+      applicable: {
+        type: Boolean,
+        default: false,
+      },
+
+      startDate: {
+        type: String,
+        default: "",
+      },
+
+      endDate: {
+        type: String,
+        default: "",
+      },
+
+      durationMonths: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 24,
+      },
+
+      status: {
+        type: String,
+        enum: PROBATION_STATUSES,
+        default: "Not Applicable",
+      },
+
+      reviewDueDate: {
+        type: String,
+        default: "",
+      },
+
+      completedDate: {
+        type: String,
+        default: "",
+      },
+
+      notes: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
+    normalWorkingHours: {
+      hoursPerDay: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 24,
+      },
+
+      hoursPerWeek: {
+        type: Number,
+        default: 0,
+        min: 0,
+        max: 168,
+      },
+    },
+
+    scheduledWorkdays: [
+      {
+        type: String,
+        enum: WORKDAYS,
+      },
+    ],
 
     employmentStatus: {
       type: String,
@@ -230,15 +380,63 @@ reportsToName: {
       default: "Monthly Salary",
     },
 
-    payRate: {
+        payRate: {
       type: Number,
       default: 0,
       min: 0,
     },
 
-    payrollEnabled: {
+    compensationType: {
+      type: String,
+      enum: COMPENSATION_TYPES,
+      default: "",
+      index: true,
+    },
+
+    payFrequency: {
+      type: String,
+      enum: PAY_FREQUENCIES,
+      default: "",
+      index: true,
+    },
+
+        payrollEnabled: {
       type: Boolean,
       default: true,
+    },
+
+    payrollEligibilityStatus: {
+      type: String,
+      enum: PAYROLL_ELIGIBILITY_STATUSES,
+      default: "Pending Review",
+      index: true,
+    },
+
+    payrollEligibilityReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    payrollEligibilityEffectiveFrom: {
+      type: String,
+      default: "",
+    },
+
+    payrollEligibilityEffectiveTo: {
+      type: String,
+      default: "",
+    },
+
+    payrollEligibilityReviewedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    payrollEligibilityReviewedAt: {
+      type: Date,
+      default: null,
     },
 
     linkedUserId: {
