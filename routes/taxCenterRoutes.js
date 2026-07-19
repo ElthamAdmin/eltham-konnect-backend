@@ -99,6 +99,10 @@ const {
   backfillTaxRecordEntities,
 } = require("../controllers/taxEntityAttributionController");
 
+const {
+  getEntityPeriodTaxReconciliation,
+} = require("../controllers/taxEntityPeriodReconciliationController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -410,6 +414,13 @@ router.post(
   protect,
   canManageTaxCenter,
   backfillTaxRecordEntities
+);
+
+router.get(
+  "/reconciliation/entity-period",
+  protect,
+  canManageTaxCenter,
+  getEntityPeriodTaxReconciliation
 );
 
 module.exports = router;
