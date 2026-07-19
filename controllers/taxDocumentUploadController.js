@@ -1,7 +1,16 @@
 const path = require("path");
+
+const TaxDocument = require("../models/TaxDocument");
+
 const {
   configureCloudinary,
 } = require("../config/cloudinary");
+
+const getUserName = (user) =>
+  user?.fullName ||
+  user?.name ||
+  user?.email ||
+  "System User";
 
 const sanitizeFileName = (fileName) =>
   String(fileName || "tax-document")
@@ -9,6 +18,73 @@ const sanitizeFileName = (fileName) =>
     .replace(/[^a-zA-Z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "tax-document";
+
+const createDocumentNumber = () =>
+  `TDOC-${Date.now()}-${Math.floor(
+    1000 + Math.random() * 9000
+  )}`;
+
+const hasSchemaPath = (pathName) =>
+  Boolean(TaxDocument.schema.path(pathName));
+
+const setNestedValue = (target, pathName, value) => {
+  const segments = pathName.split(".");
+  let current = target;
+
+  segments.forEach((segment, index) => {
+    if (index === segments.length - 1) {
+      current[segment] = value;
+      return;
+    }
+
+    if (
+      !current[segment] ||
+      typeof current[segment] !== "object"
+    ) {
+      current[segment] = {};
+    }
+
+    current = current[segment];
+  });
+};
+
+const assignFirstSupportedPath = (
+  target,
+  candidatePaths,
+  value
+) => {
+  const supportedPath = candidatePaths.find(hasSchemaPath);
+
+  if (!supportedPath) {
+    return "";
+  }
+
+  setNestedValue(target, supportedPath, value);
+  return supportedPath;
+};
+
+const parseMetadata = (req) => {
+  let parsedMetadata = {};
+
+  if (req.body?.metadata) {
+    try {
+      parsedMetadata = JSON.parse(req.body.metadata);
+    } catch (error) {
+      const metadataError = new Error(
+        "The metadata field must contain valid JSON."
+      );
+
+      metadataError.statusCode = 400;
+      throw metadataError;
+    }
+  }
+
+  return {
+    ...req.body,
+    ...parsedMetadata,
+    metadata: undefined,
+  };
+};
 
 const uploadBufferToCloudinary = ({
   buffer,
@@ -27,6 +103,7 @@ const uploadBufferToCloudinary = ({
         overwrite: false,
         use_filename: false,
         unique_filename: true,
+
         context: {
           originalFileName,
           sourceModule: "Tax Center",
@@ -44,7 +121,167 @@ const uploadBufferToCloudinary = ({
     uploadStream.end(buffer);
   });
 
+const deleteCloudinaryAsset = async (uploadedAsset) => {
+  if (!uploadedAsset?.public_id) {
+    return;
+  }
+
+  const cloudinary = configureCloudinary();
+
+  await cloudinary.uploader.destroy(
+    uploadedAsset.public_id,
+    {
+      resource_type:
+        uploadedAsset.resource_type || "image",
+      type: "authenticated",
+      invalidate: true,
+    }
+  );
+};
+
+const buildTaxDocumentPayload = ({
+  metadata,
+  file,
+  uploadedAsset,
+  user,
+}) => {
+  const userName = getUserName(user);
+  const uploadedAt =
+    uploadedAsset.created_at || new Date();
+
+  const payload = {
+    ...metadata,
+  };
+
+  delete payload.document;
+  delete payload.metadata;
+
+  assignFirstSupportedPath(
+    payload,
+    ["documentNumber"],
+    metadata.documentNumber || createDocumentNumber()
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["title", "documentTitle", "documentName"],
+    metadata.title ||
+      metadata.documentTitle ||
+      metadata.documentName ||
+      file.originalname
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["originalFileName", "fileMetadata.originalFileName"],
+    file.originalname
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["fileName", "fileMetadata.fileName"],
+    file.originalname
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["mimeType", "fileMetadata.mimeType"],
+    file.mimetype
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["fileSize", "fileMetadata.fileSize"],
+    file.size
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["fileUrl", "documentUrl", "url"],
+    uploadedAsset.secure_url || ""
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["storageProvider"],
+    "Cloudinary"
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["storageAccess", "fileMetadata.storageAccess"],
+    "Authenticated"
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    [
+      "storageKey",
+      "publicId",
+      "cloudinaryPublicId",
+      "fileMetadata.publicId",
+    ],
+    uploadedAsset.public_id
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    [
+      "assetId",
+      "cloudinaryAssetId",
+      "fileMetadata.assetId",
+    ],
+    uploadedAsset.asset_id || ""
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["resourceType", "fileMetadata.resourceType"],
+    uploadedAsset.resource_type || ""
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["format", "fileMetadata.format"],
+    uploadedAsset.format || ""
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["storageVersion", "version", "fileMetadata.version"],
+    uploadedAsset.version || null
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["uploadedAt", "fileMetadata.uploadedAt"],
+    uploadedAt
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["uploadedBy"],
+    userName
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["createdBy"],
+    userName
+  );
+
+  assignFirstSupportedPath(
+    payload,
+    ["updatedBy"],
+    userName
+  );
+
+  return payload;
+};
+
 const uploadTaxDocument = async (req, res) => {
+  let uploadedAsset = null;
+
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -54,51 +291,81 @@ const uploadTaxDocument = async (req, res) => {
       });
     }
 
+    const metadata = parseMetadata(req);
+
+    if (
+      !String(metadata.entityCode || "").trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "An entity code is required.",
+      });
+    }
+
+    if (
+      !String(metadata.documentType || "").trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "A document type is required.",
+      });
+    }
+
     const extension = path
       .extname(req.file.originalname || "")
       .toLowerCase();
 
-    const baseFileName = sanitizeFileName(
+    const publicId = `${sanitizeFileName(
       req.file.originalname
-    );
+    )}-${Date.now()}${extension}`;
 
-    const publicId = `${baseFileName}-${Date.now()}${extension}`;
-
-    const uploadedAsset = await uploadBufferToCloudinary({
+    uploadedAsset = await uploadBufferToCloudinary({
       buffer: req.file.buffer,
       publicId,
       originalFileName: req.file.originalname,
     });
 
+    const documentPayload = buildTaxDocumentPayload({
+      metadata,
+      file: req.file,
+      uploadedAsset,
+      user: req.user,
+    });
+
+    const taxDocument =
+      await TaxDocument.create(documentPayload);
+
     return res.status(201).json({
       success: true,
-      message: "Tax document uploaded securely successfully.",
-      data: {
-        storageProvider: "Cloudinary",
-        storageAccess: "Authenticated",
-        publicId: uploadedAsset.public_id,
-        assetId: uploadedAsset.asset_id || "",
-        resourceType: uploadedAsset.resource_type || "",
-        format: uploadedAsset.format || extension.replace(".", ""),
-        version: uploadedAsset.version || null,
-        fileUrl: uploadedAsset.secure_url || "",
-        originalFileName: req.file.originalname,
-        mimeType: req.file.mimetype,
-        fileSize: req.file.size,
-        width: uploadedAsset.width || null,
-        height: uploadedAsset.height || null,
-        uploadedAt:
-          uploadedAsset.created_at || new Date().toISOString(),
-      },
+      message:
+        "Tax document uploaded and registered successfully.",
+      data: taxDocument,
     });
   } catch (error) {
-    console.error("Tax document Cloudinary upload error:", error);
+    if (uploadedAsset?.public_id) {
+      try {
+        await deleteCloudinaryAsset(uploadedAsset);
+      } catch (cleanupError) {
+        console.error(
+          "Tax document Cloudinary cleanup error:",
+          cleanupError
+        );
+      }
+    }
 
-    return res.status(500).json({
-      success: false,
-      message: "Could not upload the tax document securely.",
-      error: error.message,
-    });
+    console.error(
+      "Tax document upload and registration error:",
+      error
+    );
+
+    return res
+      .status(error.statusCode || 400)
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Could not upload and register the tax document.",
+      });
   }
 };
 
