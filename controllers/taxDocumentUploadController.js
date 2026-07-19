@@ -1,5 +1,3 @@
-const path = require("path");
-
 const TaxDocument = require("../models/TaxDocument");
 
 const BusinessEntity = require("../models/BusinessEntity");
@@ -407,13 +405,9 @@ const uploadTaxDocument = async (req, res) => {
       });
     }
 
-    const extension = path
-      .extname(req.file.originalname || "")
-      .toLowerCase();
-
     const publicId = `${sanitizeFileName(
-      req.file.originalname
-    )}-${Date.now()}${extension}`;
+  req.file.originalname
+)}-${Date.now()}`;
 
     uploadedAsset = await uploadBufferToCloudinary({
       buffer: req.file.buffer,

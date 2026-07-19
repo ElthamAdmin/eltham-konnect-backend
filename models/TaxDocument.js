@@ -204,6 +204,37 @@ const taxDocumentSchema = new mongoose.Schema(
       default: "External URL",
     },
 
+    storageAccess: {
+  type: String,
+  enum: ["Authenticated", "Public"],
+  default: "Authenticated",
+},
+
+cloudinaryPublicId: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+cloudinaryAssetId: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+resourceType: {
+  type: String,
+  default: "",
+  trim: true,
+},
+
+storageVersion: {
+  type: Number,
+  default: null,
+},
+
     checksum: {
       type: String,
       default: "",
