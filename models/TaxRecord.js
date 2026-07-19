@@ -67,6 +67,64 @@ const taxRecordSchema = new mongoose.Schema(
       index: true,
     },
 
+    entityId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "BusinessEntity",
+  default: null,
+  index: true,
+},
+
+entityCode: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+entitySnapshot: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
+
+entityAttributionHistory: [
+  {
+    entityCode: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    periodKey: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    action: {
+      type: String,
+      enum: ["Backfilled", "Assigned"],
+      required: true,
+    },
+
+    notes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    performedBy: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    performedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
+
     taxType: {
       type: String,
       enum: TAX_TYPES,

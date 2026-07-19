@@ -95,6 +95,10 @@ const {
   getTaxDocumentAccessLink,
 } = require("../controllers/taxDocumentAccessController");
 
+const {
+  backfillTaxRecordEntities,
+} = require("../controllers/taxEntityAttributionController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -399,6 +403,13 @@ router.post(
   protect,
   canManageTaxCenter,
   linkTaxDocument
+);
+
+router.post(
+  "/records/entity-attribution/backfill",
+  protect,
+  canManageTaxCenter,
+  backfillTaxRecordEntities
 );
 
 module.exports = router;
