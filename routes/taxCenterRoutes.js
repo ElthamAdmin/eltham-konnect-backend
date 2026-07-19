@@ -74,6 +74,10 @@ const {
   verifyTaxDocument,
 } = require("../controllers/taxDocumentController");
 
+const {
+  getTaxGlReconciliation,
+} = require("../controllers/taxReconciliationController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -342,6 +346,13 @@ router.post(
   protect,
   canManageTaxCenter,
   verifyTaxDocument
+);
+
+router.get(
+  "/reconciliation/gl",
+  protect,
+  canManageTaxCenter,
+  getTaxGlReconciliation
 );
 
 module.exports = router;
