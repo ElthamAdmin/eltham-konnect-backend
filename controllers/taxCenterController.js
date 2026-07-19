@@ -2904,7 +2904,75 @@ const getGctTurnoverMonitor = async (req, res) => {
 
 const getTaxCenterDashboard = async (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date()
+      .toISOString()
+      .slice(0, 10);
+
+    const entityCode = String(
+      req.query.entityCode || ""
+    ).trim();
+
+    const periodKey = String(
+      req.query.periodKey || ""
+    ).trim();
+
+    if (
+      periodKey &&
+      !PAY_PERIOD_PATTERN.test(periodKey)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Reporting period must use YYYY-MM format.",
+      });
+    }
+
+    const period = periodKey
+      ? getPeriodDates(periodKey)
+      : null;
+
+    const taxRecordQuery = {
+      status: {
+        $ne: "Cancelled",
+      },
+    };
+
+    if (entityCode) {
+      taxRecordQuery.entityCode = entityCode;
+    }
+
+    if (periodKey) {
+      taxRecordQuery.periodKey = periodKey;
+    }
+
+    const payrollQuery = periodKey
+      ? getPayrollQuery(periodKey)
+      : getPayrollQuery();
+
+    const expenseQuery = {};
+    const invoiceQuery = {};
+
+    if (entityCode) {
+      expenseQuery[
+        "businessEntitySnapshot.entityCode"
+      ] = entityCode;
+
+      invoiceQuery[
+        "businessEntitySnapshot.entityCode"
+      ] = entityCode;
+    }
+
+    if (period) {
+      expenseQuery.date = {
+        $gte: period.periodStart,
+        $lte: period.periodEnd,
+      };
+
+      invoiceQuery.createdAt = {
+        $gte: period.periodStart,
+        $lte: period.periodEnd,
+      };
+    }
 
     const [
       taxRecords,
@@ -2912,14 +2980,10 @@ const getTaxCenterDashboard = async (req, res) => {
       expenses,
       invoices,
     ] = await Promise.all([
-      TaxRecord.find({
-        status: {
-          $ne: "Cancelled",
-        },
-      }),
-      Payroll.find(getPayrollQuery()),
-      Expense.find(),
-      Invoice.find(),
+      TaxRecord.find(taxRecordQuery),
+      Payroll.find(payrollQuery),
+      Expense.find(expenseQuery),
+      Invoice.find(invoiceQuery),
     ]);
 
     const totalRevenue = roundMoney(
@@ -3045,9 +3109,9 @@ const getTaxCenterDashboard = async (req, res) => {
       {}
     );
 
-        let gctPosition = {
+            let gctPosition = {
       configured: false,
-      entityCode: "EK-SP-2026",
+      entityCode,
       registrationStatus: "Not Configured",
       canChargeGct: false,
       thresholdAmount: 0,
@@ -3063,12 +3127,18 @@ const getTaxCenterDashboard = async (req, res) => {
     };
 
     try {
-            const gctMonitor =
+                  if (!entityCode) {
+        throw new Error(
+          "A business entity is required for GCT monitoring."
+        );
+      }
+
+      const gctMonitor =
         await generateGctTurnoverMonitor({
-          entityCode: "EK-SP-2026",
-          asOfDate: new Date()
-            .toISOString()
-            .slice(0, 10),
+          entityCode,
+          asOfDate: period
+            ? period.periodEnd
+            : today,
         });
 
       gctPosition = {
