@@ -18,6 +18,10 @@ const {
 } = require("../services/taxDeadlineService");
 
 const {
+  assertTaxTypeReconciled,
+} = require("../services/taxReconciliationService");
+
+const {
   generateGctTurnoverMonitor,
 } = require("../services/gctMonitoringService");
 
@@ -43,6 +47,11 @@ const TAX_WORKFLOW_ACTIONS = {
   Submit: {
     fromStatus: "Approved",
     toStatus: "Submitted",
+  },
+
+    Reconcile: {
+    fromStatus: "Paid",
+    toStatus: "Reconciled",
   },
 };
 
@@ -762,7 +771,7 @@ const transitionTaxRecordWorkflow = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          "Action must be Review, Approve, or Submit.",
+          "Action must be Review, Approve, Submit, or Reconcile.",
       });
     }
 
@@ -825,9 +834,21 @@ const transitionTaxRecordWorkflow = async (req, res) => {
       });
     }
 
-    const invalidRecords = records.filter(
-      (record) =>
-        record.status !== workflowAction.fromStatus
+        const invalidRecords = records.filter(
+      (record) => {
+        if (action === "Reconcile") {
+          return !(
+            record.status === "Paid" ||
+            (record.status === "Submitted" &&
+              Number(record.balanceDue || 0) === 0)
+          );
+        }
+
+        return (
+          record.status !==
+          workflowAction.fromStatus
+        );
+      }
     );
 
     if (invalidRecords.length > 0) {
@@ -835,12 +856,19 @@ const transitionTaxRecordWorkflow = async (req, res) => {
         success: false,
         message:
           `${action} requires every selected record to have ` +
-          `${workflowAction.fromStatus} status.`,
+          `${
+  action === "Reconcile"
+    ? "Paid status, or Submitted status with zero balance"
+    : `${workflowAction.fromStatus} status`
+}.`,
         invalidRecords: invalidRecords.map((record) => ({
           taxNumber: record.taxNumber,
           taxType: record.taxType,
           currentStatus: record.status,
-          requiredStatus: workflowAction.fromStatus,
+          requiredStatus:
+  action === "Reconcile"
+    ? "Paid, or Submitted with zero balance"
+    : workflowAction.fromStatus,
         })),
       });
     }
@@ -854,6 +882,20 @@ const transitionTaxRecordWorkflow = async (req, res) => {
         message:
           "A filing or submission reference is required.",
       });
+    }
+
+        if (action === "Reconcile") {
+      const taxTypes = [
+        ...new Set(
+          records.map((record) => record.taxType)
+        ),
+      ];
+
+      for (const taxType of taxTypes) {
+        await assertTaxTypeReconciled(
+          taxType
+        );
+      }
     }
 
     const performedBy = getUserName(req.user);
