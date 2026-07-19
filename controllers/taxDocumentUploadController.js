@@ -2,6 +2,8 @@ const path = require("path");
 
 const TaxDocument = require("../models/TaxDocument");
 
+const BusinessEntity = require("../models/BusinessEntity");
+
 const {
   configureCloudinary,
 } = require("../config/cloudinary");
@@ -23,6 +25,31 @@ const createDocumentNumber = () =>
   `TDOC-${Date.now()}-${Math.floor(
     1000 + Math.random() * 9000
   )}`;
+
+  const buildBusinessEntitySnapshot = (entity) => ({
+  entityId: entity._id,
+  entityCode: entity.entityCode,
+  legalName: entity.legalName,
+  tradingName: entity.tradingName || "",
+  entityType: entity.entityType,
+  lifecycleStatus: entity.lifecycleStatus,
+  effectiveFrom: entity.effectiveFrom,
+  effectiveTo: entity.effectiveTo,
+  registrationNumber: entity.registrationNumber || "",
+  registrationDate: entity.registrationDate || "",
+  incorporationDate: entity.incorporationDate || null,
+  trn: entity.trn || "",
+  registeredAddress: entity.registeredAddress || "",
+  fiscalYearStart: entity.fiscalYearStart || "",
+  fiscalYearEnd: entity.fiscalYearEnd || "",
+  taxTreatment: entity.taxTreatment,
+  accountingConfiguration:
+    entity.accountingConfiguration,
+  predecessorEntityCode:
+    entity.predecessorEntityCode || "",
+  successorEntityCode:
+    entity.successorEntityCode || "",
+});
 
 const hasSchemaPath = (pathName) =>
   Boolean(TaxDocument.schema.path(pathName));
@@ -143,6 +170,8 @@ const buildTaxDocumentPayload = ({
   metadata,
   file,
   uploadedAsset,
+  entity,
+  documentDate,
   user,
 }) => {
   const userName = getUserName(user);
@@ -152,6 +181,11 @@ const buildTaxDocumentPayload = ({
   const payload = {
     ...metadata,
   };
+    payload.entityId = entity._id;
+  payload.entityCode = entity.entityCode;
+  payload.entitySnapshot =
+    buildBusinessEntitySnapshot(entity);
+  payload.documentDate = documentDate;
 
   delete payload.document;
   delete payload.metadata;
@@ -311,6 +345,68 @@ const uploadTaxDocument = async (req, res) => {
       });
     }
 
+        const documentDateText = String(
+      metadata.documentDate || ""
+    ).trim();
+
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(documentDateText)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A valid document date using YYYY-MM-DD format is required.",
+      });
+    }
+
+    const documentDate = new Date(
+      `${documentDateText}T12:00:00.000Z`
+    );
+
+    if (Number.isNaN(documentDate.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "The document date is invalid.",
+      });
+    }
+
+    const entityCode = String(
+      metadata.entityCode
+    ).trim();
+
+    const entity = await BusinessEntity.findOne({
+      entityCode,
+    });
+
+    if (!entity) {
+      return res.status(404).json({
+        success: false,
+        message:
+          `Business entity ${entityCode} was not found.`,
+      });
+    }
+
+    const effectiveFrom = new Date(
+      `${entity.effectiveFrom}T00:00:00.000Z`
+    );
+
+    const effectiveTo = entity.effectiveTo
+      ? new Date(
+          `${entity.effectiveTo}T23:59:59.999Z`
+        )
+      : null;
+
+    if (
+      documentDate < effectiveFrom ||
+      (effectiveTo && documentDate > effectiveTo)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          `${entityCode} was not effective on ${documentDateText}.`,
+      });
+    }
+
     const extension = path
       .extname(req.file.originalname || "")
       .toLowerCase();
@@ -326,11 +422,13 @@ const uploadTaxDocument = async (req, res) => {
     });
 
     const documentPayload = buildTaxDocumentPayload({
-      metadata,
-      file: req.file,
-      uploadedAsset,
-      user: req.user,
-    });
+  metadata,
+  file: req.file,
+  uploadedAsset,
+  entity,
+  documentDate,
+  user: req.user,
+});
 
     const taxDocument =
       await TaxDocument.create(documentPayload);
