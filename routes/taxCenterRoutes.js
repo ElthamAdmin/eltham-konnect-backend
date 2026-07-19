@@ -86,6 +86,11 @@ const {
   uploadTaxDocument,
 } = require("../controllers/taxDocumentUploadController");
 
+const {
+  backfillTaxDocumentCloudinaryMetadata,
+  getTaxDocumentAccessLink,
+} = require("../controllers/taxDocumentAccessController");
+
 router.get("/dashboard", protect, getTaxCenterDashboard);
 
 router.get("/records", protect, getTaxRecords);
@@ -369,6 +374,20 @@ router.post(
   canManageTaxCenter,
   receiveTaxDocumentUpload,
   uploadTaxDocument
+);
+
+router.post(
+  "/documents/:documentNumber/cloudinary/backfill",
+  protect,
+  canManageTaxCenter,
+  backfillTaxDocumentCloudinaryMetadata
+);
+
+router.get(
+  "/documents/:documentNumber/access",
+  protect,
+  canManageTaxCenter,
+  getTaxDocumentAccessLink
 );
 
 module.exports = router;
