@@ -50,6 +50,25 @@ const journalEntrySchema = new mongoose.Schema(
       default: "",
     },
 
+    entityId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "BusinessEntity",
+  default: null,
+  index: true,
+},
+
+entityCode: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+entitySnapshot: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
+
     memo: {
       type: String,
       default: "",
