@@ -20,6 +20,10 @@ const TAX_PAYABLE_ACCOUNT_MAP = {
   Pension: SYSTEM_ACCOUNTS.PENSION_PAYABLE,
   HEART: SYSTEM_ACCOUNTS.HEART_PAYABLE,
   GCT: SYSTEM_ACCOUNTS.GCT_OUTPUT_TAX_PAYABLE,
+    "Income Tax":
+    SYSTEM_ACCOUNTS.INDIVIDUAL_INCOME_TAX_PAYABLE,
+  "Company Tax":
+    SYSTEM_ACCOUNTS.COMPANY_INCOME_TAX_PAYABLE,
 };
 
 const requireLinkedAccount = (financialAccount, label = "Financial account") => {
@@ -628,6 +632,59 @@ const buildCustomerPurchaseRecoveryInvoiceLines = ({
   return lines;
 };
 
+const buildIncomeTaxAssessmentLines = ({
+  incomeTaxType,
+  amount,
+  entityCode,
+  periodKey,
+  description,
+}) => {
+  const assessmentAmount = roundMoney(amount);
+
+  if (assessmentAmount <= 0) {
+    throw new Error(
+      "Income-tax assessment amount must be greater than zero."
+    );
+  }
+
+  const isCompanyTax =
+    incomeTaxType === "Company Income Tax";
+
+  const debitAccountCode = isCompanyTax
+    ? SYSTEM_ACCOUNTS.COMPANY_INCOME_TAX_EXPENSE
+    : SYSTEM_ACCOUNTS.OWNER_INCOME_TAX;
+
+  const payableAccountCode = isCompanyTax
+    ? SYSTEM_ACCOUNTS.COMPANY_INCOME_TAX_PAYABLE
+    : SYSTEM_ACCOUNTS.INDIVIDUAL_INCOME_TAX_PAYABLE;
+
+  const lineDescription =
+    description ||
+    `${
+      isCompanyTax
+        ? "Company"
+        : "Individual"
+    } income-tax assessment for ${
+      entityCode || "entity"
+    }, period ${periodKey || ""}`;
+
+  return [
+    {
+      accountCode: debitAccountCode,
+      description: lineDescription,
+      debit: assessmentAmount,
+      credit: 0,
+    },
+    {
+      accountCode: payableAccountCode,
+      description: lineDescription,
+      debit: 0,
+      credit: assessmentAmount,
+    },
+  ];
+};
+
+
 module.exports = {
   requirePositiveAmount,
   requireLinkedAccount,
@@ -643,6 +700,7 @@ module.exports = {
   buildPayrollPaymentLines,
   buildGctFilingSettlementLines,
   buildTaxLiabilityPaymentLines,
+  buildIncomeTaxAssessmentLines,
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,
   buildCustomerPurchaseRecoveryInvoiceLines,

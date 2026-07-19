@@ -34,11 +34,13 @@ module.exports = {
       postGctFilingSettlement:
     workflowService.postGctFilingSettlement,
 
-  /**
+    /**
    * Tax Center
    */
   postTaxLiabilityPayment:
     workflowService.postTaxLiabilityPayment,
+  postIncomeTaxAssessment:
+    workflowService.postIncomeTaxAssessment,
 
   /**
    * Customer Purchases

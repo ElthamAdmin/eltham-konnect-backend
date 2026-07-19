@@ -1,6 +1,11 @@
 const IncomeTaxRule = require("../models/IncomeTaxRule");
 const IncomeTaxEstimate = require("../models/IncomeTaxEstimate");
 const TaxRecord = require("../models/TaxRecord");
+const JournalEntry = require("../models/JournalEntry");
+
+const {
+  postIncomeTaxAssessment,
+} = require("../services/accountingService");
 
 const {
   calculateIncomeTaxEstimate,
@@ -966,7 +971,11 @@ const transitionIncomeTaxEstimate = async (
           taxNumber: `TAX-ITX-${
             estimate.entityCode
           }-${estimate.periodKey}-${Date.now()}`,
-          taxType: "Income Tax",
+          taxType:
+  estimate.incomeTaxType ===
+  "Company Income Tax"
+    ? "Company Tax"
+    : "Income Tax",
           periodStart: new Date(
             estimate.periodStart
           )
@@ -1009,6 +1018,55 @@ const transitionIncomeTaxEstimate = async (
 
         estimate.taxNumber =
           taxRecord.taxNumber;
+      }
+            if (
+        Number(estimate.estimatedTaxDue || 0) >
+        0
+      ) {
+        let assessmentJournal =
+          await JournalEntry.findOne({
+            reference:
+              estimate.estimateNumber,
+            sourceModule: "Tax Center",
+          });
+
+        if (!assessmentJournal) {
+          assessmentJournal =
+            await postIncomeTaxAssessment({
+              estimate,
+              user: req.user,
+            });
+        }
+
+        if (!assessmentJournal) {
+          throw new Error(
+            "The income-tax assessment journal could not be created."
+          );
+        }
+
+        estimate.assessmentJournalEntryNumber =
+          assessmentJournal.entryNumber;
+
+        estimate.assessmentPostedAt =
+          assessmentJournal.createdAt ||
+          new Date();
+
+        estimate.assessmentPostedBy =
+          userName;
+
+        if (estimate.taxRecordId) {
+          await TaxRecord.findByIdAndUpdate(
+            estimate.taxRecordId,
+            {
+              $set: {
+                journalEntryNumber:
+                  assessmentJournal.entryNumber,
+                ledgerReference:
+                  assessmentJournal.entryNumber,
+              },
+            }
+          );
+        }
       }
     }
 

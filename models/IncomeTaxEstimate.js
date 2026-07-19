@@ -262,6 +262,24 @@ const incomeTaxEstimateSchema = new mongoose.Schema(
       index: true,
     },
 
+        assessmentJournalEntryNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    assessmentPostedAt: {
+      type: Date,
+      default: null,
+    },
+
+    assessmentPostedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     calculationSnapshot: {
       type: mongoose.Schema.Types.Mixed,
       default: null,

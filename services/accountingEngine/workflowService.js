@@ -440,6 +440,47 @@ const postCustomerPurchaseRecoveryInvoice = async ({
   });
 };
 
+const postIncomeTaxAssessment = async ({
+  estimate,
+  user,
+}) => {
+  if (!estimate) {
+    throw new Error(
+      "An income-tax estimate is required."
+    );
+  }
+
+  const amount = roundMoney(
+    estimate.estimatedTaxDue || 0
+  );
+
+  if (amount <= 0) {
+    return null;
+  }
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(
+      estimate.filedDate ||
+        estimate.submittedAt ||
+        estimate.periodEnd
+    ),
+    memo: `Income-tax assessment for ${estimate.entityCode}, period ${estimate.periodKey}`,
+    reference: estimate.estimateNumber,
+    sourceModule: "Tax Center",
+    createdBy: getUserName(user),
+    lines:
+      templates.buildIncomeTaxAssessmentLines({
+        incomeTaxType:
+          estimate.incomeTaxType,
+        amount,
+        entityCode: estimate.entityCode,
+        periodKey: estimate.periodKey,
+        description: `Income-tax assessment ${estimate.estimateNumber}`,
+      }),
+  });
+};
+
+
 module.exports = {
   postCustomerInvoice,
   receiveInvoicePayment,
@@ -452,6 +493,7 @@ module.exports = {
   postEmployeeAdvanceFunding,
   postPayrollPayment,
   postTaxLiabilityPayment,
+  postIncomeTaxAssessment,
   postGctFilingSettlement,
   postCustomerPurchase,
   refundCustomerPurchase,
