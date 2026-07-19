@@ -1,6 +1,9 @@
 const { postJournalEntry } = require("./journalService");
 const templates = require("./transactionTemplates");
 const { roundMoney } = require("./money");
+const {
+  resolveEntityPostingContext,
+} = require("../entityPostingContextService");
 
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
@@ -269,6 +272,13 @@ const postTaxLiabilityPayment = async ({
 }) => {
   const paymentAmount = roundMoney(amount);
 
+  const entityContext =
+    await resolveEntityPostingContext({
+      source: taxRecord,
+      sourceName:
+        `TaxRecord ${taxRecord.taxNumber}`,
+    });
+
   return postJournalEntry({
     entryDate: normalizePostingDate(
       paymentDate || new Date()
@@ -283,6 +293,8 @@ const postTaxLiabilityPayment = async ({
 
     sourceModule: "Tax Center",
 
+    ...entityContext,
+
     createdBy: getUserName(user),
 
     lines: templates.buildTaxLiabilityPaymentLines({
@@ -295,6 +307,7 @@ const postTaxLiabilityPayment = async ({
     }),
   });
 };
+
 
 const postGctFilingSettlement = async ({
   filingPeriod,
@@ -335,6 +348,13 @@ const postGctFilingSettlement = async ({
     return null;
   }
 
+  const entityContext =
+    await resolveEntityPostingContext({
+      source: filingPeriod,
+      sourceName:
+        `GCT filing ${filingPeriod.filingNumber}`,
+    });
+
   return postJournalEntry({
     entryDate: normalizePostingDate(
       postingDate ||
@@ -351,11 +371,14 @@ const postGctFilingSettlement = async ({
 
     sourceModule: "Tax Center",
 
+    ...entityContext,
+
     createdBy: getUserName(user),
 
     lines,
   });
 };
+
 
 
 const postCustomerPurchase = async ({
@@ -458,16 +481,33 @@ const postIncomeTaxAssessment = async ({
     return null;
   }
 
+  const entityContext =
+    await resolveEntityPostingContext({
+      source: estimate,
+      sourceName:
+        `Income-tax estimate ${estimate.estimateNumber}`,
+    });
+
   return postJournalEntry({
     entryDate: normalizePostingDate(
       estimate.filedDate ||
         estimate.submittedAt ||
         estimate.periodEnd
     ),
-    memo: `Income-tax assessment for ${estimate.entityCode}, period ${estimate.periodKey}`,
+
+    memo:
+      `Income-tax assessment for ` +
+      `${estimate.entityCode}, period ` +
+      `${estimate.periodKey}`,
+
     reference: estimate.estimateNumber,
+
     sourceModule: "Tax Center",
+
+    ...entityContext,
+
     createdBy: getUserName(user),
+
     lines:
       templates.buildIncomeTaxAssessmentLines({
         incomeTaxType:
@@ -475,10 +515,12 @@ const postIncomeTaxAssessment = async ({
         amount,
         entityCode: estimate.entityCode,
         periodKey: estimate.periodKey,
-        description: `Income-tax assessment ${estimate.estimateNumber}`,
+        description:
+          `Income-tax assessment ${estimate.estimateNumber}`,
       }),
   });
 };
+
 
 
 module.exports = {
