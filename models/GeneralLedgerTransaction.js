@@ -83,6 +83,12 @@ entitySnapshot: {
   default: null,
 },
 
+reportingPeriodKey: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
     memo: {
       type: String,
       default: "",
@@ -153,8 +159,9 @@ locked: {
 
 generalLedgerTransactionSchema.index({
   entityCode: 1,
-  entryDate: 1,
+  reportingPeriodKey: 1,
   accountCode: 1,
+  entryDate: 1,
 });
 
 module.exports = mongoose.model(

@@ -293,9 +293,12 @@ const postTaxLiabilityPayment = async ({
 
     sourceModule: "Tax Center",
 
-    ...entityContext,
+...entityContext,
 
-    createdBy: getUserName(user),
+reportingPeriodKey:
+  taxRecord.periodKey || "",
+
+createdBy: getUserName(user),
 
     lines: templates.buildTaxLiabilityPaymentLines({
       paymentAccount,
@@ -371,9 +374,12 @@ const postGctFilingSettlement = async ({
 
     sourceModule: "Tax Center",
 
-    ...entityContext,
+...entityContext,
 
-    createdBy: getUserName(user),
+reportingPeriodKey:
+  filingPeriod.periodKey || "",
+
+createdBy: getUserName(user),
 
     lines,
   });
@@ -504,9 +510,12 @@ const postIncomeTaxAssessment = async ({
 
     sourceModule: "Tax Center",
 
-    ...entityContext,
+...entityContext,
 
-    createdBy: getUserName(user),
+reportingPeriodKey:
+  estimate.periodKey || "",
+
+createdBy: getUserName(user),
 
     lines:
       templates.buildIncomeTaxAssessmentLines({

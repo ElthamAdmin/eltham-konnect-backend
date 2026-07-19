@@ -77,6 +77,7 @@ const postJournalEntry = async ({
   entityId = null,
   entityCode = "",
   entitySnapshot = null,
+  reportingPeriodKey = "",
   createdBy = "System User",
   lines = [],
 }) => {
@@ -141,7 +142,8 @@ const postJournalEntry = async ({
             entityId,
 entityCode,
 entitySnapshot,
-            createdBy,
+reportingPeriodKey,
+createdBy,
             totalDebit,
             totalCredit,
             status: "Posted",
@@ -181,6 +183,7 @@ entitySnapshot,
 entityId,
 entityCode,
 entitySnapshot,
+reportingPeriodKey,
 memo,
               description: line.description,
             },
@@ -277,6 +280,11 @@ const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" 
           debit,
           credit,
           runningBalance: updatedBalance,
+          entityId: entry.entityId || null,
+entityCode: entry.entityCode || "",
+entitySnapshot: entry.entitySnapshot || null,
+reportingPeriodKey:
+  entry.reportingPeriodKey || "",
           description: line.description || "",
         });
       }
@@ -303,6 +311,8 @@ const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" 
               entityId: entry.entityId || null,
 entityCode: entry.entityCode || "",
 entitySnapshot: entry.entitySnapshot || null,
+reportingPeriodKey:
+  entry.reportingPeriodKey || "",
               memo: entry.memo,
               description: line.description,
               postedBy,

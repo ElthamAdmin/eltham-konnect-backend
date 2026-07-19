@@ -69,6 +69,13 @@ entitySnapshot: {
   default: null,
 },
 
+reportingPeriodKey: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
     memo: {
       type: String,
       default: "",
