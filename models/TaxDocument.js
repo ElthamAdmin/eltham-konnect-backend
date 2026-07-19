@@ -142,6 +142,81 @@ const taxDocumentSchema = new mongoose.Schema(
       index: true,
     },
 
+    accountTransactionId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "AccountTransaction",
+  default: null,
+},
+
+transactionNumber: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+journalEntryNumber: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+linkedBy: {
+  type: String,
+  default: "",
+  trim: true,
+},
+
+linkedAt: {
+  type: Date,
+  default: null,
+},
+
+linkageHistory: [
+  {
+    targetType: {
+      type: String,
+      enum: [
+        "Tax Record",
+        "Income Tax Estimate",
+        "GCT Filing",
+        "Tax Payment",
+      ],
+      required: true,
+    },
+
+    targetReference: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    action: {
+      type: String,
+      enum: ["Linked", "Unlinked"],
+      default: "Linked",
+    },
+
+    notes: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    performedBy: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    performedAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+],
+
     externalReference: {
       type: String,
       default: "",

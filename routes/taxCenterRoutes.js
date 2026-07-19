@@ -75,6 +75,10 @@ const {
 } = require("../controllers/taxDocumentController");
 
 const {
+  linkTaxDocument,
+} = require("../controllers/taxDocumentLinkController");
+
+const {
   getTaxGlReconciliation,
 } = require("../controllers/taxReconciliationController");
 
@@ -388,6 +392,13 @@ router.get(
   protect,
   canManageTaxCenter,
   getTaxDocumentAccessLink
+);
+
+router.post(
+  "/documents/:documentNumber/link",
+  protect,
+  canManageTaxCenter,
+  linkTaxDocument
 );
 
 module.exports = router;
