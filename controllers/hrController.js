@@ -25,6 +25,12 @@ const createNextEmployeeId = async () => {
 const normalizeString = (value) => String(value || "").trim();
 const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 
+const getUserName = (user) =>
+  user?.fullName ||
+  user?.name ||
+  user?.email ||
+  "System User";
+
 const toBoolean = (value, defaultValue = true) => {
   if (value === true || value === "true") return true;
   if (value === false || value === "false") return false;
@@ -533,9 +539,8 @@ const createEmployee = async (req, res) => {
           ? new Date()
           : null,
 
-      linkedUserId:
+            linkedUserId:
         linkedUserDetails.linkedUserId,
-      linkedUserId: linkedUserDetails.linkedUserId,
       linkedUserName: linkedUserDetails.linkedUserName,
       linkedUserRole: linkedUserDetails.linkedUserRole,
       attendanceRequired: toBoolean(attendanceRequired, true),
@@ -579,9 +584,11 @@ const createEmployee = async (req, res) => {
 const updateEmployee = async (req, res) => {
   try {
     const { employeeId } = req.params;
-    const updates = { ...req.body };
+    const requestBody = req.body || {};
 
-    const employee = await HREmployee.findOne({ employeeId });
+    const employee = await HREmployee.findOne({
+      employeeId,
+    });
 
     if (!employee) {
       return res.status(404).json({
@@ -590,180 +597,485 @@ const updateEmployee = async (req, res) => {
       });
     }
 
-    if (updates.email) {
-      const normalizedEmail = normalizeEmail(updates.email);
+    /*
+     * Pay rates must be changed through the effective-dated
+     * compensation-history workflow. Leave balances must be
+     * changed through the controlled leave-adjustment workflow.
+     */
+    const requestedPayRate =
+      requestBody.payRate !== undefined
+        ? Number(requestBody.payRate || 0)
+        : Number(employee.payRate || 0);
 
-      const existingEmployeeByEmail = await HREmployee.findOne({
-        email: normalizedEmail,
-        employeeId: { $ne: employeeId },
+    const requestedPayType =
+      requestBody.payType !== undefined
+        ? normalizeString(requestBody.payType)
+        : employee.payType;
+
+    const payRateChanged =
+      requestBody.payRate !== undefined &&
+      requestedPayRate !== Number(employee.payRate || 0);
+
+    const payTypeChanged =
+      requestBody.payType !== undefined &&
+      requestedPayType !== employee.payType;
+
+    if (payRateChanged || payTypeChanged) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Direct pay-rate changes are disabled. Use the effective-dated compensation-history workflow.",
+      });
+    }
+
+    const protectedLeaveFields = [
+      "leaveBalanceVacation",
+      "leaveBalanceSick",
+      "leaveBalanceUnpaid",
+    ];
+
+    const leaveBalanceChangeRequested =
+      protectedLeaveFields.some((fieldName) => {
+        if (requestBody[fieldName] === undefined) {
+          return false;
+        }
+
+        return (
+          Number(requestBody[fieldName] || 0) !==
+          Number(employee[fieldName] || 0)
+        );
       });
 
-      if (existingEmployeeByEmail) {
+    if (leaveBalanceChangeRequested) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Direct leave-balance changes are disabled. Use the controlled leave balance-adjustment workflow.",
+      });
+    }
+
+    /*
+     * Only these employee-master fields may be changed through
+     * this endpoint. Audit fields, embedded HR records, pay rates,
+     * and leave balances are intentionally excluded.
+     */
+    const allowedFields = [
+      "fullName",
+      "firstName",
+      "lastName",
+      "gender",
+      "dateOfBirth",
+      "trn",
+      "nisNumber",
+      "email",
+      "phone",
+      "alternatePhone",
+      "address",
+      "emergencyContactName",
+      "emergencyContactPhone",
+      "emergencyContactRelationship",
+      "department",
+      "jobTitle",
+      "jobLevel",
+      "isDepartmentHead",
+      "reportsToEmployeeId",
+      "branch",
+      "employmentType",
+      "employmentClassification",
+      "contractType",
+      "startDate",
+      "endDate",
+      "probation",
+      "normalWorkingHours",
+      "scheduledWorkdays",
+      "employmentStatus",
+      "compensationType",
+      "payFrequency",
+      "payrollEnabled",
+      "payrollEligibilityStatus",
+      "payrollEligibilityReason",
+      "payrollEligibilityEffectiveFrom",
+      "payrollEligibilityEffectiveTo",
+      "linkedUserId",
+      "attendanceRequired",
+      "notes",
+    ];
+
+    const updates = {};
+
+    allowedFields.forEach((fieldName) => {
+      if (requestBody[fieldName] !== undefined) {
+        updates[fieldName] =
+          requestBody[fieldName];
+      }
+    });
+
+    const stringFields = [
+      "fullName",
+      "firstName",
+      "lastName",
+      "gender",
+      "dateOfBirth",
+      "trn",
+      "nisNumber",
+      "phone",
+      "alternatePhone",
+      "address",
+      "emergencyContactName",
+      "emergencyContactPhone",
+      "emergencyContactRelationship",
+      "department",
+      "jobTitle",
+      "reportsToEmployeeId",
+      "branch",
+      "employmentType",
+      "employmentClassification",
+      "contractType",
+      "startDate",
+      "endDate",
+      "employmentStatus",
+      "compensationType",
+      "payFrequency",
+      "payrollEligibilityStatus",
+      "payrollEligibilityReason",
+      "payrollEligibilityEffectiveFrom",
+      "payrollEligibilityEffectiveTo",
+      "linkedUserId",
+      "notes",
+    ];
+
+    stringFields.forEach((fieldName) => {
+      if (updates[fieldName] !== undefined) {
+        updates[fieldName] =
+          normalizeString(updates[fieldName]);
+      }
+    });
+
+    if (updates.email !== undefined) {
+      updates.email = normalizeEmail(
+        updates.email
+      );
+
+      if (updates.email) {
+        const existingEmployeeByEmail =
+          await HREmployee.findOne({
+            email: updates.email,
+            employeeId: {
+              $ne: employeeId,
+            },
+          });
+
+        if (existingEmployeeByEmail) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Another employee already uses that email",
+          });
+        }
+      }
+    }
+
+    if (updates.jobLevel !== undefined) {
+      const parsedJobLevel = Number(
+        updates.jobLevel
+      );
+
+      if (
+        !Number.isInteger(parsedJobLevel) ||
+        parsedJobLevel < 1 ||
+        parsedJobLevel > 10
+      ) {
         return res.status(400).json({
           success: false,
-          message: "Another employee already uses that email",
+          message:
+            "Job level must be a whole number from 1 through 10.",
         });
       }
 
-      updates.email = normalizedEmail;
+      updates.jobLevel = parsedJobLevel;
     }
 
-    if (updates.fullName !== undefined) updates.fullName = normalizeString(updates.fullName);
-    if (updates.firstName !== undefined) updates.firstName = normalizeString(updates.firstName);
-    if (updates.lastName !== undefined) updates.lastName = normalizeString(updates.lastName);
-    if (updates.trn !== undefined) updates.trn = normalizeString(updates.trn);
-    if (updates.nisNumber !== undefined) updates.nisNumber = normalizeString(updates.nisNumber);
-    if (updates.phone !== undefined) updates.phone = normalizeString(updates.phone);
-    if (updates.alternatePhone !== undefined) {
-      updates.alternatePhone = normalizeString(updates.alternatePhone);
-    }
-    if (updates.address !== undefined) updates.address = normalizeString(updates.address);
-    if (updates.emergencyContactName !== undefined) {
-      updates.emergencyContactName = normalizeString(updates.emergencyContactName);
-    }
-    if (updates.emergencyContactPhone !== undefined) {
-      updates.emergencyContactPhone = normalizeString(updates.emergencyContactPhone);
-    }
-    if (updates.emergencyContactRelationship !== undefined) {
-      updates.emergencyContactRelationship = normalizeString(
-        updates.emergencyContactRelationship
+    if (
+      updates.isDepartmentHead !== undefined
+    ) {
+      updates.isDepartmentHead = toBoolean(
+        updates.isDepartmentHead,
+        employee.isDepartmentHead
       );
-    }
-    if (updates.department !== undefined) updates.department = normalizeString(updates.department);
-if (updates.jobTitle !== undefined) updates.jobTitle = normalizeString(updates.jobTitle);
-if (updates.branch !== undefined) updates.branch = normalizeString(updates.branch);
-if (updates.notes !== undefined) updates.notes = normalizeString(updates.notes);
-
-if (updates.jobLevel !== undefined) {
-  const parsedJobLevel = Number(updates.jobLevel);
-  updates.jobLevel =
-    !Number.isNaN(parsedJobLevel) && parsedJobLevel > 0 ? parsedJobLevel : 1;
-}
-
-if (updates.isDepartmentHead !== undefined) {
-  updates.isDepartmentHead = toBoolean(updates.isDepartmentHead, false);
-}
-
-    if (updates.payRate !== undefined) {
-      updates.payRate = Number(updates.payRate || 0);
-    }
-
-    if (updates.leaveBalanceVacation !== undefined) {
-      updates.leaveBalanceVacation = Number(updates.leaveBalanceVacation || 0);
-    }
-
-    if (updates.leaveBalanceSick !== undefined) {
-      updates.leaveBalanceSick = Number(updates.leaveBalanceSick || 0);
-    }
-
-    if (updates.leaveBalanceUnpaid !== undefined) {
-      updates.leaveBalanceUnpaid = Number(updates.leaveBalanceUnpaid || 0);
     }
 
     if (updates.payrollEnabled !== undefined) {
-      updates.payrollEnabled = toBoolean(updates.payrollEnabled, true);
+      updates.payrollEnabled = toBoolean(
+        updates.payrollEnabled,
+        employee.payrollEnabled
+      );
     }
 
-    if (updates.attendanceRequired !== undefined) {
-      updates.attendanceRequired = toBoolean(updates.attendanceRequired, true);
+    if (
+      updates.attendanceRequired !== undefined
+    ) {
+      updates.attendanceRequired = toBoolean(
+        updates.attendanceRequired,
+        employee.attendanceRequired
+      );
     }
 
-    const oldLinkedUserId = employee.linkedUserId || "";
+    if (
+      updates.normalWorkingHours !== undefined
+    ) {
+      const suppliedHours =
+        updates.normalWorkingHours || {};
+
+      updates.normalWorkingHours = {
+        hoursPerDay: Number(
+          suppliedHours.hoursPerDay || 0
+        ),
+        hoursPerWeek: Number(
+          suppliedHours.hoursPerWeek || 0
+        ),
+      };
+    }
+
+    if (updates.scheduledWorkdays !== undefined) {
+      if (
+        !Array.isArray(
+          updates.scheduledWorkdays
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Scheduled workdays must be supplied as an array.",
+        });
+      }
+
+      updates.scheduledWorkdays =
+        updates.scheduledWorkdays
+          .map((workday) =>
+            normalizeString(workday)
+          )
+          .filter(Boolean);
+    }
+
+    if (updates.probation !== undefined) {
+      const suppliedProbation =
+        updates.probation || {};
+
+      updates.probation = {
+        applicable: toBoolean(
+          suppliedProbation.applicable,
+          false
+        ),
+        startDate: normalizeString(
+          suppliedProbation.startDate
+        ),
+        endDate: normalizeString(
+          suppliedProbation.endDate
+        ),
+        durationMonths: Number(
+          suppliedProbation.durationMonths || 0
+        ),
+        status: normalizeString(
+          suppliedProbation.status
+        ),
+                reviewDueDate: normalizeString(
+          suppliedProbation.reviewDueDate
+        ),
+        completedDate: normalizeString(
+          suppliedProbation.completedDate
+        ),
+        notes: normalizeString(
+          suppliedProbation.notes
+        ),
+      };
+    }
+
+    const oldLinkedUserId =
+      employee.linkedUserId || "";
+
     const nextLinkedUserId =
       updates.linkedUserId !== undefined
-        ? normalizeString(updates.linkedUserId)
+        ? updates.linkedUserId
         : oldLinkedUserId;
 
-        const oldReportsToEmployeeId = employee.reportsToEmployeeId || "";
-const nextReportsToEmployeeId =
-  updates.reportsToEmployeeId !== undefined &&
-  updates.reportsToEmployeeId !== null
-    ? normalizeString(updates.reportsToEmployeeId)
-    : oldReportsToEmployeeId;
-
     if (nextLinkedUserId) {
-      const linkedUserDetails = await getLinkedUserDetails(nextLinkedUserId);
+      const linkedUserDetails =
+        await getLinkedUserDetails(
+          nextLinkedUserId
+        );
 
       if (!linkedUserDetails) {
         return res.status(404).json({
           success: false,
-          message: "Linked system user not found",
+          message:
+            "Linked system user not found",
         });
       }
 
-      const alreadyLinkedEmployee = await HREmployee.findOne({
-        linkedUserId: linkedUserDetails.linkedUserId,
-        employeeId: { $ne: employeeId },
-      });
+      const alreadyLinkedEmployee =
+        await HREmployee.findOne({
+          linkedUserId:
+            linkedUserDetails.linkedUserId,
+          employeeId: {
+            $ne: employeeId,
+          },
+        });
 
       if (alreadyLinkedEmployee) {
         return res.status(400).json({
           success: false,
-          message: "That system user is already linked to another employee",
+          message:
+            "That system user is already linked to another employee",
         });
       }
 
-      updates.linkedUserId = linkedUserDetails.linkedUserId;
-      updates.linkedUserName = linkedUserDetails.linkedUserName;
-      updates.linkedUserRole = linkedUserDetails.linkedUserRole;
-    } else if (updates.linkedUserId !== undefined) {
+      updates.linkedUserId =
+        linkedUserDetails.linkedUserId;
+      updates.linkedUserName =
+        linkedUserDetails.linkedUserName;
+      updates.linkedUserRole =
+        linkedUserDetails.linkedUserRole;
+    } else if (
+      updates.linkedUserId !== undefined
+    ) {
       updates.linkedUserId = "";
       updates.linkedUserName = "";
       updates.linkedUserRole = "";
     }
 
+    const oldReportsToEmployeeId =
+      employee.reportsToEmployeeId || "";
+
+    const nextReportsToEmployeeId =
+      updates.reportsToEmployeeId !== undefined
+        ? updates.reportsToEmployeeId
+        : oldReportsToEmployeeId;
+
     if (nextReportsToEmployeeId) {
-  const normalizedSelfId = normalizeString(employeeId);
-  const normalizedManagerId = normalizeString(nextReportsToEmployeeId);
+      const normalizedSelfId =
+        normalizeString(employeeId);
 
-  if (normalizedManagerId === normalizedSelfId) {
-    return res.status(400).json({
-      success: false,
-      message: "An employee cannot report to themselves",
-    });
-  }
+      if (
+        nextReportsToEmployeeId ===
+        normalizedSelfId
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "An employee cannot report to themselves",
+        });
+      }
 
-  const reportsToDetails = await getReportsToDetails(normalizedManagerId);
+      const reportsToDetails =
+        await getReportsToDetails(
+          nextReportsToEmployeeId
+        );
 
-  if (!reportsToDetails) {
-    return res.status(404).json({
-      success: false,
-      message: "Selected reporting manager not found",
-    });
-  }
+      if (!reportsToDetails) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Selected reporting manager not found",
+        });
+      }
 
-  updates.reportsToEmployeeId = reportsToDetails.reportsToEmployeeId;
-  updates.reportsToName = reportsToDetails.reportsToName;
-} else {
-  updates.reportsToEmployeeId = "";
-  updates.reportsToName = "";
-}
-
-    updates.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
-
-    const updatedEmployee = await HREmployee.findOneAndUpdate(
-      { employeeId },
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
-
-    if (oldLinkedUserId && oldLinkedUserId !== updatedEmployee.linkedUserId) {
-      await clearOldLinkedSystemUser(oldLinkedUserId, employeeId);
+      updates.reportsToEmployeeId =
+        reportsToDetails.reportsToEmployeeId;
+      updates.reportsToName =
+        reportsToDetails.reportsToName;
+    } else if (
+      updates.reportsToEmployeeId !== undefined
+    ) {
+      updates.reportsToEmployeeId = "";
+      updates.reportsToName = "";
     }
 
-    await syncLinkedSystemUser(updatedEmployee);
+    const previousEligibilityStatus =
+      employee.payrollEligibilityStatus;
 
-    res.json({
+    const nextEligibilityStatus =
+      updates.payrollEligibilityStatus !==
+      undefined
+        ? updates.payrollEligibilityStatus
+        : previousEligibilityStatus;
+
+        if (
+      updates.payrollEligibilityStatus !==
+        undefined &&
+      nextEligibilityStatus !==
+        previousEligibilityStatus &&
+      nextEligibilityStatus !==
+        "Pending Review"
+    ) {
+      updates.payrollEligibilityReviewedBy =
+        getUserName(req.user);
+
+      updates.payrollEligibilityReviewedAt =
+        new Date();
+    }
+
+    if (
+      nextEligibilityStatus ===
+      "Pending Review"
+    ) {
+      updates.payrollEligibilityReviewedBy =
+        "";
+      updates.payrollEligibilityReviewedAt =
+        null;
+    }
+
+    updates.updatedBy =
+      getUserName(req.user);
+
+    /*
+     * Save the employee document directly so the complete
+     * employee-master pre-validation hook executes.
+     */
+    employee.set(updates);
+
+    const updatedEmployee =
+      await employee.save();
+
+    if (
+      oldLinkedUserId &&
+      oldLinkedUserId !==
+        updatedEmployee.linkedUserId
+    ) {
+      await clearOldLinkedSystemUser(
+        oldLinkedUserId,
+        employeeId
+      );
+    }
+
+    await syncLinkedSystemUser(
+      updatedEmployee
+    );
+
+    return res.json({
       success: true,
-      message: "HR employee updated successfully",
+      message:
+        "HR employee updated successfully",
       data: updatedEmployee,
     });
   } catch (error) {
-    console.error("Error updating HR employee:", error);
-console.error("Update payload was:", req.body);
-    res.status(500).json({
+    console.error(
+      "Error updating HR employee:",
+      error
+    );
+
+    if (error?.name === "ValidationError") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Employee master-record validation failed",
+        error: error.message,
+      });
+    }
+
+    return res.status(500).json({
       success: false,
-      message: "Failed to update HR employee",
+      message:
+        "Failed to update HR employee",
       error: error.message,
     });
   }
