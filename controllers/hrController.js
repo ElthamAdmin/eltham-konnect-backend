@@ -112,18 +112,76 @@ const buildEmployeeAuditSnapshot = (
   ),
 });
 
+const normalizeAuditComparisonValue = (
+  value
+) => {
+  let comparableValue = value;
+
+  if (
+    comparableValue &&
+    typeof comparableValue.toObject ===
+      "function"
+  ) {
+    comparableValue =
+      comparableValue.toObject({
+        depopulate: true,
+        versionKey: false,
+      });
+  }
+
+  return JSON.stringify(
+    comparableValue ?? null
+  );
+};
+
 const buildEmployeeChangeAuditMetadata = (
-  requestBody = {}
+  requestBody = {},
+  currentEmployee = null
 ) => {
   const requestedFields =
     Object.keys(requestBody);
 
+  const fieldWasChanged = (
+    fieldName
+  ) => {
+    if (
+      !requestedFields.includes(fieldName)
+    ) {
+      return false;
+    }
+
+    /*
+     * During creation there is no prior employee,
+     * so supplied fields count as newly recorded.
+     */
+    if (!currentEmployee) {
+      return true;
+    }
+
+    const currentValue =
+      typeof currentEmployee.get ===
+      "function"
+        ? currentEmployee.get(fieldName)
+        : currentEmployee[fieldName];
+
+    return (
+      normalizeAuditComparisonValue(
+        currentValue
+      ) !==
+      normalizeAuditComparisonValue(
+        requestBody[fieldName]
+      )
+    );
+  };
+
   return {
     changedFields: requestedFields
-      .filter((fieldName) =>
-        HR_AUDIT_SAFE_CHANGE_FIELDS.has(
-          fieldName
-        )
+      .filter(
+        (fieldName) =>
+          HR_AUDIT_SAFE_CHANGE_FIELDS.has(
+            fieldName
+          ) &&
+          fieldWasChanged(fieldName)
       )
       .sort(),
 
@@ -133,32 +191,26 @@ const buildEmployeeChangeAuditMetadata = (
       "dateOfBirth",
       "trn",
       "nisNumber",
-    ].some((fieldName) =>
-      requestedFields.includes(fieldName)
-    ),
+    ].some(fieldWasChanged),
 
     contactInformationChanged: [
       "email",
       "phone",
       "alternatePhone",
       "address",
-    ].some((fieldName) =>
-      requestedFields.includes(fieldName)
-    ),
+    ].some(fieldWasChanged),
 
     emergencyContactChanged: [
       "emergencyContactName",
       "emergencyContactPhone",
       "emergencyContactRelationship",
-    ].some((fieldName) =>
-      requestedFields.includes(fieldName)
-    ),
+    ].some(fieldWasChanged),
 
     administrativeNotesChanged:
-      requestedFields.includes("notes"),
+      fieldWasChanged("notes"),
 
     payrollEligibilityReasonChanged:
-      requestedFields.includes(
+      fieldWasChanged(
         "payrollEligibilityReason"
       ),
   };
@@ -765,8 +817,14 @@ const updateEmployee = async (req, res) => {
       });
     }
 
-    const auditBeforeSnapshot =
+        const auditBeforeSnapshot =
       buildEmployeeAuditSnapshot(employee);
+
+    const auditChangeMetadata =
+      buildEmployeeChangeAuditMetadata(
+        requestBody,
+        employee
+      );
 
     /*
      * Pay rates must be changed through the effective-dated
@@ -1238,9 +1296,7 @@ const updateEmployee = async (req, res) => {
           updatedEmployee
         ),
       metadata: {
-        ...buildEmployeeChangeAuditMetadata(
-          requestBody
-        ),
+                ...auditChangeMetadata,
         linkedUserChanged:
           oldLinkedUserId !==
           (updatedEmployee.linkedUserId ||
