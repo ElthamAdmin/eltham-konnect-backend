@@ -601,6 +601,301 @@ const updateCompensationDraft = async (
   }
 };
 
+const LEGACY_PAY_MAPPING = {
+  "Monthly Salary": {
+    compensationType: "Salary",
+    rateUnit: "Monthly",
+    defaultPayFrequency: "Monthly",
+  },
+
+  "Weekly Wage": {
+    compensationType: "Wage",
+    rateUnit: "Weekly",
+    defaultPayFrequency: "Weekly",
+  },
+
+  "Daily Rate": {
+    compensationType: "Wage",
+    rateUnit: "Daily",
+    defaultPayFrequency: "",
+  },
+
+  "Hourly Rate": {
+    compensationType: "Wage",
+    rateUnit: "Hourly",
+    defaultPayFrequency: "",
+  },
+};
+
+const previewLegacyCompensationMigration =
+  async (req, res) => {
+    try {
+      const employees =
+        await HREmployee.find({
+          employmentStatus: {
+            $ne: "Terminated",
+          },
+        })
+          .select(
+            [
+              "employeeId",
+              "fullName",
+              "jobTitle",
+              "department",
+              "branch",
+              "employmentStatus",
+              "startDate",
+              "payType",
+              "payRate",
+              "compensationType",
+              "payFrequency",
+              "normalWorkingHours",
+            ].join(" ")
+          )
+          .sort({
+            employeeId: 1,
+          });
+
+      const employeeIds =
+        employees.map(
+          (employee) =>
+            employee.employeeId
+        );
+
+      const existingRecords =
+        await EmployeeCompensation.find({
+          employeeId: {
+            $in: employeeIds,
+          },
+          compensationCategory:
+            "Base Pay",
+          componentCode: "BASE_PAY",
+          status: {
+            $ne: "Cancelled",
+          },
+        }).select(
+          "employeeId compensationNumber status effectiveFrom effectiveTo"
+        );
+
+      const existingByEmployee =
+        new Map();
+
+      existingRecords.forEach(
+        (record) => {
+          if (
+            !existingByEmployee.has(
+              record.employeeId
+            )
+          ) {
+            existingByEmployee.set(
+              record.employeeId,
+              []
+            );
+          }
+
+          existingByEmployee
+            .get(record.employeeId)
+            .push(record);
+        }
+      );
+
+      const preview = employees.map(
+        (employee) => {
+          const mapping =
+            LEGACY_PAY_MAPPING[
+              employee.payType
+            ] || null;
+
+          const existingHistory =
+            existingByEmployee.get(
+              employee.employeeId
+            ) || [];
+
+          const issues = [];
+
+          if (existingHistory.length > 0) {
+            issues.push(
+              "A non-cancelled base-pay compensation record already exists."
+            );
+          }
+
+          if (!mapping) {
+            issues.push(
+              `Legacy pay type ${employee.payType || "is blank"} cannot be mapped automatically.`
+            );
+          }
+
+          if (
+            Number(
+              employee.payRate || 0
+            ) <= 0
+          ) {
+            issues.push(
+              "Legacy pay rate is missing or not greater than zero."
+            );
+          }
+
+          if (!employee.startDate) {
+            issues.push(
+              "Employment start date is required before migration."
+            );
+          }
+
+          const proposedPayFrequency =
+            employee.payFrequency ||
+            mapping
+              ?.defaultPayFrequency ||
+            "";
+
+          if (!proposedPayFrequency) {
+            issues.push(
+              "Pay frequency requires HR confirmation."
+            );
+          }
+
+          const proposedType =
+            employee.compensationType &&
+            [
+              "Salary",
+              "Wage",
+              "Stipend",
+            ].includes(
+              employee.compensationType
+            )
+              ? employee.compensationType
+              : mapping
+                  ?.compensationType ||
+                "";
+
+          return {
+            employeeId:
+              employee.employeeId,
+            employeeName:
+              employee.fullName,
+            jobTitle:
+              employee.jobTitle || "",
+            department:
+              employee.department || "",
+            branch:
+              employee.branch || "",
+            employmentStatus:
+              employee.employmentStatus,
+
+            legacyCompensation: {
+              payType:
+                employee.payType || "",
+              payRate: Number(
+                employee.payRate || 0
+              ),
+              compensationType:
+                employee.compensationType ||
+                "",
+              payFrequency:
+                employee.payFrequency ||
+                "",
+            },
+
+            proposedRecord: {
+              compensationType:
+                proposedType,
+              compensationCategory:
+                "Base Pay",
+              componentCode:
+                "BASE_PAY",
+              componentName:
+                proposedType
+                  ? `${proposedType} - Base Pay`
+                  : "",
+              amount: Number(
+                employee.payRate || 0
+              ),
+              currency: "JMD",
+              rateUnit:
+                mapping?.rateUnit || "",
+              payFrequency:
+                proposedPayFrequency,
+              standardHoursPerDay:
+                Number(
+                  employee
+                    .normalWorkingHours
+                    ?.hoursPerDay || 0
+                ),
+              standardHoursPerWeek:
+                Number(
+                  employee
+                    .normalWorkingHours
+                    ?.hoursPerWeek || 0
+                ),
+              effectiveFrom:
+                employee.startDate || "",
+              effectiveTo: "",
+              changeReason:
+                "Initial Compensation",
+            },
+
+            existingHistory:
+              existingHistory.map(
+                (record) => ({
+                  compensationNumber:
+                    record
+                      .compensationNumber,
+                  status:
+                    record.status,
+                  effectiveFrom:
+                    record
+                      .effectiveFrom,
+                  effectiveTo:
+                    record
+                      .effectiveTo ||
+                    "",
+                })
+              ),
+
+            readyForDraft:
+              issues.length === 0,
+
+            issues,
+          };
+        }
+      );
+
+      const readyCount =
+        preview.filter(
+          (item) =>
+            item.readyForDraft
+        ).length;
+
+      return res.json({
+        success: true,
+        message:
+          "Legacy compensation migration preview generated successfully. No records were changed.",
+        summary: {
+          employeeCount:
+            preview.length,
+          readyForDraftCount:
+            readyCount,
+          requiresReviewCount:
+            preview.length -
+            readyCount,
+          recordsCreated: 0,
+        },
+        data: preview,
+      });
+    } catch (error) {
+      console.error(
+        "Error previewing legacy compensation migration:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Could not generate the legacy compensation migration preview",
+        error: error.message,
+      });
+    }
+  };
+
 const previousYmdDate = (
   ymdDate
 ) => {
@@ -1049,6 +1344,7 @@ module.exports = {
   getCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
+  previewLegacyCompensationMigration,
   activateCompensationRecord,
   cancelCompensationDraft,
 };

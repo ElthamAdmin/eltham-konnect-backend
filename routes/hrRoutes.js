@@ -20,6 +20,7 @@ const {
   getCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
+  previewLegacyCompensationMigration,
   activateCompensationRecord,
   cancelCompensationDraft,
 } = require(
@@ -86,6 +87,14 @@ router.get(
  * These routes must remain before
  * the generic /:employeeId route.
  */
+
+router.get(
+  "/compensation/legacy-migration-preview",
+  protect,
+  requirePermission("hr"),
+  previewLegacyCompensationMigration
+);
+
 router.get(
   "/compensation",
   protect,
