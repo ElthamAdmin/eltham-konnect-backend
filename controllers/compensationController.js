@@ -1340,8 +1340,222 @@ const cancelCompensationDraft =
     }
   };
 
+  const getMyCompensationRecords = async (
+  req,
+  res
+) => {
+  try {
+    const linkedUserIdentifiers = [
+      req.user?.userId,
+      req.user?._id,
+    ]
+      .filter(Boolean)
+      .map((value) =>
+        normalizeString(value)
+      );
+
+    if (
+      linkedUserIdentifiers.length === 0
+    ) {
+      return res.status(401).json({
+        success: false,
+        message:
+          "The authenticated user could not be identified.",
+      });
+    }
+
+    const employee =
+      await HREmployee.findOne({
+        linkedUserId: {
+          $in: linkedUserIdentifiers,
+        },
+      }).select(
+        "employeeId fullName jobTitle department branch employmentStatus linkedUserId"
+      );
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "No HR employee profile is linked to the authenticated user.",
+      });
+    }
+
+    const getJamaicaDate = () => {
+      const formatter =
+        new Intl.DateTimeFormat(
+          "en-CA",
+          {
+            timeZone:
+              "America/Jamaica",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          }
+        );
+
+      const dateParts =
+        formatter.formatToParts(
+          new Date()
+        );
+
+      const part = (type) =>
+        dateParts.find(
+          (item) =>
+            item.type === type
+        )?.value || "";
+
+      return `${part("year")}-${part(
+        "month"
+      )}-${part("day")}`;
+    };
+
+    const asOfDate =
+      normalizeString(
+        req.query?.asOfDate
+      ) || getJamaicaDate();
+
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(
+        asOfDate
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "As-of date must use YYYY-MM-DD format.",
+      });
+    }
+
+    const records =
+      await EmployeeCompensation.find({
+        employeeId:
+          employee.employeeId,
+        status: "Active",
+        effectiveFrom: {
+          $lte: asOfDate,
+        },
+        $or: [
+          {
+            effectiveTo: "",
+          },
+          {
+            effectiveTo: {
+              $gte: asOfDate,
+            },
+          },
+        ],
+      })
+        .select(
+          [
+            "compensationNumber",
+            "employeeId",
+            "compensationType",
+            "compensationCategory",
+            "componentCode",
+            "componentName",
+            "amount",
+            "currency",
+            "rateUnit",
+            "payFrequency",
+            "standardHoursPerDay",
+            "standardHoursPerWeek",
+            "effectiveFrom",
+            "effectiveTo",
+            "status",
+          ].join(" ")
+        )
+        .sort({
+          compensationCategory: 1,
+          componentCode: 1,
+          effectiveFrom: -1,
+        })
+        .lean();
+
+    const baseCompensation =
+      records.find(
+        (record) =>
+          record.compensationCategory ===
+            "Base Pay" &&
+          record.componentCode ===
+            "BASE_PAY"
+      ) || null;
+
+    const allowances = records.filter(
+      (record) =>
+        record.compensationCategory ===
+          "Recurring Addition"
+    );
+
+    await writeAuditLog({
+      req,
+      action:
+        "VIEW_OWN_COMPENSATION",
+      module: "HR",
+      description:
+        `Employee ${employee.employeeId} viewed their effective compensation summary`,
+      targetType:
+        "EmployeeCompensation",
+      targetId:
+        employee.employeeId,
+      metadata: {
+        source:
+          "Employee Self-Service",
+        asOfDate,
+        activeComponentCount:
+          records.length,
+        baseCompensationFound:
+          Boolean(
+            baseCompensation
+          ),
+        allowanceCount:
+          allowances.length,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message:
+        "My effective compensation records retrieved successfully",
+      data: {
+        employee: {
+          employeeId:
+            employee.employeeId,
+          fullName:
+            employee.fullName,
+          jobTitle:
+            employee.jobTitle || "",
+          department:
+            employee.department || "",
+          branch:
+            employee.branch || "",
+          employmentStatus:
+            employee.employmentStatus,
+        },
+        asOfDate,
+        baseCompensation,
+        allowances,
+        activeComponents: records,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Error retrieving self-service compensation:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message:
+        "Could not retrieve your effective compensation records",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getCompensationRecords,
+  getMyCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
   previewLegacyCompensationMigration,

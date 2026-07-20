@@ -18,6 +18,7 @@ const {
 
 const {
   getCompensationRecords,
+  getMyCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
   previewLegacyCompensationMigration,
@@ -54,6 +55,19 @@ router.get(
     "payslipSelfService",
   ]),
   getMyEmployeeProfile
+);
+
+router.get(
+  "/me/compensation",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+    "leaveSelfService",
+    "documentSelfService",
+    "payslipSelfService",
+  ]),
+  getMyCompensationRecords
 );
 
 router.get(
