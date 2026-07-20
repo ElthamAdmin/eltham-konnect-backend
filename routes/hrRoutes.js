@@ -17,6 +17,14 @@ const {
 } = require("../controllers/hrController");
 
 const {
+  getCompensationRecords,
+  createCompensationDraft,
+  updateCompensationDraft,
+} = require(
+  "../controllers/compensationController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -69,6 +77,32 @@ router.get(
     "leaveSelfService",
   ]),
   getMyPerformanceReviews
+);
+
+/*
+ * H2 compensation history.
+ * These routes must remain before
+ * the generic /:employeeId route.
+ */
+router.get(
+  "/compensation",
+  protect,
+  requirePermission("hr"),
+  getCompensationRecords
+);
+
+router.post(
+  "/compensation",
+  protect,
+  requirePermission("hr"),
+  createCompensationDraft
+);
+
+router.patch(
+  "/compensation/:compensationNumber",
+  protect,
+  requirePermission("hr"),
+  updateCompensationDraft
 );
 
 // HR-management access only.
