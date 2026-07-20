@@ -1,5 +1,8 @@
 const HREmployee = require("../models/HREmployee");
 const SystemUser = require("../models/SystemUser");
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
 
 const createNextEmployeeId = async () => {
   const lastEmployee = await HREmployee.findOne()
@@ -33,6 +36,133 @@ const getUserName = (user) =>
 
   const EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS =
   "-documents -disciplineRecords -performanceReviews";
+
+  const HR_AUDIT_SAFE_CHANGE_FIELDS = new Set([
+  "fullName",
+  "gender",
+  "department",
+  "jobTitle",
+  "jobLevel",
+  "isDepartmentHead",
+  "reportsToEmployeeId",
+  "branch",
+  "employmentType",
+  "employmentClassification",
+  "contractType",
+  "startDate",
+  "endDate",
+  "probation",
+  "normalWorkingHours",
+  "scheduledWorkdays",
+  "employmentStatus",
+  "compensationType",
+  "payFrequency",
+  "payrollEnabled",
+  "payrollEligibilityStatus",
+  "payrollEligibilityEffectiveFrom",
+  "payrollEligibilityEffectiveTo",
+  "linkedUserId",
+  "attendanceRequired",
+]);
+
+const buildEmployeeAuditSnapshot = (
+  employee
+) => ({
+  employeeId: employee?.employeeId || "",
+  department: employee?.department || "",
+  jobTitle: employee?.jobTitle || "",
+  jobLevel: Number(
+    employee?.jobLevel || 0
+  ),
+  branch: employee?.branch || "",
+  employmentType:
+    employee?.employmentType || "",
+  employmentClassification:
+    employee?.employmentClassification || "",
+  contractType:
+    employee?.contractType || "",
+  employmentStatus:
+    employee?.employmentStatus || "",
+  payrollEnabled: Boolean(
+    employee?.payrollEnabled
+  ),
+  payrollEligibilityStatus:
+    employee?.payrollEligibilityStatus || "",
+  attendanceRequired: Boolean(
+    employee?.attendanceRequired
+  ),
+  systemUserLinked: Boolean(
+    employee?.linkedUserId
+  ),
+  reportingManagerAssigned: Boolean(
+    employee?.reportsToEmployeeId
+  ),
+  scheduledWorkdayCount: Array.isArray(
+    employee?.scheduledWorkdays
+  )
+    ? employee.scheduledWorkdays.length
+    : 0,
+  normalHoursPerDay: Number(
+    employee?.normalWorkingHours
+      ?.hoursPerDay || 0
+  ),
+  normalHoursPerWeek: Number(
+    employee?.normalWorkingHours
+      ?.hoursPerWeek || 0
+  ),
+});
+
+const buildEmployeeChangeAuditMetadata = (
+  requestBody = {}
+) => {
+  const requestedFields =
+    Object.keys(requestBody);
+
+  return {
+    changedFields: requestedFields
+      .filter((fieldName) =>
+        HR_AUDIT_SAFE_CHANGE_FIELDS.has(
+          fieldName
+        )
+      )
+      .sort(),
+
+    identityInformationChanged: [
+      "firstName",
+      "lastName",
+      "dateOfBirth",
+      "trn",
+      "nisNumber",
+    ].some((fieldName) =>
+      requestedFields.includes(fieldName)
+    ),
+
+    contactInformationChanged: [
+      "email",
+      "phone",
+      "alternatePhone",
+      "address",
+    ].some((fieldName) =>
+      requestedFields.includes(fieldName)
+    ),
+
+    emergencyContactChanged: [
+      "emergencyContactName",
+      "emergencyContactPhone",
+      "emergencyContactRelationship",
+    ].some((fieldName) =>
+      requestedFields.includes(fieldName)
+    ),
+
+    administrativeNotesChanged:
+      requestedFields.includes("notes"),
+
+    payrollEligibilityReasonChanged:
+      requestedFields.includes(
+        "payrollEligibilityReason"
+      ),
+  };
+};
 
 const toBoolean = (value, defaultValue = true) => {
   if (value === true || value === "true") return true;
@@ -572,7 +702,25 @@ const createEmployee = async (req, res) => {
       updatedBy: req.user?.email || req.user?.fullName || "",
     });
 
-    await syncLinkedSystemUser(employee);
+        await syncLinkedSystemUser(employee);
+
+    await writeAuditLog({
+      req,
+      action: "CREATE_HR_EMPLOYEE",
+      module: "HR",
+      description:
+        `HR employee ${employee.employeeId} created`,
+      targetType: "HREmployee",
+      targetId: employee.employeeId,
+      afterValues:
+        buildEmployeeAuditSnapshot(employee),
+      metadata: {
+        ...buildEmployeeChangeAuditMetadata(
+          req.body || {}
+        ),
+        source: "Employee Master",
+      },
+    });
 
     res.status(201).json({
       success: true,
@@ -610,12 +758,15 @@ const updateEmployee = async (req, res) => {
       employeeId,
     });
 
-    if (!employee) {
+        if (!employee) {
       return res.status(404).json({
         success: false,
         message: "HR employee not found",
       });
     }
+
+    const auditBeforeSnapshot =
+      buildEmployeeAuditSnapshot(employee);
 
     /*
      * Pay rates must be changed through the effective-dated
@@ -1067,9 +1218,40 @@ const updateEmployee = async (req, res) => {
       );
     }
 
-    await syncLinkedSystemUser(
+        await syncLinkedSystemUser(
       updatedEmployee
     );
+
+    await writeAuditLog({
+      req,
+      action: "UPDATE_HR_EMPLOYEE",
+      module: "HR",
+      description:
+        `HR employee ${updatedEmployee.employeeId} master record updated`,
+      targetType: "HREmployee",
+      targetId:
+        updatedEmployee.employeeId,
+      beforeValues:
+        auditBeforeSnapshot,
+      afterValues:
+        buildEmployeeAuditSnapshot(
+          updatedEmployee
+        ),
+      metadata: {
+        ...buildEmployeeChangeAuditMetadata(
+          requestBody
+        ),
+        linkedUserChanged:
+          oldLinkedUserId !==
+          (updatedEmployee.linkedUserId ||
+            ""),
+        payrollEligibilityChanged:
+          previousEligibilityStatus !==
+          updatedEmployee
+            .payrollEligibilityStatus,
+        source: "Employee Master",
+      },
+    });
 
     return res.json({
       success: true,
@@ -1124,22 +1306,54 @@ const updateEmployeeStatus = async (req, res) => {
       });
     }
 
+        const previousEmploymentStatus =
+      employee.employmentStatus || "";
+
     employee.employmentStatus = employmentStatus;
     employee.updatedBy = req.user?.email || req.user?.fullName || employee.updatedBy;
 
     await employee.save();
 
-    if (employee.linkedUserId) {
+        if (employee.linkedUserId) {
       await SystemUser.findOneAndUpdate(
-        { userId: employee.linkedUserId },
+        {
+          userId: employee.linkedUserId,
+        },
         {
           status:
-            employmentStatus === "Active" || employmentStatus === "On Leave"
+            employmentStatus ===
+              "Active" ||
+            employmentStatus ===
+              "On Leave"
               ? "Active"
               : "Inactive",
         }
       );
     }
+
+    await writeAuditLog({
+      req,
+      action:
+        "UPDATE_HR_EMPLOYEE_STATUS",
+      module: "HR",
+      description:
+        `HR employee ${employee.employeeId} status changed`,
+      targetType: "HREmployee",
+      targetId: employee.employeeId,
+      beforeValues: {
+        employmentStatus:
+          previousEmploymentStatus,
+      },
+      afterValues: {
+        employmentStatus:
+          employee.employmentStatus,
+      },
+      metadata: {
+        linkedSystemUserStatusUpdated:
+          Boolean(employee.linkedUserId),
+        source: "Employee Status",
+      },
+    });
 
     res.json({
       success: true,
