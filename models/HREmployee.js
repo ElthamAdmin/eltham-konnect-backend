@@ -798,11 +798,23 @@ HREmployeeSchema.pre("validate", function () {
     }
   }
 
+    const scheduledWorkdays = Array.from(
+    this.scheduledWorkdays || []
+  );
+
   const uniqueWorkdays = [
-    ...new Set(this.scheduledWorkdays || []),
+    ...new Set(scheduledWorkdays),
   ];
 
-  this.scheduledWorkdays = uniqueWorkdays;
+  if (
+    uniqueWorkdays.length !==
+    scheduledWorkdays.length
+  ) {
+    this.invalidate(
+      "scheduledWorkdays",
+      "Scheduled workdays cannot contain duplicate days."
+    );
+  }
 
   const hoursPerDay = Number(
     this.normalWorkingHours?.hoursPerDay || 0
