@@ -188,10 +188,13 @@ const employeeCompensationSchema =
         trim: true,
       },
 
-      amount: {
+            amount: {
         type: Number,
         required: true,
-        min: 0,
+        min: [
+          0.01,
+          "Compensation amount must be greater than zero.",
+        ],
       },
 
       currency: {

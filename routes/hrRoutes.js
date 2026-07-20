@@ -20,6 +20,8 @@ const {
   getCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
+  activateCompensationRecord,
+  cancelCompensationDraft,
 } = require(
   "../controllers/compensationController"
 );
@@ -103,6 +105,20 @@ router.patch(
   protect,
   requirePermission("hr"),
   updateCompensationDraft
+);
+
+router.post(
+  "/compensation/:compensationNumber/activate",
+  protect,
+  requirePermission("hr"),
+  activateCompensationRecord
+);
+
+router.post(
+  "/compensation/:compensationNumber/cancel",
+  protect,
+  requirePermission("hr"),
+  cancelCompensationDraft
 );
 
 // HR-management access only.

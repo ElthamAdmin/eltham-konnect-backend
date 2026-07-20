@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const EmployeeCompensation = require(
   "../models/EmployeeCompensation"
 );
@@ -600,8 +601,454 @@ const updateCompensationDraft = async (
   }
 };
 
+const previousYmdDate = (
+  ymdDate
+) => {
+  const [year, month, day] =
+    String(ymdDate)
+      .split("-")
+      .map(Number);
+
+  const date = new Date(
+    Date.UTC(year, month - 1, day)
+  );
+
+  date.setUTCDate(
+    date.getUTCDate() - 1
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+};
+
+const activateCompensationRecord =
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
+
+    let activatedRecord = null;
+    let supersededRecord = null;
+
+    try {
+      const {
+        compensationNumber,
+      } = req.params;
+
+      const {
+        approvalNotes = "",
+      } = req.body || {};
+
+      const userName = getUserName(
+        req.user
+      );
+
+      await session.withTransaction(
+        async () => {
+          const record =
+            await EmployeeCompensation.findOne(
+              {
+                compensationNumber,
+              }
+            ).session(session);
+
+          if (!record) {
+            const error = new Error(
+              "Employee compensation record not found"
+            );
+            error.statusCode = 404;
+            throw error;
+          }
+
+          if (record.status !== "Draft") {
+            const error = new Error(
+              "Only Draft compensation records may be activated."
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const employee =
+            await HREmployee.findOne({
+              employeeId:
+                record.employeeId,
+            }).session(session);
+
+          if (!employee) {
+            const error = new Error(
+              "The linked HR employee no longer exists."
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+
+          if (
+            employee.employmentStatus ===
+            "Terminated"
+          ) {
+            const error = new Error(
+              "Compensation cannot be activated for a terminated employee."
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const newPeriodEnd =
+            record.effectiveTo ||
+            "9999-12-31";
+
+          const overlappingRecords =
+            await EmployeeCompensation.find(
+              {
+                _id: {
+                  $ne: record._id,
+                },
+                employeeId:
+                  record.employeeId,
+                compensationCategory:
+                  record.compensationCategory,
+                componentCode:
+                  record.componentCode,
+                status: "Active",
+                effectiveFrom: {
+                  $lte: newPeriodEnd,
+                },
+                $or: [
+                  {
+                    effectiveTo: "",
+                  },
+                  {
+                    effectiveTo: {
+                      $gte:
+                        record.effectiveFrom,
+                    },
+                  },
+                ],
+              }
+            )
+              .session(session)
+              .sort({
+                effectiveFrom: -1,
+              });
+
+          if (
+            overlappingRecords.length > 1
+          ) {
+            const error = new Error(
+              "Multiple overlapping active compensation records exist. Resolve the compensation history before activation."
+            );
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const existingActive =
+            overlappingRecords[0] ||
+            null;
+
+          if (existingActive) {
+            if (
+              record.effectiveFrom <=
+              existingActive.effectiveFrom
+            ) {
+              const error = new Error(
+                `The new effective date must be later than ${existingActive.compensationNumber}, which begins on ${existingActive.effectiveFrom}.`
+              );
+              error.statusCode = 409;
+              throw error;
+            }
+
+            const closedDate =
+              previousYmdDate(
+                record.effectiveFrom
+              );
+
+            if (
+              closedDate <
+              existingActive.effectiveFrom
+            ) {
+              const error = new Error(
+                "The prior compensation period cannot be closed before its effective date."
+              );
+              error.statusCode = 409;
+              throw error;
+            }
+
+            existingActive.effectiveTo =
+              closedDate;
+
+            existingActive.status =
+              "Superseded";
+
+            existingActive
+              .replacedByCompensationNumber =
+              record.compensationNumber;
+
+            existingActive.updatedBy =
+              userName;
+
+            existingActive.workflowHistory.push(
+              {
+                fromStatus: "Active",
+                toStatus:
+                  "Superseded",
+                action:
+                  "Compensation superseded",
+                reason:
+                  `Replaced by ${record.compensationNumber}`,
+                performedBy:
+                  userName,
+                performedAt:
+                  new Date(),
+              }
+            );
+
+            supersededRecord =
+              await existingActive.save({
+                session,
+              });
+
+            record.replacesCompensationNumber =
+              existingActive
+                .compensationNumber;
+          }
+
+          record.status = "Active";
+          record.approvedBy = userName;
+          record.approvedAt =
+            new Date();
+          record.updatedBy = userName;
+
+          record.workflowHistory.push({
+            fromStatus: "Draft",
+            toStatus: "Active",
+            action:
+              "Compensation activated",
+            reason:
+              normalizeString(
+                approvalNotes
+              ) ||
+              "Effective-dated compensation approved",
+            performedBy: userName,
+            performedAt: new Date(),
+          });
+
+          activatedRecord =
+            await record.save({
+              session,
+            });
+        }
+      );
+
+      await writeAuditLog({
+        req,
+        action:
+          "ACTIVATE_EMPLOYEE_COMPENSATION",
+        module: "HR",
+        description:
+          `Compensation ${activatedRecord.compensationNumber} activated for ${activatedRecord.employeeId}`,
+        targetType:
+          "EmployeeCompensation",
+        targetId:
+          activatedRecord.compensationNumber,
+        afterValues:
+          buildSafeAuditSnapshot(
+            activatedRecord
+          ),
+        metadata: {
+          source:
+            "Compensation History",
+          supersededPriorRecord:
+            Boolean(
+              supersededRecord
+            ),
+          supersededCompensationNumber:
+            supersededRecord
+              ?.compensationNumber || "",
+          amountRecorded:
+            Number(
+              activatedRecord.amount ||
+                0
+            ) > 0,
+          legacyEmployeePayRateChanged:
+            false,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          supersededRecord
+            ? `${activatedRecord.compensationNumber} activated successfully and ${supersededRecord.compensationNumber} was superseded.`
+            : `${activatedRecord.compensationNumber} activated successfully.`,
+        data: activatedRecord,
+        supersededRecord:
+          supersededRecord
+            ? {
+                compensationNumber:
+                  supersededRecord
+                    .compensationNumber,
+                effectiveFrom:
+                  supersededRecord
+                    .effectiveFrom,
+                effectiveTo:
+                  supersededRecord
+                    .effectiveTo,
+                status:
+                  supersededRecord.status,
+              }
+            : null,
+      });
+    } catch (error) {
+      console.error(
+        "Error activating compensation:",
+        error
+      );
+
+      return res
+        .status(
+          error.statusCode || 500
+        )
+        .json({
+          success: false,
+          message:
+            error.statusCode
+              ? error.message
+              : "Could not activate the compensation record",
+          error:
+            error.statusCode
+              ? undefined
+              : error.message,
+        });
+    } finally {
+      await session.endSession();
+    }
+  };
+
+const cancelCompensationDraft =
+  async (req, res) => {
+    try {
+      const {
+        compensationNumber,
+      } = req.params;
+
+      const cancellationReason =
+        normalizeString(
+          req.body?.cancellationReason
+        );
+
+      if (!cancellationReason) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A cancellation reason is required.",
+        });
+      }
+
+      const record =
+        await EmployeeCompensation.findOne({
+          compensationNumber,
+        });
+
+      if (!record) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Employee compensation record not found",
+        });
+      }
+
+      if (record.status !== "Draft") {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Only Draft compensation records may be cancelled. Active records must be replaced by a new effective-dated record.",
+        });
+      }
+
+      const userName = getUserName(
+        req.user
+      );
+
+      record.status = "Cancelled";
+      record.cancelledBy = userName;
+      record.cancelledAt =
+        new Date();
+      record.cancellationReason =
+        cancellationReason;
+      record.updatedBy = userName;
+
+      record.workflowHistory.push({
+        fromStatus: "Draft",
+        toStatus: "Cancelled",
+        action:
+          "Compensation draft cancelled",
+        reason:
+          cancellationReason,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      const cancelledRecord =
+        await record.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "CANCEL_COMPENSATION_DRAFT",
+        module: "HR",
+        description:
+          `Compensation draft ${cancelledRecord.compensationNumber} cancelled`,
+        targetType:
+          "EmployeeCompensation",
+        targetId:
+          cancelledRecord.compensationNumber,
+        afterValues:
+          buildSafeAuditSnapshot(
+            cancelledRecord
+          ),
+        metadata: {
+          source:
+            "Compensation History",
+          cancellationReasonRecorded:
+            true,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${cancelledRecord.compensationNumber} cancelled successfully.`,
+        data: cancelledRecord,
+      });
+    } catch (error) {
+      console.error(
+        "Error cancelling compensation draft:",
+        error
+      );
+
+      const statusCode =
+        error?.name ===
+        "ValidationError"
+          ? 400
+          : 500;
+
+      return res
+        .status(statusCode)
+        .json({
+          success: false,
+          message:
+            statusCode === 400
+              ? "Compensation cancellation validation failed"
+              : "Could not cancel the compensation draft",
+          error: error.message,
+        });
+    }
+  };
+
 module.exports = {
   getCompensationRecords,
   createCompensationDraft,
   updateCompensationDraft,
+  activateCompensationRecord,
+  cancelCompensationDraft,
 };
