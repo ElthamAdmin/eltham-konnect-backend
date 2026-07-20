@@ -71,18 +71,19 @@ router.get(
   getMyPerformanceReviews
 );
 
-// Admin + self-service access
+// HR-management access only.
+// Employees must use /me for their own profile.
 router.get(
   "/",
   protect,
-  requireAnyPermission(["hr", "hrSelfService"]),
+  requirePermission("hr"),
   getEmployees
 );
 
 router.get(
   "/:employeeId",
   protect,
-  requireAnyPermission(["hr", "hrSelfService"]),
+  requirePermission("hr"),
   getEmployeeByEmployeeId
 );
 
