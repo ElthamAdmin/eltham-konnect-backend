@@ -126,6 +126,32 @@ const PERFORMANCE_RATINGS = [
   "Unsatisfactory",
 ];
 
+const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const normalizeTrn = (value) =>
+  String(value || "").replace(/\D/g, "");
+
+const normalizeNisNumber = (value) =>
+  String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, " ");
+
+const isValidYmdDate = (value) => {
+  const text = String(value || "").trim();
+
+  if (!YMD_PATTERN.test(text)) {
+    return false;
+  }
+
+  const date = new Date(`${text}T12:00:00.000Z`);
+
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === text
+  );
+};
+
 const HREmployeeSchema = new mongoose.Schema(
   {
     employeeId: {
@@ -640,7 +666,176 @@ performanceReviews: [
   },
   {
     timestamps: true,
-  }
+    }
 );
 
-module.exports = mongoose.model("HREmployee", HREmployeeSchema);
+HREmployeeSchema.pre("validate", function () {
+  if (this.trn) {
+    this.trn = normalizeTrn(this.trn);
+
+    if (this.trn.length !== 9) {
+      this.invalidate(
+        "trn",
+        "Employee TRN must contain exactly nine digits."
+      );
+    }
+  }
+
+  if (this.nisNumber) {
+    this.nisNumber = normalizeNisNumber(
+      this.nisNumber
+    );
+
+    if (
+      !/^[A-Z0-9][A-Z0-9 /-]{4,24}$/.test(
+        this.nisNumber
+      )
+    ) {
+      this.invalidate(
+        "nisNumber",
+        "NIS number contains unsupported characters or length."
+      );
+    }
+  }
+
+  const dateFields = [
+    "dateOfBirth",
+    "startDate",
+    "endDate",
+    "payrollEligibilityEffectiveFrom",
+    "payrollEligibilityEffectiveTo",
+  ];
+
+  for (const fieldName of dateFields) {
+    const value = String(
+      this.get(fieldName) || ""
+    ).trim();
+
+    if (value && !isValidYmdDate(value)) {
+      this.invalidate(
+        fieldName,
+        `${fieldName} must use a valid YYYY-MM-DD date.`
+      );
+    }
+  }
+
+  if (
+    this.startDate &&
+    this.endDate &&
+    this.endDate < this.startDate
+  ) {
+    this.invalidate(
+      "endDate",
+      "Employment end date cannot be earlier than the start date."
+    );
+  }
+
+  if (
+    this.payrollEligibilityEffectiveFrom &&
+    this.payrollEligibilityEffectiveTo &&
+    this.payrollEligibilityEffectiveTo <
+      this.payrollEligibilityEffectiveFrom
+  ) {
+    this.invalidate(
+      "payrollEligibilityEffectiveTo",
+      "Payroll eligibility end date cannot be earlier than its effective date."
+    );
+  }
+
+  if (this.probation) {
+    const probationDateFields = [
+      "startDate",
+      "endDate",
+      "reviewDueDate",
+      "completedDate",
+    ];
+
+    for (const fieldName of probationDateFields) {
+      const value = String(
+        this.probation[fieldName] || ""
+      ).trim();
+
+      if (value && !isValidYmdDate(value)) {
+        this.invalidate(
+          `probation.${fieldName}`,
+          `Probation ${fieldName} must use a valid YYYY-MM-DD date.`
+        );
+      }
+    }
+
+    if (
+      this.probation.startDate &&
+      this.probation.endDate &&
+      this.probation.endDate <
+        this.probation.startDate
+    ) {
+      this.invalidate(
+        "probation.endDate",
+        "Probation end date cannot be earlier than its start date."
+      );
+    }
+
+    if (
+      this.probation.applicable &&
+      this.probation.status ===
+        "Not Applicable"
+    ) {
+      this.invalidate(
+        "probation.status",
+        "Applicable probation cannot use Not Applicable status."
+      );
+    }
+
+    if (
+      !this.probation.applicable &&
+      this.probation.status !==
+        "Not Applicable"
+    ) {
+      this.invalidate(
+        "probation.status",
+        "A non-applicable probation period must use Not Applicable status."
+      );
+    }
+  }
+
+  const uniqueWorkdays = [
+    ...new Set(this.scheduledWorkdays || []),
+  ];
+
+  this.scheduledWorkdays = uniqueWorkdays;
+
+  const hoursPerDay = Number(
+    this.normalWorkingHours?.hoursPerDay || 0
+  );
+
+  const hoursPerWeek = Number(
+    this.normalWorkingHours?.hoursPerWeek || 0
+  );
+
+  if (
+    hoursPerDay > 0 &&
+    hoursPerWeek > 0 &&
+    hoursPerWeek < hoursPerDay
+  ) {
+    this.invalidate(
+      "normalWorkingHours.hoursPerWeek",
+      "Normal weekly hours cannot be less than normal daily hours."
+    );
+  }
+
+  if (
+    this.payrollEligibilityStatus ===
+      "Eligible" &&
+    !this.payrollEnabled
+  ) {
+    this.invalidate(
+      "payrollEligibilityStatus",
+      "An employee cannot be payroll eligible while payroll is disabled."
+    );
+  }
+});
+
+module.exports = mongoose.model(
+  "HREmployee",
+  HREmployeeSchema
+);
