@@ -273,13 +273,24 @@ const createEmployee = async (req, res) => {
       isDepartmentHead,
       reportsToEmployeeId,
       branch,
-      employmentType,
+            employmentType,
+      employmentClassification,
+      contractType,
       startDate,
       endDate,
+      probation = {},
+      normalWorkingHours = {},
+      scheduledWorkdays = [],
       employmentStatus,
       payType,
       payRate,
+      compensationType,
+      payFrequency,
       payrollEnabled,
+      payrollEligibilityStatus,
+      payrollEligibilityReason,
+      payrollEligibilityEffectiveFrom,
+      payrollEligibilityEffectiveTo,
       linkedUserId,
       attendanceRequired,
       leaveBalanceVacation,
@@ -379,13 +390,151 @@ const createEmployee = async (req, res) => {
       reportsToEmployeeId: reportsToDetails.reportsToEmployeeId,
       reportsToName: reportsToDetails.reportsToName,
       branch: normalizeString(branch) || "Eltham Park Mainstore",
-      employmentType: employmentType || "Temporary",
-      startDate: startDate || "",
-      endDate: endDate || "",
-      employmentStatus: employmentStatus || "Active",
-      payType: payType || "Monthly Salary",
+            employmentType:
+        normalizeString(employmentType) ||
+        "Temporary",
+
+      employmentClassification:
+        normalizeString(
+          employmentClassification
+        ),
+
+      contractType:
+        normalizeString(contractType),
+
+      startDate:
+        normalizeString(startDate),
+
+      endDate:
+        normalizeString(endDate),
+
+      probation: {
+        applicable: toBoolean(
+          probation?.applicable,
+          false
+        ),
+
+        startDate: normalizeString(
+          probation?.startDate
+        ),
+
+        endDate: normalizeString(
+          probation?.endDate
+        ),
+
+        durationMonths: Number(
+          probation?.durationMonths || 0
+        ),
+
+        status:
+          normalizeString(
+            probation?.status
+          ) ||
+          (toBoolean(
+            probation?.applicable,
+            false
+          )
+            ? "Pending"
+            : "Not Applicable"),
+
+        reviewDueDate: normalizeString(
+          probation?.reviewDueDate
+        ),
+
+        completedDate: normalizeString(
+          probation?.completedDate
+        ),
+
+        notes: normalizeString(
+          probation?.notes
+        ),
+      },
+
+      normalWorkingHours: {
+        hoursPerDay: Number(
+          normalWorkingHours?.hoursPerDay || 0
+        ),
+
+        hoursPerWeek: Number(
+          normalWorkingHours?.hoursPerWeek || 0
+        ),
+      },
+
+      scheduledWorkdays: Array.isArray(
+        scheduledWorkdays
+      )
+        ? scheduledWorkdays
+            .map((day) =>
+              normalizeString(day)
+            )
+            .filter(Boolean)
+        : [],
+
+      employmentStatus:
+        normalizeString(employmentStatus) ||
+        "Active",
+
+      payType:
+        normalizeString(payType) ||
+        "Monthly Salary",
+
       payRate: Number(payRate || 0),
-      payrollEnabled: toBoolean(payrollEnabled, true),
+
+      compensationType:
+        normalizeString(compensationType),
+
+      payFrequency:
+        normalizeString(payFrequency),
+
+      payrollEnabled: toBoolean(
+        payrollEnabled,
+        true
+      ),
+
+      payrollEligibilityStatus:
+        normalizeString(
+          payrollEligibilityStatus
+        ) || "Pending Review",
+
+      payrollEligibilityReason:
+        normalizeString(
+          payrollEligibilityReason
+        ),
+
+      payrollEligibilityEffectiveFrom:
+        normalizeString(
+          payrollEligibilityEffectiveFrom
+        ),
+
+      payrollEligibilityEffectiveTo:
+        normalizeString(
+          payrollEligibilityEffectiveTo
+        ),
+
+      payrollEligibilityReviewedBy:
+        normalizeString(
+          payrollEligibilityStatus
+        ) &&
+        normalizeString(
+          payrollEligibilityStatus
+        ) !== "Pending Review"
+          ? req.user?.fullName ||
+            req.user?.email ||
+            ""
+          : "",
+
+      payrollEligibilityReviewedAt:
+        normalizeString(
+          payrollEligibilityStatus
+        ) &&
+        normalizeString(
+          payrollEligibilityStatus
+        ) !== "Pending Review"
+          ? new Date()
+          : null,
+
+      linkedUserId:
+        linkedUserDetails.linkedUserId,
       linkedUserId: linkedUserDetails.linkedUserId,
       linkedUserName: linkedUserDetails.linkedUserName,
       linkedUserRole: linkedUserDetails.linkedUserRole,
@@ -405,11 +554,23 @@ const createEmployee = async (req, res) => {
       message: "HR employee created successfully",
       data: employee,
     });
-  } catch (error) {
-    console.error("Error creating HR employee:", error);
-    res.status(500).json({
+    } catch (error) {
+    console.error(
+      "Error creating HR employee:",
+      error
+    );
+
+    const statusCode =
+      error?.name === "ValidationError"
+        ? 400
+        : 500;
+
+    res.status(statusCode).json({
       success: false,
-      message: "Failed to create HR employee",
+      message:
+        error?.name === "ValidationError"
+          ? "Employee master-record validation failed"
+          : "Failed to create HR employee",
       error: error.message,
     });
   }
