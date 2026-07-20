@@ -31,6 +31,9 @@ const getUserName = (user) =>
   user?.email ||
   "System User";
 
+  const EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS =
+  "-documents -disciplineRecords -performanceReviews";
+
 const toBoolean = (value, defaultValue = true) => {
   if (value === true || value === "true") return true;
   if (value === false || value === "false") return false;
@@ -168,12 +171,21 @@ const getEmployees = async (req, res) => {
 
     if (isAdmin) {
       // Admin → see all employees
-      employees = await HREmployee.find().sort({ createdAt: -1, _id: -1 });
+            employees = await HREmployee.find()
+        .select(
+          EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS
+        )
+        .sort({
+          createdAt: -1,
+          _id: -1,
+        });
     } else {
       // Staff → ONLY their own record
-      employees = await HREmployee.find({
+            employees = await HREmployee.find({
         linkedUserId: req.user?.userId,
-      });
+      }).select(
+        EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS
+      );
     }
 
     res.json({
@@ -228,11 +240,19 @@ const getMyEmployeeProfile = async (req, res) => {
     let employee = null;
 
     if (linkedEmployeeId) {
-      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
+            employee = await HREmployee.findOne({
+        employeeId: linkedEmployeeId,
+      }).select(
+        EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS
+      );
     }
 
     if (!employee && userId) {
-      employee = await HREmployee.findOne({ linkedUserId: userId });
+            employee = await HREmployee.findOne({
+        linkedUserId: userId,
+      }).select(
+        EMPLOYEE_MASTER_RESPONSE_EXCLUSIONS
+      );
     }
 
     if (!employee) {
