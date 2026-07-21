@@ -168,12 +168,64 @@ const AttendancePeriodSchema =
       },
 
       scheduleSnapshot: {
-        scheduledWorkdays: [
+                scheduledWorkdays: [
           {
             type: String,
             enum: WORKDAYS,
           },
         ],
+
+        weeklySchedule: [
+          {
+            dayName: {
+              type: String,
+              enum: WORKDAYS,
+              required: true,
+            },
+
+            requiredWorkday: {
+              type: Boolean,
+              default: false,
+            },
+
+            startTime: {
+              type: String,
+              default: "",
+              trim: true,
+            },
+
+            endTime: {
+              type: String,
+              default: "",
+              trim: true,
+            },
+
+            unpaidBreakMinutes: {
+              type: Number,
+              default: 0,
+              min: 0,
+              max: 720,
+            },
+
+            restDay: {
+              type: Boolean,
+              default: false,
+            },
+
+            notes: {
+              type: String,
+              default: "",
+              trim: true,
+            },
+          },
+        ],
+
+        overtimeThresholdHoursPerWeek: {
+          type: Number,
+          default: 0,
+          min: 0,
+          max: 168,
+        },
 
         normalHoursPerDay: {
           type: Number,
@@ -777,6 +829,65 @@ AttendancePeriodSchema.pre(
         "Scheduled workdays cannot contain duplicate days."
       );
     }
+
+        const weeklySchedule =
+      this.scheduleSnapshot
+        ?.weeklySchedule || [];
+
+    const weeklyScheduleDays =
+      weeklySchedule.map(
+        (entry) => entry.dayName
+      );
+
+    if (
+      new Set(weeklyScheduleDays).size !==
+      weeklyScheduleDays.length
+    ) {
+      this.invalidate(
+        "scheduleSnapshot.weeklySchedule",
+        "Attendance schedule snapshot cannot contain duplicate days."
+      );
+    }
+
+    for (
+      const scheduleDay of
+      weeklySchedule
+    ) {
+      const scheduleStart =
+        String(
+          scheduleDay.startTime || ""
+        ).trim();
+
+      const scheduleEnd =
+        String(
+          scheduleDay.endTime || ""
+        ).trim();
+
+      if (
+        scheduleStart &&
+        !TIME_PATTERN.test(
+          scheduleStart
+        )
+      ) {
+        this.invalidate(
+          "scheduleSnapshot.weeklySchedule",
+          `${scheduleDay.dayName} start time must use HH:mm format.`
+        );
+      }
+
+      if (
+        scheduleEnd &&
+        !TIME_PATTERN.test(
+          scheduleEnd
+        )
+      ) {
+        this.invalidate(
+          "scheduleSnapshot.weeklySchedule",
+          `${scheduleDay.dayName} end time must use HH:mm format.`
+        );
+      }
+    }
+
 
     const dailyDateSet = new Set();
 
