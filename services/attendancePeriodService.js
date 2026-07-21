@@ -115,6 +115,75 @@ const buildScheduledDateTime = (
   );
 };
 
+const calculateScheduledMinutes = ({
+  workDate,
+  startTime,
+  endTime,
+  unpaidBreakMinutes = 0,
+}) => {
+  if (!startTime || !endTime) {
+    return 0;
+  }
+
+  const start =
+    buildScheduledDateTime(
+      workDate,
+      startTime
+    );
+
+  const end =
+    buildScheduledDateTime(
+      workDate,
+      endTime
+    );
+
+  if (
+    !start ||
+    !end ||
+    end <= start
+  ) {
+    return 0;
+  }
+
+  const totalMinutes = Math.floor(
+    (
+      end.getTime() -
+      start.getTime()
+    ) /
+      60000
+  );
+
+  return Math.max(
+    0,
+    totalMinutes -
+      roundMinutes(
+        unpaidBreakMinutes
+      )
+  );
+};
+
+const getMondayWeekKey = (
+  workDate
+) => {
+  const date = new Date(
+    `${workDate}T12:00:00.000Z`
+  );
+
+  const day = date.getUTCDay();
+
+  const daysFromMonday =
+    day === 0 ? 6 : day - 1;
+
+  date.setUTCDate(
+    date.getUTCDate() -
+      daysFromMonday
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+};
+
 const normalizePublicHolidays = (
   publicHolidays = []
 ) => {
@@ -307,13 +376,57 @@ const buildAttendancePeriodPreview =
       );
     }
 
-    const scheduledWorkdays =
+        const weeklySchedule =
       Array.from(
-        new Set(
-          employee.scheduledWorkdays ||
-            []
+        employee.weeklySchedule || []
+      ).map((entry) => ({
+        dayName: entry.dayName,
+        requiredWorkday:
+          entry.requiredWorkday === true,
+        startTime: String(
+          entry.startTime || ""
+        ).trim(),
+        endTime: String(
+          entry.endTime || ""
+        ).trim(),
+        unpaidBreakMinutes:
+          roundMinutes(
+            entry.unpaidBreakMinutes
+          ),
+        restDay:
+          entry.restDay === true,
+        notes: String(
+          entry.notes || ""
+        ).trim(),
+      }));
+
+    const weeklyScheduleMap =
+      new Map(
+        weeklySchedule.map(
+          (entry) => [
+            entry.dayName,
+            entry,
+          ]
         )
       );
+
+    const scheduledWorkdays =
+      weeklySchedule.length > 0
+        ? weeklySchedule
+            .filter(
+              (entry) =>
+                entry.requiredWorkday
+            )
+            .map(
+              (entry) =>
+                entry.dayName
+            )
+        : Array.from(
+            new Set(
+              employee.scheduledWorkdays ||
+                []
+            )
+          );
 
     const normalHoursPerDay =
       Number(
@@ -327,17 +440,37 @@ const buildAttendancePeriodPreview =
           ?.hoursPerWeek || 0
       );
 
+    const overtimeThresholdHoursPerWeek =
+      Number(
+        employee
+          .overtimeThresholdHoursPerWeek ||
+          0
+      );
+
     if (
+      weeklySchedule.length === 0 &&
       scheduledWorkdays.length === 0
     ) {
       throw new Error(
-        "The employee master does not contain scheduled workdays."
+        "The employee master does not contain a controlled weekly schedule."
       );
     }
 
-    if (normalHoursPerDay <= 0) {
+    if (
+      weeklySchedule.length === 0 &&
+      normalHoursPerDay <= 0
+    ) {
       throw new Error(
         "The employee master does not contain valid normal hours per day."
+      );
+    }
+
+    if (
+      overtimeThresholdHoursPerWeek <=
+      0
+    ) {
+      throw new Error(
+        "The employee master does not contain an overtime threshold."
       );
     }
 
@@ -449,7 +582,7 @@ const buildAttendancePeriodPreview =
           leave.endDate >= workDate
       ) || null;
 
-    const scheduledMinutesPerDay =
+        const legacyScheduledMinutesPerDay =
       roundMinutes(
         normalHoursPerDay * 60
       );
@@ -464,13 +597,50 @@ const buildAttendancePeriodPreview =
       const dayName =
         DAY_NAMES[date.getUTCDay()];
 
-      const scheduledWorkday =
-        scheduledWorkdays.includes(
+            const controlledScheduleDay =
+        weeklyScheduleMap.get(
           dayName
-        );
+        ) || null;
+
+      const scheduledWorkday =
+        controlledScheduleDay
+          ? controlledScheduleDay
+              .requiredWorkday
+          : scheduledWorkdays.includes(
+              dayName
+            );
 
       const restDay =
-        !scheduledWorkday;
+        controlledScheduleDay
+          ? controlledScheduleDay
+              .restDay
+          : !scheduledWorkday;
+
+      const scheduledStartTime =
+        controlledScheduleDay
+          ?.startTime ||
+        normalizedStartTime;
+
+      const scheduledEndTime =
+        controlledScheduleDay
+          ?.endTime ||
+        normalizedEndTime;
+
+      const scheduledMinutes =
+        scheduledWorkday
+          ? controlledScheduleDay
+            ? calculateScheduledMinutes({
+                workDate,
+                startTime:
+                  scheduledStartTime,
+                endTime:
+                  scheduledEndTime,
+                unpaidBreakMinutes:
+                  controlledScheduleDay
+                    .unpaidBreakMinutes,
+              })
+            : legacyScheduledMinutesPerDay
+          : 0;
 
       const holiday =
         holidayMap.get(workDate) ||
@@ -555,8 +725,10 @@ const buildAttendancePeriodPreview =
         );
       }
 
-      if (holiday) {
-        if (sourceWorkedMinutes > 0) {
+            if (holiday) {
+        if (
+          sourceWorkedMinutes > 0
+        ) {
           dayStatus = "Present";
           publicHolidayMinutes =
             sourceWorkedMinutes;
@@ -564,25 +736,24 @@ const buildAttendancePeriodPreview =
           dayStatus =
             "Public Holiday";
         }
-      } else if (restDay) {
-        if (sourceWorkedMinutes > 0) {
-          dayStatus = "Present";
-          restDayMinutes =
-            sourceWorkedMinutes;
-        } else {
-          dayStatus = "Rest Day";
-        }
       } else if (leave) {
         dayStatus =
           dayLogs.length > 0
             ? "Incomplete"
             : "Approved Leave";
       } else if (
+        scheduledWorkday &&
         dayLogs.length === 0
       ) {
         dayStatus = "Absent";
         absenceMinutes =
-          scheduledMinutesPerDay;
+          scheduledMinutes;
+      } else if (
+        dayLogs.length === 0
+      ) {
+        dayStatus = restDay
+          ? "Rest Day"
+          : "No Record";
       } else if (
         completedLogs.length !==
           dayLogs.length ||
@@ -592,27 +763,21 @@ const buildAttendancePeriodPreview =
       } else {
         dayStatus = "Present";
 
-        regularMinutes = Math.min(
-          sourceWorkedMinutes,
-          scheduledMinutesPerDay
-        );
-
-        overtimeMinutes = Math.max(
-          0,
-          sourceWorkedMinutes -
-            scheduledMinutesPerDay
-        );
+        if (restDay) {
+          restDayMinutes =
+            sourceWorkedMinutes;
+        }
       }
 
       if (
         scheduledWorkday &&
         firstLog?.clockInTime &&
-        normalizedStartTime
+                scheduledStartTime
       ) {
         const scheduledStart =
           buildScheduledDateTime(
             workDate,
-            normalizedStartTime
+                    scheduledStartTime
           );
 
         const actualClockIn =
@@ -637,7 +802,7 @@ const buildAttendancePeriodPreview =
       } else if (
         scheduledWorkday &&
         firstLog?.clockInTime &&
-        !normalizedStartTime
+                !scheduledStartTime
       ) {
         exceptionNotes.push(
           "Lateness was not assessed because no scheduled start time was supplied."
@@ -658,18 +823,15 @@ const buildAttendancePeriodPreview =
           Boolean(leave),
         leaveRequestNumber:
           leave?.leaveRequestId || "",
-        scheduledStartTime:
+                scheduledStartTime:
           scheduledWorkday
-            ? normalizedStartTime
+            ? scheduledStartTime
             : "",
         scheduledEndTime:
           scheduledWorkday
-            ? normalizedEndTime
+            ? scheduledEndTime
             : "",
-        scheduledMinutes:
-          scheduledWorkday
-            ? scheduledMinutesPerDay
-            : 0,
+        scheduledMinutes,
         attendanceNumber:
           dayLogs
             .map(
@@ -705,6 +867,67 @@ const buildAttendancePeriodPreview =
           exceptionNotes.join(" "),
       });
     }
+
+        /*
+     * Allocate regular and overtime minutes by Monday-based
+     * work week. Weekend/rest-day minutes remain separately
+     * identified while also contributing to the 40-hour
+     * overtime threshold.
+     */
+    const overtimeThresholdMinutes =
+      roundMinutes(
+        overtimeThresholdHoursPerWeek *
+          60
+      );
+
+    const workedMinutesByWeek =
+      new Map();
+
+    for (const entry of dailyEntries) {
+      const weekKey =
+        getMondayWeekKey(
+          entry.workDate
+        );
+
+      const workedBefore =
+        Number(
+          workedMinutesByWeek.get(
+            weekKey
+          ) || 0
+        );
+
+      const payableMinutes =
+        roundMinutes(
+          entry.payableWorkedMinutes
+        );
+
+      const remainingRegularMinutes =
+        Math.max(
+          0,
+          overtimeThresholdMinutes -
+            workedBefore
+        );
+
+      entry.regularMinutes =
+        Math.min(
+          payableMinutes,
+          remainingRegularMinutes
+        );
+
+      entry.overtimeMinutes =
+        Math.max(
+          0,
+          payableMinutes -
+            entry.regularMinutes
+        );
+
+      workedMinutesByWeek.set(
+        weekKey,
+        workedBefore +
+          payableMinutes
+      );
+    }
+
 
     const sourceAttendanceNumbers =
       attendanceLogs
@@ -747,8 +970,10 @@ const buildAttendancePeriodPreview =
           String(periodKey || "").trim(),
         periodStart,
         periodEnd,
-        scheduleSnapshot: {
+                scheduleSnapshot: {
           scheduledWorkdays,
+          weeklySchedule,
+          overtimeThresholdHoursPerWeek,
           normalHoursPerDay,
           normalHoursPerWeek,
           defaultStartTime:
