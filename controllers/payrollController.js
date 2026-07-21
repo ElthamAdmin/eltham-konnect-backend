@@ -1501,41 +1501,131 @@ const previewPayroll = async (req, res) => {
       requestedAdvanceRecovery,
     } = req.body;
 
-    if (Number(grossPay || 0) <= 0 || !payPeriod) {
+        if (
+      !payPeriod ||
+      (
+        !String(employeeId || "").trim() &&
+        Number(grossPay || 0) <= 0
+      )
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Pay period and valid gross pay are required",
+        message:
+          "Pay period is required. Gross pay is also required for manual payroll.",
       });
     }
 
-    const normalizedCompensationType =
-      COMPENSATION_TYPES.includes(compensationType)
-        ? compensationType
-        : "Salary";
-
     const normalizedStatutoryTreatment =
-      STATUTORY_TREATMENTS.includes(statutoryTreatment)
+      STATUTORY_TREATMENTS.includes(
+        statutoryTreatment
+      )
         ? statutoryTreatment
         : "Standard";
 
-    validateStatutorySelection({
-      statutoryTreatment: normalizedStatutoryTreatment,
-      compensationType: normalizedCompensationType,
-      statutoryExemption,
-      user: req.user,
-    });
+    /*
+     * Establish an initial calculation date so the effective
+     * compensation record can be resolved.
+     */
+    const requestedPayFrequency =
+      payFrequency || "Monthly";
 
-        const scheduledPayDate =
-      payFrequency === "Monthly"
-        ? getScheduledMonthlyPayDate(payPeriod)
+    const initialScheduledPayDate =
+      requestedPayFrequency === "Monthly"
+        ? getScheduledMonthlyPayDate(
+            payPeriod
+          )
         : normalizePayrollDate(
             payDate || payPeriod
           );
 
-    const calculationDate =
+    const initialCalculationDate =
+      normalizePayrollDate(
+        initialScheduledPayDate
+      );
+
+    let resolvedCompensation =
+      await resolvePayrollCompensation({
+        employeeId,
+        calculationDate:
+          initialCalculationDate,
+        requestedGrossPay: grossPay,
+        requestedPayFrequency,
+        requestedCompensationType:
+          compensationType,
+      });
+
+    let finalPayFrequency =
+      resolvedCompensation.payFrequency;
+
+    let scheduledPayDate =
+      finalPayFrequency === "Monthly"
+        ? getScheduledMonthlyPayDate(
+            payPeriod
+          )
+        : normalizePayrollDate(
+            payDate || payPeriod
+          );
+
+    let calculationDate =
       normalizePayrollDate(
         scheduledPayDate
       );
+
+    /*
+     * If resolving compensation changed the payroll frequency,
+     * resolve it again using the final payroll calculation date.
+     */
+    if (
+      formatDateForComparison(
+        calculationDate
+      ) !==
+      formatDateForComparison(
+        initialCalculationDate
+      )
+    ) {
+      resolvedCompensation =
+        await resolvePayrollCompensation({
+          employeeId,
+          calculationDate,
+          requestedGrossPay: grossPay,
+          requestedPayFrequency:
+            finalPayFrequency,
+          requestedCompensationType:
+            compensationType,
+        });
+
+      finalPayFrequency =
+        resolvedCompensation.payFrequency;
+
+      scheduledPayDate =
+        finalPayFrequency === "Monthly"
+          ? getScheduledMonthlyPayDate(
+              payPeriod
+            )
+          : normalizePayrollDate(
+              payDate || payPeriod
+            );
+
+      calculationDate =
+        normalizePayrollDate(
+          scheduledPayDate
+        );
+    }
+
+    const resolvedGrossPay =
+      resolvedCompensation.grossPay;
+
+    const normalizedCompensationType =
+      resolvedCompensation.compensationType;
+
+    validateStatutorySelection({
+      statutoryTreatment:
+        normalizedStatutoryTreatment,
+      compensationType:
+        normalizedCompensationType,
+      statutoryExemption,
+      user: req.user,
+    });
 
     const ytdNisContext =
       await getPriorYtdNisContext({
@@ -1554,12 +1644,13 @@ const previewPayroll = async (req, res) => {
     ) {
       const assistedResult =
         await calculateEmployerAssistedPayroll({
-          baseGrossPay: grossPay,
+          baseGrossPay: resolvedGrossPay,
           targetNetPay,
           pensionEmployee: Number(pensionEmployee || 0),
           payPeriod,
           payDate: calculationDate,
-          payFrequency,
+                    payFrequency:
+            finalPayFrequency,
           priorYtdNisInsurablePay:
             ytdNisContext
               .priorYtdNisInsurablePay,
@@ -1570,12 +1661,13 @@ const previewPayroll = async (req, res) => {
       employerSupportAllowance =
         assistedResult.employerSupportAllowance;
     } else {
-      calculation = await calculateJamaicanPayroll({
-        grossPay,
+            calculation = await calculateJamaicanPayroll({
+        grossPay: resolvedGrossPay,
         pensionEmployee,
         payPeriod,
         payDate: calculationDate,
-        payFrequency,
+        payFrequency:
+          finalPayFrequency,
         priorYtdNisInsurablePay:
           ytdNisContext
             .priorYtdNisInsurablePay,
@@ -1646,10 +1738,68 @@ const previewPayroll = async (req, res) => {
             ytdNisContext
               .includedPayrollNumbers,
         },
-        scheduledPayDate,
+                scheduledPayDate,
         payDate: scheduledPayDate,
+        payFrequency:
+          finalPayFrequency,
+
         compensationType:
           normalizedCompensationType,
+
+        compensationSource:
+          resolvedCompensation
+            .compensationSource,
+
+        compensationNumber:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationNumber,
+
+        compensationCategory:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationCategory,
+
+        compensationComponentCode:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationComponentCode,
+
+        compensationComponentName:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationComponentName,
+
+        compensationAmount:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationAmount,
+
+        compensationCurrency:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationCurrency,
+
+        compensationRateUnit:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationRateUnit,
+
+        compensationEffectiveFrom:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationEffectiveFrom,
+
+        compensationEffectiveTo:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationEffectiveTo,
+
+        compensationResolvedAsOf:
+          resolvedCompensation
+            .compensationSnapshot
+            .compensationResolvedAsOf,
+
         statutoryTreatment:
           normalizedStatutoryTreatment,
         applyEmployeeStatutoryDeductions,
