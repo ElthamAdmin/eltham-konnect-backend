@@ -29,6 +29,12 @@ const {
 );
 
 const {
+  previewAttendancePeriod,
+} = require(
+  "../controllers/attendancePeriodController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -142,6 +148,21 @@ router.post(
   protect,
   requirePermission("hr"),
   cancelCompensationDraft
+);
+
+/*
+ * H3 controlled attendance-period preview.
+ * This route must remain before /:employeeId.
+ */
+router.post(
+  "/attendance-periods/preview",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payroll",
+    "payrollManage",
+  ]),
+  previewAttendancePeriod
 );
 
 // HR-management access only.
