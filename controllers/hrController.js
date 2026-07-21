@@ -487,8 +487,10 @@ const createEmployee = async (req, res) => {
       startDate,
       endDate,
       probation = {},
-      normalWorkingHours = {},
+            normalWorkingHours = {},
       scheduledWorkdays = [],
+      weeklySchedule = [],
+      overtimeThresholdHoursPerWeek = 0,
       employmentStatus,
       payType,
       payRate,
@@ -668,7 +670,7 @@ const createEmployee = async (req, res) => {
         ),
       },
 
-      scheduledWorkdays: Array.isArray(
+            scheduledWorkdays: Array.isArray(
         scheduledWorkdays
       )
         ? scheduledWorkdays
@@ -677,6 +679,53 @@ const createEmployee = async (req, res) => {
             )
             .filter(Boolean)
         : [],
+
+      weeklySchedule: Array.isArray(
+        weeklySchedule
+      )
+        ? weeklySchedule.map(
+            (entry) => ({
+              dayName:
+                normalizeString(
+                  entry?.dayName
+                ),
+              requiredWorkday:
+                toBoolean(
+                  entry?.requiredWorkday,
+                  false
+                ),
+              startTime:
+                normalizeString(
+                  entry?.startTime
+                ),
+              endTime:
+                normalizeString(
+                  entry?.endTime
+                ),
+              unpaidBreakMinutes:
+                Number(
+                  entry
+                    ?.unpaidBreakMinutes ||
+                    0
+                ),
+              restDay:
+                toBoolean(
+                  entry?.restDay,
+                  false
+                ),
+              notes:
+                normalizeString(
+                  entry?.notes
+                ),
+            })
+          )
+        : [],
+
+      overtimeThresholdHoursPerWeek:
+        Number(
+          overtimeThresholdHoursPerWeek ||
+            0
+        ),
 
       employmentStatus:
         normalizeString(employmentStatus) ||
@@ -915,8 +964,10 @@ const updateEmployee = async (req, res) => {
       "startDate",
       "endDate",
       "probation",
-      "normalWorkingHours",
+            "normalWorkingHours",
       "scheduledWorkdays",
+      "weeklySchedule",
+      "overtimeThresholdHoursPerWeek",
       "employmentStatus",
       "compensationType",
       "payFrequency",
@@ -1084,6 +1135,90 @@ const updateEmployee = async (req, res) => {
             normalizeString(workday)
           )
           .filter(Boolean);
+    }
+
+        if (
+      updates.weeklySchedule !==
+      undefined
+    ) {
+      if (
+        !Array.isArray(
+          updates.weeklySchedule
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Weekly schedule must be supplied as an array.",
+        });
+      }
+
+      updates.weeklySchedule =
+        updates.weeklySchedule.map(
+          (entry) => ({
+            dayName:
+              normalizeString(
+                entry?.dayName
+              ),
+            requiredWorkday:
+              toBoolean(
+                entry?.requiredWorkday,
+                false
+              ),
+            startTime:
+              normalizeString(
+                entry?.startTime
+              ),
+            endTime:
+              normalizeString(
+                entry?.endTime
+              ),
+            unpaidBreakMinutes:
+              Number(
+                entry
+                  ?.unpaidBreakMinutes ||
+                  0
+              ),
+            restDay:
+              toBoolean(
+                entry?.restDay,
+                false
+              ),
+            notes:
+              normalizeString(
+                entry?.notes
+              ),
+          })
+        );
+    }
+
+    if (
+      updates
+        .overtimeThresholdHoursPerWeek !==
+      undefined
+    ) {
+      const parsedThreshold = Number(
+        updates
+          .overtimeThresholdHoursPerWeek
+      );
+
+      if (
+        !Number.isFinite(
+          parsedThreshold
+        ) ||
+        parsedThreshold < 0 ||
+        parsedThreshold > 168
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Weekly overtime threshold must be between 0 and 168 hours.",
+        });
+      }
+
+      updates
+        .overtimeThresholdHoursPerWeek =
+        parsedThreshold;
     }
 
     if (updates.probation !== undefined) {
