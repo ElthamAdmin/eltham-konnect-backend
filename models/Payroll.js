@@ -40,7 +40,7 @@ const PayrollSchema = new mongoose.Schema(
       default: "Monthly",
     },
 
-    compensationType: {
+        compensationType: {
       type: String,
       enum: [
         "Salary",
@@ -51,6 +51,103 @@ const PayrollSchema = new mongoose.Schema(
       ],
       default: "Salary",
       index: true,
+    },
+
+    /*
+     * H2 controlled compensation snapshot.
+     *
+     * Existing payroll records remain Legacy.
+     * New employee payroll records will preserve the exact
+     * effective-dated compensation record used in calculation.
+     */
+    compensationSource: {
+      type: String,
+      enum: [
+        "Compensation History",
+        "Manual",
+        "Legacy",
+      ],
+      default: "Legacy",
+      index: true,
+    },
+
+    compensationRecordId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "EmployeeCompensation",
+      default: null,
+      index: true,
+    },
+
+    compensationNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    compensationCategory: {
+      type: String,
+      enum: [
+        "Base Pay",
+        "Allowance",
+        "Supplemental Pay",
+        "",
+      ],
+      default: "",
+    },
+
+    compensationComponentCode: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    compensationComponentName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    compensationAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    compensationCurrency: {
+      type: String,
+      default: "JMD",
+      trim: true,
+    },
+
+    compensationRateUnit: {
+      type: String,
+      enum: [
+        "Hourly",
+        "Daily",
+        "Weekly",
+        "Fortnightly",
+        "Semi-Monthly",
+        "Monthly",
+        "Annual",
+        "",
+      ],
+      default: "",
+    },
+
+    compensationEffectiveFrom: {
+      type: Date,
+      default: null,
+    },
+
+    compensationEffectiveTo: {
+      type: Date,
+      default: null,
+    },
+
+    compensationResolvedAsOf: {
+      type: Date,
+      default: null,
     },
 
     statutoryTreatment: {
