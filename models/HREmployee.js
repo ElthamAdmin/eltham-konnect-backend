@@ -126,7 +126,11 @@ const PERFORMANCE_RATINGS = [
   "Unsatisfactory",
 ];
 
-const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const YMD_PATTERN =
+  /^\d{4}-\d{2}-\d{2}$/;
+
+const TIME_PATTERN =
+  /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const normalizeTrn = (value) =>
   String(value || "").replace(/\D/g, "");
@@ -371,7 +375,7 @@ reportsToName: {
       },
     },
 
-    normalWorkingHours: {
+        normalWorkingHours: {
       hoursPerDay: {
         type: Number,
         default: 0,
@@ -387,12 +391,75 @@ reportsToName: {
       },
     },
 
+    /*
+     * Legacy/general workday list retained for compatibility.
+     * H3 uses weeklySchedule when configured.
+     */
     scheduledWorkdays: [
       {
         type: String,
         enum: WORKDAYS,
       },
     ],
+
+    /*
+     * H3 controlled weekly schedule.
+     *
+     * requiredWorkday identifies recurring required attendance.
+     * restDay separately classifies weekend/rest-day work even
+     * when that work is mandatory.
+     */
+    weeklySchedule: [
+      {
+        dayName: {
+          type: String,
+          enum: WORKDAYS,
+          required: true,
+        },
+
+        requiredWorkday: {
+          type: Boolean,
+          default: false,
+        },
+
+        startTime: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        endTime: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        unpaidBreakMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+          max: 720,
+        },
+
+        restDay: {
+          type: Boolean,
+          default: false,
+        },
+
+        notes: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+      },
+    ],
+
+    overtimeThresholdHoursPerWeek: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 168,
+    },
 
     employmentStatus: {
       type: String,
@@ -806,7 +873,7 @@ HREmployeeSchema.pre("validate", function () {
     ...new Set(scheduledWorkdays),
   ];
 
-  if (
+    if (
     uniqueWorkdays.length !==
     scheduledWorkdays.length
   ) {
@@ -814,6 +881,93 @@ HREmployeeSchema.pre("validate", function () {
       "scheduledWorkdays",
       "Scheduled workdays cannot contain duplicate days."
     );
+  }
+
+  const weeklySchedule =
+    Array.from(
+      this.weeklySchedule || []
+    );
+
+  const weeklyScheduleDays =
+    weeklySchedule.map(
+      (entry) => entry.dayName
+    );
+
+  if (
+    new Set(weeklyScheduleDays).size !==
+    weeklyScheduleDays.length
+  ) {
+    this.invalidate(
+      "weeklySchedule",
+      "The controlled weekly schedule cannot contain duplicate days."
+    );
+  }
+
+  for (
+    const scheduleDay of
+    weeklySchedule
+  ) {
+    const startTime = String(
+      scheduleDay.startTime || ""
+    ).trim();
+
+    const endTime = String(
+      scheduleDay.endTime || ""
+    ).trim();
+
+    if (
+      startTime &&
+      !TIME_PATTERN.test(startTime)
+    ) {
+      this.invalidate(
+        "weeklySchedule",
+        `${scheduleDay.dayName} start time must use HH:mm format.`
+      );
+    }
+
+    if (
+      endTime &&
+      !TIME_PATTERN.test(endTime)
+    ) {
+      this.invalidate(
+        "weeklySchedule",
+        `${scheduleDay.dayName} end time must use HH:mm format.`
+      );
+    }
+
+    if (
+      scheduleDay.requiredWorkday &&
+      (!startTime || !endTime)
+    ) {
+      this.invalidate(
+        "weeklySchedule",
+        `${scheduleDay.dayName} requires start and end times.`
+      );
+    }
+
+    if (
+      startTime &&
+      endTime &&
+      endTime <= startTime
+    ) {
+      this.invalidate(
+        "weeklySchedule",
+        `${scheduleDay.dayName} end time must be later than its start time.`
+      );
+    }
+
+    if (
+      scheduleDay.restDay &&
+      scheduleDay.dayName !==
+        "Saturday" &&
+      scheduleDay.dayName !==
+        "Sunday"
+    ) {
+      this.invalidate(
+        "weeklySchedule",
+        `${scheduleDay.dayName} cannot be classified as weekend rest-day work.`
+      );
+    }
   }
 
   const hoursPerDay = Number(
