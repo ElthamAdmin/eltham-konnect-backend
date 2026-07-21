@@ -24,6 +24,27 @@ const DAY_NAMES = [
   "Saturday",
 ];
 
+const getJamaicaTodayYmd = () => {
+  const parts = new Intl.DateTimeFormat(
+    "en-CA",
+    {
+      timeZone: "America/Jamaica",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }
+  ).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map((part) => [
+      part.type,
+      part.value,
+    ])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 const isValidYmdDate = (value) => {
   const text = String(
     value || ""
@@ -519,10 +540,13 @@ const buildAttendancePeriodPreview =
         )
       );
 
-    const dates = getDateRange(
+        const dates = getDateRange(
       periodStart,
       periodEnd
     );
+
+    const previewAsOfDate =
+      getJamaicaTodayYmd();
 
     const holidayMap =
       normalizePublicHolidays(
@@ -662,7 +686,7 @@ const buildAttendancePeriodPreview =
             log.clockOutTime
         );
 
-      const sourceWorkedMinutes =
+            const sourceWorkedMinutes =
         completedLogs.reduce(
           (total, log) =>
             total +
@@ -673,13 +697,55 @@ const buildAttendancePeriodPreview =
         );
 
       const sourceLunchMinutes =
-        dayLogs.reduce(
+        completedLogs.reduce(
           (total, log) =>
             total +
             roundMinutes(
               log.lunchMinutes
             ),
           0
+        );
+
+      const requiredUnpaidBreakMinutes =
+        scheduledWorkday &&
+        controlledScheduleDay
+          ? roundMinutes(
+              controlledScheduleDay
+                .unpaidBreakMinutes
+            )
+          : 0;
+
+      const hasCompleteLunchPunches =
+        completedLogs.some(
+          (log) =>
+            log.lunchOutTime &&
+            log.lunchInTime
+        );
+
+      const missingRequiredLunchPunches =
+        completedLogs.length > 0 &&
+        requiredUnpaidBreakMinutes > 0 &&
+        !hasCompleteLunchPunches;
+
+      /*
+       * AttendanceLog.workedMinutes already excludes a
+       * recorded lunch. When mandatory lunch punches are
+       * missing, deduct the controlled unpaid break here so
+       * the employee is not accidentally paid for it.
+       */
+      const unrecordedBreakDeduction =
+        missingRequiredLunchPunches
+          ? Math.min(
+              requiredUnpaidBreakMinutes,
+              sourceWorkedMinutes
+            )
+          : 0;
+
+      const payableWorkedMinutes =
+        Math.max(
+          0,
+          sourceWorkedMinutes -
+            unrecordedBreakDeduction
         );
 
       const firstLog =
@@ -716,7 +782,7 @@ const buildAttendancePeriodPreview =
         );
       }
 
-      if (
+            if (
         leave &&
         dayLogs.length > 0
       ) {
@@ -725,13 +791,30 @@ const buildAttendancePeriodPreview =
         );
       }
 
-            if (holiday) {
+      if (missingRequiredLunchPunches) {
+        exceptionNotes.push(
+          `Required unpaid break of ${requiredUnpaidBreakMinutes} minutes was deducted because complete lunch punches were not recorded.`
+        );
+      }
+
+      const futureDate =
+        workDate > previewAsOfDate;
+
+      if (futureDate) {
+        dayStatus = "No Record";
+
+        if (scheduledWorkday) {
+          exceptionNotes.push(
+            "Future scheduled date; absence has not been assessed."
+          );
+        }
+      } else if (holiday) {
         if (
           sourceWorkedMinutes > 0
         ) {
           dayStatus = "Present";
-          publicHolidayMinutes =
-            sourceWorkedMinutes;
+                    publicHolidayMinutes =
+            payableWorkedMinutes;
         } else {
           dayStatus =
             "Public Holiday";
@@ -764,8 +847,8 @@ const buildAttendancePeriodPreview =
         dayStatus = "Present";
 
         if (restDay) {
-          restDayMinutes =
-            sourceWorkedMinutes;
+                    restDayMinutes =
+            payableWorkedMinutes;
         }
       }
 
@@ -855,8 +938,7 @@ const buildAttendancePeriodPreview =
           sourceLunchMinutes,
         sourceWorkedMinutes,
         approvedAdjustmentMinutes: 0,
-        payableWorkedMinutes:
-          sourceWorkedMinutes,
+                payableWorkedMinutes,
         regularMinutes,
         lateMinutes,
         absenceMinutes,
