@@ -1,5 +1,6 @@
 const Payroll = require("../models/Payroll");
 const HREmployee = require("../models/HREmployee");
+const EmployeeCompensation = require("../models/EmployeeCompensation");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
 const { writeAuditLog } = require("../utils/auditLogger");
@@ -31,6 +32,217 @@ const COMPENSATION_TYPES = [
   "Allowance",
   "Other",
 ];
+
+/*
+ * H2 controlled compensation resolver.
+ *
+ * Employee payroll must use an Active, effective-dated Base Pay
+ * compensation record. Legacy HREmployee.payRate is not used.
+ *
+ * Payroll without an employeeId remains available for controlled
+ * manual or legacy processing.
+ */
+const resolvePayrollCompensation = async ({
+  employeeId = "",
+  calculationDate,
+  requestedGrossPay = 0,
+  requestedPayFrequency = "Monthly",
+  requestedCompensationType = "Salary",
+}) => {
+  const normalizedEmployeeId = String(
+    employeeId || ""
+  ).trim();
+
+  const resolvedAsOf =
+    formatDateForComparison(calculationDate);
+
+  if (!resolvedAsOf) {
+    throw new Error(
+      "A valid payroll calculation date is required."
+    );
+  }
+
+  /*
+   * Payroll not linked to an HR employee remains manual.
+   * This preserves existing non-employee and legacy workflows.
+   */
+  if (!normalizedEmployeeId) {
+    const manualGrossPay = roundMoney(
+      requestedGrossPay
+    );
+
+    if (manualGrossPay <= 0) {
+      throw new Error(
+        "A valid gross pay amount is required for manual payroll."
+      );
+    }
+
+    return {
+      grossPay: manualGrossPay,
+      payFrequency:
+        requestedPayFrequency || "Monthly",
+      compensationType:
+        COMPENSATION_TYPES.includes(
+          requestedCompensationType
+        )
+          ? requestedCompensationType
+          : "Salary",
+      compensationSource: "Manual",
+      compensationRecord: null,
+      compensationSnapshot: {
+        compensationRecordId: null,
+        compensationNumber: "",
+        compensationCategory: "",
+        compensationComponentCode: "",
+        compensationComponentName: "",
+        compensationAmount: manualGrossPay,
+        compensationCurrency: "JMD",
+        compensationRateUnit: "",
+        compensationEffectiveFrom: null,
+        compensationEffectiveTo: null,
+        compensationResolvedAsOf:
+          new Date(
+            `${resolvedAsOf}T12:00:00.000Z`
+          ),
+      },
+    };
+  }
+
+  const compensationRecord =
+    await EmployeeCompensation.findOne({
+      employeeId: normalizedEmployeeId,
+      status: "Active",
+      compensationCategory: "Base Pay",
+      componentCode: "BASE_PAY",
+      effectiveFrom: {
+        $lte: resolvedAsOf,
+      },
+      $or: [
+        {
+          effectiveTo: "",
+        },
+        {
+          effectiveTo: null,
+        },
+        {
+          effectiveTo: {
+            $exists: false,
+          },
+        },
+        {
+          effectiveTo: {
+            $gte: resolvedAsOf,
+          },
+        },
+      ],
+    }).sort({
+      effectiveFrom: -1,
+      createdAt: -1,
+    });
+
+  if (!compensationRecord) {
+    throw new Error(
+      `No Active Base Pay compensation record is effective for ` +
+        `${normalizedEmployeeId} on ${resolvedAsOf}.`
+    );
+  }
+
+  const controlledGrossPay = roundMoney(
+    compensationRecord.amount
+  );
+
+  if (controlledGrossPay <= 0) {
+    throw new Error(
+      `Compensation ${compensationRecord.compensationNumber} ` +
+        "does not contain a valid payable amount."
+    );
+  }
+
+  const controlledPayFrequency = String(
+    compensationRecord.payFrequency || ""
+  ).trim();
+
+  const controlledRateUnit = String(
+    compensationRecord.rateUnit || ""
+  ).trim();
+
+  if (!controlledPayFrequency) {
+    throw new Error(
+      `Compensation ${compensationRecord.compensationNumber} ` +
+        "does not contain a pay frequency."
+    );
+  }
+
+  /*
+   * H3 attendance will provide conversions for hourly, daily,
+   * weekly and other rate-unit combinations. Until then, H2
+   * permits direct payroll only where the rate unit and payroll
+   * frequency agree.
+   */
+  if (
+    controlledRateUnit &&
+    controlledRateUnit !==
+      controlledPayFrequency
+  ) {
+    throw new Error(
+      `Compensation ${compensationRecord.compensationNumber} uses ` +
+        `${controlledRateUnit} rates with ${controlledPayFrequency} payroll. ` +
+        "Attendance-based conversion must be configured before payroll."
+    );
+  }
+
+  const controlledCompensationType =
+    COMPENSATION_TYPES.includes(
+      compensationRecord.compensationType
+    )
+      ? compensationRecord.compensationType
+      : "Other";
+
+  return {
+    grossPay: controlledGrossPay,
+    payFrequency:
+      controlledPayFrequency,
+    compensationType:
+      controlledCompensationType,
+    compensationSource:
+      "Compensation History",
+    compensationRecord,
+    compensationSnapshot: {
+      compensationRecordId:
+        compensationRecord._id,
+      compensationNumber:
+        compensationRecord.compensationNumber,
+      compensationCategory:
+        compensationRecord.compensationCategory,
+      compensationComponentCode:
+        compensationRecord.componentCode,
+      compensationComponentName:
+        compensationRecord.componentName,
+      compensationAmount:
+        controlledGrossPay,
+      compensationCurrency:
+        compensationRecord.currency || "JMD",
+      compensationRateUnit:
+        controlledRateUnit,
+      compensationEffectiveFrom:
+        compensationRecord.effectiveFrom
+          ? new Date(
+              `${compensationRecord.effectiveFrom}T12:00:00.000Z`
+            )
+          : null,
+      compensationEffectiveTo:
+        compensationRecord.effectiveTo
+          ? new Date(
+              `${compensationRecord.effectiveTo}T12:00:00.000Z`
+            )
+          : null,
+      compensationResolvedAsOf:
+        new Date(
+          `${resolvedAsOf}T12:00:00.000Z`
+        ),
+    },
+  };
+};
 
 const normalizeBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === "") {
