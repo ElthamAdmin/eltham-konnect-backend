@@ -1848,20 +1848,26 @@ const createPayroll = async (req, res) => {
       requestedAdvanceRecovery,
     } = req.body;
 
-    if (
+        if (
       !payPeriod ||
-      Number(grossPay || 0) <= 0 ||
-      !paidFromAccountNumber
+      !paidFromAccountNumber ||
+      (
+        !String(employeeId || "").trim() &&
+        Number(grossPay || 0) <= 0
+      )
     ) {
       return res.status(400).json({
         success: false,
         message:
-          "Pay period, valid gross pay, and payment account are required",
+          "Pay period and payment account are required. " +
+          "Gross pay is also required for manual payroll.",
       });
     }
 
-    const normalizedCompensationType =
-      COMPENSATION_TYPES.includes(compensationType)
+        let normalizedCompensationType =
+      COMPENSATION_TYPES.includes(
+        compensationType
+      )
         ? compensationType
         : "Salary";
 
@@ -1869,15 +1875,6 @@ const createPayroll = async (req, res) => {
       STATUTORY_TREATMENTS.includes(statutoryTreatment)
         ? statutoryTreatment
         : "Standard";
-
-    validateStatutorySelection({
-      statutoryTreatment:
-        normalizedStatutoryTreatment,
-      compensationType:
-        normalizedCompensationType,
-      statutoryExemption,
-      user: req.user,
-    });
 
     let finalEmployeeId = "";
     let finalEmployeeName = String(
@@ -1887,7 +1884,9 @@ const createPayroll = async (req, res) => {
     let finalPayFrequency =
       payFrequency || "Monthly";
 
-    const enteredGrossPay = roundMoney(grossPay);
+        let enteredGrossPay = roundMoney(
+      grossPay
+    );
 
     if (employeeId) {
       const employee = await HREmployee.findOne({
@@ -1982,17 +1981,99 @@ const createPayroll = async (req, res) => {
       });
     }
 
-        const scheduledPayDate =
+            let scheduledPayDate =
       finalPayFrequency === "Monthly"
-        ? getScheduledMonthlyPayDate(payPeriod)
+        ? getScheduledMonthlyPayDate(
+            payPeriod
+          )
         : normalizePayrollDate(
             payDate || payPeriod
           );
 
-    const calculationDate =
+    let calculationDate =
       normalizePayrollDate(
         scheduledPayDate
       );
+
+    /*
+     * Resolve the employee's Active H2 compensation record.
+     * The request gross pay and compensation type cannot
+     * override controlled employee compensation.
+     */
+    let resolvedCompensation =
+      await resolvePayrollCompensation({
+        employeeId: finalEmployeeId,
+        calculationDate,
+        requestedGrossPay:
+          enteredGrossPay,
+        requestedPayFrequency:
+          finalPayFrequency,
+        requestedCompensationType:
+          normalizedCompensationType,
+      });
+
+    const initiallyResolvedDate =
+      formatDateForComparison(
+        calculationDate
+      );
+
+    finalPayFrequency =
+      resolvedCompensation.payFrequency;
+
+    scheduledPayDate =
+      finalPayFrequency === "Monthly"
+        ? getScheduledMonthlyPayDate(
+            payPeriod
+          )
+        : normalizePayrollDate(
+            payDate || payPeriod
+          );
+
+    calculationDate =
+      normalizePayrollDate(
+        scheduledPayDate
+      );
+
+    /*
+     * Resolve again if the controlled pay frequency changed
+     * the final calculation date.
+     */
+    if (
+      formatDateForComparison(
+        calculationDate
+      ) !== initiallyResolvedDate
+    ) {
+      resolvedCompensation =
+        await resolvePayrollCompensation({
+          employeeId:
+            finalEmployeeId,
+          calculationDate,
+          requestedGrossPay:
+            enteredGrossPay,
+          requestedPayFrequency:
+            finalPayFrequency,
+          requestedCompensationType:
+            normalizedCompensationType,
+        });
+
+      finalPayFrequency =
+        resolvedCompensation.payFrequency;
+    }
+
+    enteredGrossPay =
+      resolvedCompensation.grossPay;
+
+    normalizedCompensationType =
+      resolvedCompensation.compensationType;
+
+    validateStatutorySelection({
+      statutoryTreatment:
+        normalizedStatutoryTreatment,
+      compensationType:
+        normalizedCompensationType,
+      statutoryExemption,
+      user: req.user,
+    });
 
     const ytdNisContext =
       await getPriorYtdNisContext({
@@ -2157,8 +2238,67 @@ const createPayroll = async (req, res) => {
       payDate: calculationDate,
       payFrequency: finalPayFrequency,
 
-      compensationType:
+            compensationType:
         normalizedCompensationType,
+
+      compensationSource:
+        resolvedCompensation
+          .compensationSource,
+
+      compensationRecordId:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationRecordId,
+
+      compensationNumber:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationNumber,
+
+      compensationCategory:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationCategory,
+
+      compensationComponentCode:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationComponentCode,
+
+      compensationComponentName:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationComponentName,
+
+      compensationAmount:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationAmount,
+
+      compensationCurrency:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationCurrency,
+
+      compensationRateUnit:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationRateUnit,
+
+      compensationEffectiveFrom:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationEffectiveFrom,
+
+      compensationEffectiveTo:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationEffectiveTo,
+
+      compensationResolvedAsOf:
+        resolvedCompensation
+          .compensationSnapshot
+          .compensationResolvedAsOf,
 
       statutoryTreatment:
         normalizedStatutoryTreatment,
@@ -2276,8 +2416,16 @@ const createPayroll = async (req, res) => {
             employeeName:
               newPayroll.employeeName,
             payPeriod: newPayroll.payPeriod,
-            compensationType:
+                        compensationType:
               newPayroll.compensationType,
+            compensationSource:
+              newPayroll.compensationSource,
+            compensationNumber:
+              newPayroll.compensationNumber,
+            compensationAmount:
+              newPayroll.compensationAmount,
+            compensationEffectiveFrom:
+              newPayroll.compensationEffectiveFrom,
             statutoryTreatment:
               newPayroll.statutoryTreatment,
             applyEmployeeStatutoryDeductions:
