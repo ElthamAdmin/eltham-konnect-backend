@@ -734,9 +734,313 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const requestAttendanceAdjustment =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        ![
+          "Draft",
+          "Reopened",
+        ].includes(
+          attendancePeriod.status
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `Adjustments cannot be requested while ${periodNumber} has status ${attendancePeriod.status}.`,
+        });
+      }
+
+      const workDate =
+        normalizeString(
+          req.body?.workDate
+        );
+
+      const adjustmentType =
+        normalizeString(
+          req.body?.adjustmentType
+        );
+
+      const reason =
+        normalizeString(
+          req.body?.reason
+        );
+
+      const supportingReference =
+        normalizeString(
+          req.body
+            ?.supportingReference
+        );
+
+      const minutesAdjustment =
+        Math.round(
+          Number(
+            req.body
+              ?.minutesAdjustment || 0
+          )
+        );
+
+      const allowedAdjustmentTypes = [
+        "Clock In",
+        "Clock Out",
+        "Lunch",
+        "Worked Time",
+        "Late Arrival",
+        "Absence",
+        "Overtime",
+        "Rest-Day Work",
+        "Public-Holiday Work",
+        "Other",
+      ];
+
+      if (
+        workDate <
+          attendancePeriod.periodStart ||
+        workDate >
+          attendancePeriod.periodEnd
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Adjustment work date must fall within the attendance period.",
+        });
+      }
+
+      const dailyEntry =
+        attendancePeriod.dailyEntries.find(
+          (entry) =>
+            entry.workDate === workDate
+        );
+
+      if (!dailyEntry) {
+        return res.status(400).json({
+          success: false,
+          message:
+            `Attendance date ${workDate} was not found in ${periodNumber}.`,
+        });
+      }
+
+      if (
+        !allowedAdjustmentTypes.includes(
+          adjustmentType
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A valid attendance adjustment type is required.",
+        });
+      }
+
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "An adjustment reason is required.",
+        });
+      }
+
+      if (
+        !Number.isFinite(
+          minutesAdjustment
+        ) ||
+        minutesAdjustment === 0
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Minutes adjustment must be a non-zero whole number.",
+        });
+      }
+
+      if (
+        Math.abs(minutesAdjustment) >
+        1440
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A single attendance adjustment cannot exceed 1,440 minutes.",
+        });
+      }
+
+      const existingPendingAdjustment =
+        attendancePeriod.adjustments.find(
+          (adjustment) =>
+            adjustment.workDate ===
+              workDate &&
+            adjustment.adjustmentType ===
+              adjustmentType &&
+            adjustment.status ===
+              "Pending"
+        );
+
+      if (
+        existingPendingAdjustment
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `A Pending ${adjustmentType} adjustment already exists for ${workDate}.`,
+          data: {
+            adjustmentNumber:
+              existingPendingAdjustment
+                .adjustmentNumber,
+            status:
+              existingPendingAdjustment
+                .status,
+          },
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const adjustmentNumber =
+        `ATTADJ-${Date.now()}-` +
+        `${Math.floor(
+          1000 +
+            Math.random() * 9000
+        )}`;
+
+      attendancePeriod.adjustments.push({
+        adjustmentNumber,
+        workDate,
+        adjustmentType,
+        minutesAdjustment,
+        reason,
+        supportingReference,
+        status: "Pending",
+        requestedBy: userName,
+        requestedAt: new Date(),
+        reviewedBy: "",
+        reviewedAt: null,
+        reviewNotes: "",
+      });
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus:
+          attendancePeriod.status,
+        toStatus:
+          attendancePeriod.status,
+        action:
+          "Attendance adjustment requested",
+        notes:
+          `${adjustmentNumber} requested for ${workDate}: ${adjustmentType}.`,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "REQUEST_ATTENDANCE_ADJUSTMENT",
+        module: "HR",
+        description:
+          `Attendance adjustment ${adjustmentNumber} requested for ${periodNumber}`,
+        targetType:
+          "AttendancePeriod",
+        targetId:
+          periodNumber,
+        metadata: {
+          adjustmentNumber,
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          workDate,
+          adjustmentType,
+          minutesAdjustment,
+          supportingReferenceProvided:
+            Boolean(
+              supportingReference
+            ),
+          status: "Pending",
+        },
+      });
+
+      const savedAdjustment =
+        attendancePeriod.adjustments.find(
+          (adjustment) =>
+            adjustment
+              .adjustmentNumber ===
+            adjustmentNumber
+        );
+
+      return res.status(201).json({
+        success: true,
+        message:
+          "Attendance adjustment request created successfully. No attendance totals were changed.",
+        data: {
+          periodNumber:
+            attendancePeriod.periodNumber,
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          periodStatus:
+            attendancePeriod.status,
+          adjustment:
+            savedAdjustment,
+          totals:
+            attendancePeriod.totals,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "Attendance adjustment request error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance adjustment validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not create attendance adjustment request.",
+      });
+    }
+  };
+
 module.exports = {
   getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
   refreshAttendancePeriodDraft,
+  requestAttendanceAdjustment,
 };
