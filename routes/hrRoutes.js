@@ -35,6 +35,7 @@ const {
   refreshAttendancePeriodDraft,
   requestAttendanceAdjustment,
   submitAttendancePeriod,
+  approveAttendancePeriodByManager,
 } = require(
   "../controllers/attendancePeriodController"
 );
@@ -207,6 +208,13 @@ router.post(
   protect,
   requirePermission("hr"),
   submitAttendancePeriod
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/manager-approve",
+  protect,
+  requirePermission("hr"),
+  approveAttendancePeriodByManager
 );
 
 // HR-management access only.

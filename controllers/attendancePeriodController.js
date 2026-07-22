@@ -1284,6 +1284,210 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const approveAttendancePeriodByManager =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        attendancePeriod.status !==
+        "Submitted"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${periodNumber} must have Submitted status before manager approval.`,
+          data: {
+            periodNumber,
+            currentStatus:
+              attendancePeriod.status,
+            requiredStatus:
+              "Submitted",
+          },
+        });
+      }
+
+      const approvalNotes =
+        normalizeString(
+          req.body?.approvalNotes
+        );
+
+      if (!approvalNotes) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Manager approval notes are required.",
+        });
+      }
+
+      const pendingAdjustments =
+        attendancePeriod.adjustments
+          .filter(
+            (adjustment) =>
+              adjustment.status ===
+              "Pending"
+          )
+          .map(
+            (adjustment) =>
+              adjustment
+                .adjustmentNumber
+          );
+
+      if (
+        pendingAdjustments.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Pending attendance adjustments must be resolved before manager approval.",
+          pendingAdjustments,
+        });
+      }
+
+      const incompleteDates =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.dayStatus ===
+              "Incomplete"
+          )
+          .map(
+            (entry) =>
+              entry.workDate
+          );
+
+      if (
+        incompleteDates.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Incomplete attendance dates must be resolved before manager approval.",
+          invalidDates:
+            incompleteDates,
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const previousStatus =
+        attendancePeriod.status;
+
+      attendancePeriod.status =
+        "Manager Approved";
+
+      attendancePeriod.managerApprovedBy =
+        userName;
+
+      attendancePeriod.managerApprovedAt =
+        new Date();
+
+      attendancePeriod.managerApprovalNotes =
+        approvalNotes;
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus:
+          "Manager Approved",
+        action:
+          "Attendance period manager approval",
+        notes: approvalNotes,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "MANAGER_APPROVE_ATTENDANCE_PERIOD",
+        module: "HR",
+        description:
+          `Attendance period ${periodNumber} approved by manager`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: {
+          status: previousStatus,
+        },
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          managerApprovedBy:
+            userName,
+          exceptionDayCount:
+            attendancePeriod.dailyEntries
+              .filter(
+                (entry) =>
+                  Boolean(
+                    normalizeString(
+                      entry.exceptionNotes
+                    )
+                  )
+              ).length,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${periodNumber} manager-approved successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period manager approval error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance period manager approval validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not approve attendance period.",
+      });
+    }
+  };
+
 module.exports = {
   getAttendancePeriods,
   previewAttendancePeriod,
@@ -1291,4 +1495,5 @@ module.exports = {
   refreshAttendancePeriodDraft,
   requestAttendanceAdjustment,
   submitAttendancePeriod,
+  approveAttendancePeriodByManager,
 };
