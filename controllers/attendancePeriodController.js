@@ -24,6 +24,27 @@ const getUserName = (user) =>
 const normalizeString = (value) =>
   String(value || "").trim();
 
+const getJamaicaTodayYmd = () => {
+  const parts = new Intl.DateTimeFormat(
+    "en-CA",
+    {
+      timeZone: "America/Jamaica",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }
+  ).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map((part) => [
+      part.type,
+      part.value,
+    ])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 const validatePeriodRequest = ({
   periodKey,
   periodStart,
@@ -1037,10 +1058,237 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const submitAttendancePeriod =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        ![
+          "Draft",
+          "Reopened",
+        ].includes(
+          attendancePeriod.status
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${periodNumber} cannot be submitted while its status is ${attendancePeriod.status}.`,
+        });
+      }
+
+      const today =
+        getJamaicaTodayYmd();
+
+      if (
+        attendancePeriod.periodEnd >
+        today
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "An attendance period cannot be submitted before its period end date.",
+          data: {
+            periodNumber,
+            periodEnd:
+              attendancePeriod.periodEnd,
+            currentDate: today,
+            currentStatus:
+              attendancePeriod.status,
+          },
+        });
+      }
+
+      const futureOrUnassessedDates =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.scheduledWorkday ===
+                true &&
+              entry.dayStatus ===
+                "No Record"
+          )
+          .map(
+            (entry) =>
+              entry.workDate
+          );
+
+      if (
+        futureOrUnassessedDates.length >
+        0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "All scheduled dates must be assessed before the attendance period can be submitted.",
+          invalidDates:
+            futureOrUnassessedDates,
+        });
+      }
+
+      const incompleteDates =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.dayStatus ===
+              "Incomplete"
+          )
+          .map(
+            (entry) =>
+              entry.workDate
+          );
+
+      if (
+        incompleteDates.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Incomplete attendance dates must be resolved before submission.",
+          invalidDates:
+            incompleteDates,
+        });
+      }
+
+      const pendingAdjustments =
+        attendancePeriod.adjustments
+          .filter(
+            (adjustment) =>
+              adjustment.status ===
+              "Pending"
+          )
+          .map(
+            (adjustment) =>
+              adjustment
+                .adjustmentNumber
+          );
+
+      if (
+        pendingAdjustments.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Pending attendance adjustments must be reviewed before submission.",
+          pendingAdjustments,
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const previousStatus =
+        attendancePeriod.status;
+
+      attendancePeriod.status =
+        "Submitted";
+
+      attendancePeriod.submittedBy =
+        userName;
+
+      attendancePeriod.submittedAt =
+        new Date();
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus: "Submitted",
+        action:
+          "Attendance period submitted",
+        notes:
+          normalizeString(
+            req.body?.notes
+          ) ||
+          "Attendance period submitted for manager review.",
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "SUBMIT_ATTENDANCE_PERIOD",
+        module: "HR",
+        description:
+          `Attendance period ${periodNumber} submitted for manager review`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: {
+          status: previousStatus,
+        },
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          submittedBy: userName,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${periodNumber} submitted successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period submission error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance period submission validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not submit attendance period.",
+      });
+    }
+  };
+
 module.exports = {
   getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
   refreshAttendancePeriodDraft,
   requestAttendanceAdjustment,
+  submitAttendancePeriod,
 };
