@@ -509,8 +509,234 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const refreshAttendancePeriodDraft =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        ![
+          "Draft",
+          "Reopened",
+        ].includes(
+          attendancePeriod.status
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `Attendance period ${periodNumber} cannot be refreshed while its status is ${attendancePeriod.status}.`,
+        });
+      }
+
+      if (
+        Array.isArray(
+          attendancePeriod.adjustments
+        ) &&
+        attendancePeriod.adjustments
+          .length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "This attendance period contains controlled adjustments and cannot be automatically refreshed.",
+        });
+      }
+
+      const beforeSnapshot =
+        buildSafeAttendanceAuditSnapshot(
+          attendancePeriod
+        );
+
+      const requestContainsHolidays =
+        Object.prototype.hasOwnProperty.call(
+          req.body || {},
+          "publicHolidays"
+        );
+
+      const preservedPublicHolidays =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.publicHoliday ===
+              true
+          )
+          .map((entry) => ({
+            date: entry.workDate,
+            name:
+              entry.publicHolidayName,
+          }));
+
+      const publicHolidays =
+        requestContainsHolidays
+          ? req.body.publicHolidays
+          : preservedPublicHolidays;
+
+      const {
+        periodDraft,
+      } =
+        await generateAttendancePreview({
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          periodStart:
+            attendancePeriod.periodStart,
+          periodEnd:
+            attendancePeriod.periodEnd,
+          defaultStartTime:
+            attendancePeriod
+              .scheduleSnapshot
+              ?.defaultStartTime || "",
+          defaultEndTime:
+            attendancePeriod
+              .scheduleSnapshot
+              ?.defaultEndTime || "",
+          lateGraceMinutes:
+            attendancePeriod
+              .scheduleSnapshot
+              ?.lateGraceMinutes || 0,
+          publicHolidays,
+        });
+
+      const userName =
+        getUserName(req.user);
+
+      /*
+       * Preserve the existing period identity and workflow.
+       * Only the server-generated employee, schedule,
+       * attendance and totals snapshots are refreshed.
+       */
+      attendancePeriod.employeeSnapshot =
+        periodDraft.employeeSnapshot;
+
+      attendancePeriod.scheduleSnapshot =
+        periodDraft.scheduleSnapshot;
+
+      attendancePeriod.dailyEntries =
+        periodDraft.dailyEntries;
+
+      attendancePeriod.totals =
+        periodDraft.totals;
+
+      attendancePeriod.sourceAttendanceNumbers =
+        periodDraft.sourceAttendanceNumbers;
+
+      attendancePeriod.generatedBy =
+        userName;
+
+      attendancePeriod.generatedAt =
+        new Date();
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      if (
+        req.body?.notes !== undefined
+      ) {
+        attendancePeriod.notes =
+          normalizeString(
+            req.body.notes
+          );
+      }
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus:
+          attendancePeriod.status,
+        toStatus:
+          attendancePeriod.status,
+        action:
+          "Attendance period refreshed",
+        notes:
+          normalizeString(
+            req.body?.refreshNotes
+          ) ||
+          "Draft refreshed from the current employee schedule, raw attendance logs and approved leave records.",
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "REFRESH_ATTENDANCE_PERIOD_DRAFT",
+        module: "HR",
+        description:
+          `Attendance period ${attendancePeriod.periodNumber} refreshed`,
+        targetType:
+          "AttendancePeriod",
+        targetId:
+          attendancePeriod.periodNumber,
+        beforeValues:
+          beforeSnapshot,
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          source:
+            "Controlled Attendance Period",
+          calculationMode:
+            "System Regenerated",
+          publicHolidayCount:
+            publicHolidays.length,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${attendancePeriod.periodNumber} refreshed successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period refresh error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Refreshed attendance period validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not refresh attendance period.",
+      });
+    }
+  };
+
 module.exports = {
   getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
+  refreshAttendancePeriodDraft,
 };

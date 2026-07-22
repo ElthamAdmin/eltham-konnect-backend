@@ -32,6 +32,7 @@ const {
   getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
+  refreshAttendancePeriodDraft,
 } = require(
   "../controllers/attendancePeriodController"
 );
@@ -183,6 +184,13 @@ router.post(
   protect,
   requirePermission("hr"),
   createAttendancePeriodDraft
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/refresh",
+  protect,
+  requirePermission("hr"),
+  refreshAttendancePeriodDraft
 );
 
 // HR-management access only.
