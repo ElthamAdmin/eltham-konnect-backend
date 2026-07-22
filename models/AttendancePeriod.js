@@ -768,7 +768,7 @@ AttendancePeriodSchema.index({
 
 AttendancePeriodSchema.pre(
   "validate",
-  function validateAttendancePeriod(next) {
+  function validateAttendancePeriod() {
     if (
       !isValidYmdDate(this.periodStart) ||
       !isValidYmdDate(this.periodEnd)
@@ -952,8 +952,7 @@ AttendancePeriodSchema.pre(
       );
     }
 
-    next();
-  }
+      }
 );
 
 module.exports = mongoose.model(
