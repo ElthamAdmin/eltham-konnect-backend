@@ -1488,6 +1488,274 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const markAttendancePeriodPayrollReady =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        attendancePeriod.status !==
+        "Manager Approved"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${periodNumber} must have Manager Approved status before it can become Payroll Ready.`,
+          data: {
+            periodNumber,
+            currentStatus:
+              attendancePeriod.status,
+            requiredStatus:
+              "Manager Approved",
+          },
+        });
+      }
+
+      if (
+        !attendancePeriod
+          .managerApprovedAt
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Manager approval evidence is missing from this attendance period.",
+        });
+      }
+
+      const today =
+        getJamaicaTodayYmd();
+
+      if (
+        attendancePeriod.periodEnd >
+        today
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "An attendance period cannot become Payroll Ready before its period end date.",
+          data: {
+            periodEnd:
+              attendancePeriod.periodEnd,
+            currentDate: today,
+          },
+        });
+      }
+
+      const unassessedDates =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.scheduledWorkday ===
+                true &&
+              [
+                "No Record",
+                "Incomplete",
+              ].includes(
+                entry.dayStatus
+              )
+          )
+          .map(
+            (entry) =>
+              entry.workDate
+          );
+
+      if (
+        unassessedDates.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "All scheduled dates must be assessed before the attendance period can become Payroll Ready.",
+          invalidDates:
+            unassessedDates,
+        });
+      }
+
+      const pendingAdjustments =
+        attendancePeriod.adjustments
+          .filter(
+            (adjustment) =>
+              adjustment.status ===
+              "Pending"
+          )
+          .map(
+            (adjustment) =>
+              adjustment
+                .adjustmentNumber
+          );
+
+      if (
+        pendingAdjustments.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Pending attendance adjustments must be resolved before the period can become Payroll Ready.",
+          pendingAdjustments,
+        });
+      }
+
+      if (
+        attendancePeriod
+          .employeeSnapshot
+          ?.payrollEnabled !== true
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Payroll is not enabled for this employee.",
+        });
+      }
+
+      if (
+        attendancePeriod
+          .employeeSnapshot
+          ?.payrollEligibilityStatus !==
+        "Eligible"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "The employee must have Eligible payroll status before attendance can become Payroll Ready.",
+          data: {
+            employeeId:
+              attendancePeriod.employeeId,
+            payrollEligibilityStatus:
+              attendancePeriod
+                .employeeSnapshot
+                ?.payrollEligibilityStatus ||
+              "",
+            requiredStatus:
+              "Eligible",
+          },
+        });
+      }
+
+      const readinessNotes =
+        normalizeString(
+          req.body?.readinessNotes
+        );
+
+      if (!readinessNotes) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Payroll-readiness notes are required.",
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const previousStatus =
+        attendancePeriod.status;
+
+      attendancePeriod.status =
+        "Payroll Ready";
+
+      attendancePeriod.payrollReadyBy =
+        userName;
+
+      attendancePeriod.payrollReadyAt =
+        new Date();
+
+      attendancePeriod.payrollReadinessNotes =
+        readinessNotes;
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus: "Payroll Ready",
+        action:
+          "Attendance period marked Payroll Ready",
+        notes: readinessNotes,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "MARK_ATTENDANCE_PERIOD_PAYROLL_READY",
+        module: "HR",
+        description:
+          `Attendance period ${periodNumber} marked Payroll Ready`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: {
+          status: previousStatus,
+        },
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          payrollReadyBy: userName,
+          payrollEligibilityStatus:
+            attendancePeriod
+              .employeeSnapshot
+              ?.payrollEligibilityStatus,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${periodNumber} marked Payroll Ready successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period Payroll Ready error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance period Payroll Ready validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not mark attendance period Payroll Ready.",
+      });
+    }
+  };
+
 module.exports = {
   getAttendancePeriods,
   previewAttendancePeriod,
@@ -1496,4 +1764,5 @@ module.exports = {
   requestAttendanceAdjustment,
   submitAttendancePeriod,
   approveAttendancePeriodByManager,
+  markAttendancePeriodPayrollReady,
 };

@@ -36,6 +36,7 @@ const {
   requestAttendanceAdjustment,
   submitAttendancePeriod,
   approveAttendancePeriodByManager,
+  markAttendancePeriodPayrollReady,
 } = require(
   "../controllers/attendancePeriodController"
 );
@@ -215,6 +216,16 @@ router.post(
   protect,
   requirePermission("hr"),
   approveAttendancePeriodByManager
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/payroll-ready",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payrollManage",
+  ]),
+  markAttendancePeriodPayrollReady
 );
 
 // HR-management access only.
