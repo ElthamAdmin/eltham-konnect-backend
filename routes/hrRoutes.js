@@ -29,6 +29,7 @@ const {
 );
 
 const {
+  getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
 } = require(
@@ -155,6 +156,17 @@ router.post(
  * H3 controlled attendance periods.
  * These routes must remain before /:employeeId.
  */
+router.get(
+  "/attendance-periods",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payroll",
+    "payrollManage",
+  ]),
+  getAttendancePeriods
+);
+
 router.post(
   "/attendance-periods/preview",
   protect,

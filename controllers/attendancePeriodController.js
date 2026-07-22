@@ -357,7 +357,160 @@ const createAttendancePeriodDraft =
     }
   };
 
+  const getAttendancePeriods =
+  async (req, res) => {
+    try {
+      const employeeId =
+        normalizeString(
+          req.query.employeeId
+        );
+
+      const periodKey =
+        normalizeString(
+          req.query.periodKey
+        );
+
+      const status =
+        normalizeString(
+          req.query.status
+        );
+
+      const periodNumber =
+        normalizeString(
+          req.query.periodNumber
+        );
+
+      const filter = {};
+
+      if (employeeId) {
+        filter.employeeId =
+          employeeId;
+      }
+
+      if (periodKey) {
+        if (
+          !PERIOD_KEY_PATTERN.test(
+            periodKey
+          )
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Attendance period key must use YYYY-MM format.",
+          });
+        }
+
+        filter.periodKey = periodKey;
+      }
+
+      if (status) {
+        filter.status = status;
+      }
+
+      if (periodNumber) {
+        filter.periodNumber =
+          periodNumber;
+      }
+
+      const attendancePeriods =
+        await AttendancePeriod.find(
+          filter
+        ).sort({
+          periodStart: -1,
+          employeeId: 1,
+          createdAt: -1,
+        });
+
+      const summary = {
+        totalRecords:
+          attendancePeriods.length,
+        draftRecords: 0,
+        submittedRecords: 0,
+        managerApprovedRecords: 0,
+        payrollReadyRecords: 0,
+        lockedRecords: 0,
+        exceptionRecords: 0,
+      };
+
+      for (
+        const period of
+        attendancePeriods
+      ) {
+        if (period.status === "Draft") {
+          summary.draftRecords += 1;
+        }
+
+        if (
+          period.status ===
+          "Submitted"
+        ) {
+          summary.submittedRecords += 1;
+        }
+
+        if (
+          period.status ===
+          "Manager Approved"
+        ) {
+          summary.managerApprovedRecords +=
+            1;
+        }
+
+        if (
+          period.status ===
+          "Payroll Ready"
+        ) {
+          summary.payrollReadyRecords +=
+            1;
+        }
+
+        if (period.status === "Locked") {
+          summary.lockedRecords += 1;
+        }
+
+        const hasExceptions =
+          period.dailyEntries.some(
+            (entry) =>
+              entry.dayStatus ===
+                "Incomplete" ||
+              Boolean(
+                String(
+                  entry.exceptionNotes ||
+                    ""
+                ).trim()
+              )
+          );
+
+        if (hasExceptions) {
+          summary.exceptionRecords += 1;
+        }
+      }
+
+      return res.json({
+        success: true,
+        message:
+          "Attendance periods retrieved successfully.",
+        totalRecords:
+          attendancePeriods.length,
+        summary,
+        data: attendancePeriods,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period retrieval error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Could not retrieve attendance periods.",
+        error: error.message,
+      });
+    }
+  };
+
 module.exports = {
+  getAttendancePeriods,
   previewAttendancePeriod,
   createAttendancePeriodDraft,
 };
