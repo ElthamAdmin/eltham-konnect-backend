@@ -132,6 +132,284 @@ const buildSafeAttendanceAuditSnapshot = (
       : 0,
 });
 
+const getAttendanceWeekKey = (
+  workDate
+) => {
+  const date = new Date(
+    `${workDate}T12:00:00.000Z`
+  );
+
+  const daysFromMonday =
+    (date.getUTCDay() + 6) % 7;
+
+  date.setUTCDate(
+    date.getUTCDate() -
+      daysFromMonday
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+};
+
+const recalculateAttendancePeriodTotals = (
+  attendancePeriod
+) => {
+  const approvedByDate = new Map();
+
+  for (
+    const adjustment of
+      attendancePeriod.adjustments || []
+  ) {
+    if (
+      adjustment.status !==
+      "Approved"
+    ) {
+      continue;
+    }
+
+    const workDate =
+      normalizeString(
+        adjustment.workDate
+      );
+
+    approvedByDate.set(
+      workDate,
+      Number(
+        approvedByDate.get(
+          workDate
+        ) || 0
+      ) +
+        Number(
+          adjustment.minutesAdjustment ||
+            0
+        )
+    );
+  }
+
+  const entries = [
+    ...(attendancePeriod.dailyEntries || []),
+  ].sort((left, right) =>
+    String(left.workDate).localeCompare(
+      String(right.workDate)
+    )
+  );
+
+  const weeklyPayableMinutes =
+    new Map();
+
+  const overtimeThresholdMinutes =
+    Math.max(
+      0,
+      Number(
+        attendancePeriod
+          .scheduleSnapshot
+          ?.overtimeThresholdHoursPerWeek ||
+          40
+      ) * 60
+    );
+
+  for (const entry of entries) {
+    const previousApprovedMinutes =
+      Number(
+        entry.approvedAdjustmentMinutes ||
+          0
+      );
+
+    const sourcePayableMinutes =
+      Math.max(
+        0,
+        Number(
+          entry.payableWorkedMinutes ||
+            0
+        ) - previousApprovedMinutes
+      );
+
+    const approvedMinutes =
+      Number(
+        approvedByDate.get(
+          entry.workDate
+        ) || 0
+      );
+
+    const payableWorkedMinutes =
+      Math.max(
+        0,
+        sourcePayableMinutes +
+          approvedMinutes
+      );
+
+    entry.approvedAdjustmentMinutes =
+      approvedMinutes;
+
+    entry.payableWorkedMinutes =
+      payableWorkedMinutes;
+
+    if (
+      payableWorkedMinutes > 0 &&
+      [
+        "Absent",
+        "Incomplete",
+        "No Record",
+      ].includes(entry.dayStatus)
+    ) {
+      entry.dayStatus = "Present";
+    }
+
+    if (
+      entry.scheduledWorkday === true &&
+      entry.approvedLeave !== true &&
+      entry.publicHoliday !== true
+    ) {
+      entry.absenceMinutes =
+        Math.max(
+          0,
+          Number(
+            entry.scheduledMinutes || 0
+          ) - payableWorkedMinutes
+        );
+
+      if (
+        payableWorkedMinutes === 0 &&
+        entry.workDate <=
+          getJamaicaTodayYmd()
+      ) {
+        entry.dayStatus = "Absent";
+      }
+    } else {
+      entry.absenceMinutes = 0;
+    }
+
+    const weekKey =
+      getAttendanceWeekKey(
+        entry.workDate
+      );
+
+    const priorWeekMinutes =
+      Number(
+        weeklyPayableMinutes.get(
+          weekKey
+        ) || 0
+      );
+
+    const updatedWeekMinutes =
+      priorWeekMinutes +
+      payableWorkedMinutes;
+
+    const overtimeBefore =
+      Math.max(
+        0,
+        priorWeekMinutes -
+          overtimeThresholdMinutes
+      );
+
+    const overtimeAfter =
+      Math.max(
+        0,
+        updatedWeekMinutes -
+          overtimeThresholdMinutes
+      );
+
+    entry.overtimeMinutes =
+      Math.max(
+        0,
+        overtimeAfter -
+          overtimeBefore
+      );
+
+    entry.regularMinutes =
+      Math.max(
+        0,
+        payableWorkedMinutes -
+          entry.overtimeMinutes
+      );
+
+    entry.restDayMinutes =
+      entry.restDay === true
+        ? payableWorkedMinutes
+        : 0;
+
+    entry.publicHolidayMinutes =
+      entry.publicHoliday === true
+        ? payableWorkedMinutes
+        : 0;
+
+    weeklyPayableMinutes.set(
+      weekKey,
+      updatedWeekMinutes
+    );
+  }
+
+  const sum = (fieldName) =>
+    entries.reduce(
+      (total, entry) =>
+        total +
+        Number(entry[fieldName] || 0),
+      0
+    );
+
+  attendancePeriod.totals = {
+    scheduledMinutes:
+      sum("scheduledMinutes"),
+    sourceWorkedMinutes:
+      sum("sourceWorkedMinutes"),
+    approvedAdjustmentMinutes:
+      sum(
+        "approvedAdjustmentMinutes"
+      ),
+    payableWorkedMinutes:
+      sum("payableWorkedMinutes"),
+    regularMinutes:
+      sum("regularMinutes"),
+    lateMinutes:
+      sum("lateMinutes"),
+    absenceMinutes:
+      sum("absenceMinutes"),
+    overtimeMinutes:
+      sum("overtimeMinutes"),
+    restDayMinutes:
+      sum("restDayMinutes"),
+    publicHolidayMinutes:
+      sum("publicHolidayMinutes"),
+    scheduledDayCount:
+      entries.filter(
+        (entry) =>
+          entry.scheduledWorkday ===
+          true
+      ).length,
+    presentDayCount:
+      entries.filter(
+        (entry) =>
+          entry.dayStatus === "Present"
+      ).length,
+    absentDayCount:
+      entries.filter(
+        (entry) =>
+          entry.dayStatus === "Absent"
+      ).length,
+    leaveDayCount:
+      entries.filter(
+        (entry) =>
+          entry.dayStatus ===
+          "Approved Leave"
+      ).length,
+    incompleteDayCount:
+      entries.filter(
+        (entry) =>
+          entry.dayStatus ===
+          "Incomplete"
+      ).length,
+  };
+
+  attendancePeriod.markModified(
+    "dailyEntries"
+  );
+
+  attendancePeriod.markModified(
+    "totals"
+  );
+};
+
 const generateAttendancePreview =
   async (body = {}) => {
     const {
@@ -1058,6 +1336,524 @@ const createAttendancePeriodDraft =
     }
   };
 
+const reviewAttendanceAdjustment =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const adjustmentNumber =
+        normalizeString(
+          req.params.adjustmentNumber
+        );
+
+      const action =
+        normalizeString(
+          req.body?.action
+        );
+
+      const reviewNotes =
+        normalizeString(
+          req.body?.reviewNotes
+        );
+
+      if (
+        !["Approve", "Reject"].includes(
+          action
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Adjustment review action must be Approve or Reject.",
+        });
+      }
+
+      if (!reviewNotes) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Adjustment review notes are required.",
+        });
+      }
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        !["Draft", "Reopened"].includes(
+          attendancePeriod.status
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `Adjustments cannot be reviewed while ${periodNumber} has status ${attendancePeriod.status}.`,
+        });
+      }
+
+      const adjustment =
+        attendancePeriod.adjustments.find(
+          (item) =>
+            item.adjustmentNumber ===
+            adjustmentNumber
+        );
+
+      if (!adjustment) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance adjustment was not found.",
+        });
+      }
+
+      if (
+        adjustment.status !== "Pending"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${adjustmentNumber} has already been ${adjustment.status}.`,
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const beforeSnapshot =
+        buildSafeAttendanceAuditSnapshot(
+          attendancePeriod
+        );
+
+      adjustment.status =
+        action === "Approve"
+          ? "Approved"
+          : "Rejected";
+
+      adjustment.reviewedBy =
+        userName;
+
+      adjustment.reviewedAt =
+        new Date();
+
+      adjustment.reviewNotes =
+        reviewNotes;
+
+      if (action === "Approve") {
+        recalculateAttendancePeriodTotals(
+          attendancePeriod
+        );
+      }
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus:
+          attendancePeriod.status,
+        toStatus:
+          attendancePeriod.status,
+        action:
+          `Attendance adjustment ${adjustment.status.toLowerCase()}`,
+        notes:
+          `${adjustmentNumber}: ${reviewNotes}`,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          action === "Approve"
+            ? "APPROVE_ATTENDANCE_ADJUSTMENT"
+            : "REJECT_ATTENDANCE_ADJUSTMENT",
+        module: "HR",
+        description:
+          `Attendance adjustment ${adjustmentNumber} ${adjustment.status.toLowerCase()} for ${periodNumber}`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: beforeSnapshot,
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          adjustmentNumber,
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          workDate:
+            adjustment.workDate,
+          adjustmentType:
+            adjustment.adjustmentType,
+          minutesAdjustment:
+            adjustment.minutesAdjustment,
+          decision:
+            adjustment.status,
+          reviewedBy: userName,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${adjustmentNumber} ${adjustment.status.toLowerCase()} successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance adjustment review error:",
+        error
+      );
+
+      if (
+        error?.name ===
+        "ValidationError"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance adjustment review validation failed.",
+          error: error.message,
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not review attendance adjustment.",
+      });
+    }
+  };
+
+const reopenAttendancePeriod =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const reason =
+        normalizeString(
+          req.body?.reason
+        );
+
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A reopening reason is required.",
+        });
+      }
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        ![
+          "Submitted",
+          "Manager Approved",
+          "Payroll Ready",
+        ].includes(
+          attendancePeriod.status
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${periodNumber} cannot be reopened while its status is ${attendancePeriod.status}.`,
+        });
+      }
+
+      if (
+        normalizeString(
+          attendancePeriod.payrollNumber
+        )
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "An attendance period linked to payroll cannot be reopened. Reverse or cancel the related payroll first.",
+          data: {
+            payrollNumber:
+              attendancePeriod.payrollNumber,
+          },
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const previousStatus =
+        attendancePeriod.status;
+
+      attendancePeriod.status =
+        "Reopened";
+
+      attendancePeriod.submittedBy = "";
+      attendancePeriod.submittedAt = null;
+      attendancePeriod.managerApprovedBy = "";
+      attendancePeriod.managerApprovedAt = null;
+      attendancePeriod.managerApprovalNotes = "";
+      attendancePeriod.payrollReadyBy = "";
+      attendancePeriod.payrollReadyAt = null;
+      attendancePeriod.payrollReadinessNotes = "";
+      attendancePeriod.updatedBy = userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus: "Reopened",
+        action:
+          "Attendance period reopened",
+        notes: reason,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "REOPEN_ATTENDANCE_PERIOD",
+        module: "HR",
+        description:
+          `Attendance period ${periodNumber} reopened`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: {
+          status: previousStatus,
+        },
+        afterValues:
+          buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+        metadata: {
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          reopenedBy: userName,
+          reason,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${periodNumber} reopened successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period reopening error:",
+        error
+      );
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not reopen attendance period.",
+      });
+    }
+  };
+
+const lockAttendancePeriod =
+  async (req, res) => {
+    try {
+      const periodNumber =
+        normalizeString(
+          req.params.periodNumber
+        );
+
+      const payrollNumber =
+        normalizeString(
+          req.body?.payrollNumber
+        );
+
+      const notes =
+        normalizeString(
+          req.body?.notes
+        );
+
+      if (!payrollNumber) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "A payroll number is required before an attendance period can be locked.",
+        });
+      }
+
+      if (!notes) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Attendance locking notes are required.",
+        });
+      }
+
+      const attendancePeriod =
+        await AttendancePeriod.findOne({
+          periodNumber,
+        });
+
+      if (!attendancePeriod) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Attendance period was not found.",
+        });
+      }
+
+      if (
+        attendancePeriod.status !==
+        "Payroll Ready"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            `${periodNumber} must have Payroll Ready status before it can be locked.`,
+          data: {
+            currentStatus:
+              attendancePeriod.status,
+            requiredStatus:
+              "Payroll Ready",
+          },
+        });
+      }
+
+      const pendingAdjustments =
+        attendancePeriod.adjustments
+          .filter(
+            (adjustment) =>
+              adjustment.status ===
+              "Pending"
+          )
+          .map(
+            (adjustment) =>
+              adjustment.adjustmentNumber
+          );
+
+      if (
+        pendingAdjustments.length > 0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Pending attendance adjustments must be resolved before locking.",
+          pendingAdjustments,
+        });
+      }
+
+      const userName =
+        getUserName(req.user);
+
+      const previousStatus =
+        attendancePeriod.status;
+
+      attendancePeriod.status =
+        "Locked";
+
+      attendancePeriod.payrollNumber =
+        payrollNumber;
+
+      attendancePeriod.updatedBy =
+        userName;
+
+      attendancePeriod.workflowHistory.push({
+        fromStatus: previousStatus,
+        toStatus: "Locked",
+        action:
+          "Attendance period locked to payroll",
+        notes:
+          `${notes} Payroll: ${payrollNumber}.`,
+        performedBy: userName,
+        performedAt: new Date(),
+      });
+
+      await attendancePeriod.save();
+
+      await writeAuditLog({
+        req,
+        action:
+          "LOCK_ATTENDANCE_PERIOD",
+        module: "HR",
+        description:
+          `Attendance period ${periodNumber} locked to payroll ${payrollNumber}`,
+        targetType:
+          "AttendancePeriod",
+        targetId: periodNumber,
+        beforeValues: {
+          status: previousStatus,
+          payrollNumber: "",
+        },
+        afterValues: {
+          ...buildSafeAttendanceAuditSnapshot(
+            attendancePeriod
+          ),
+          payrollNumber,
+        },
+        metadata: {
+          employeeId:
+            attendancePeriod.employeeId,
+          periodKey:
+            attendancePeriod.periodKey,
+          payrollNumber,
+          lockedBy: userName,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          `${periodNumber} locked successfully.`,
+        data: attendancePeriod,
+      });
+    } catch (error) {
+      console.error(
+        "Attendance period locking error:",
+        error
+      );
+
+      return res.status(400).json({
+        success: false,
+        message:
+          error.message ||
+          "Could not lock attendance period.",
+      });
+    }
+  };
+
   const submitAttendancePeriod =
   async (req, res) => {
     try {
@@ -1762,6 +2558,9 @@ module.exports = {
   createAttendancePeriodDraft,
   refreshAttendancePeriodDraft,
   requestAttendanceAdjustment,
+  reviewAttendanceAdjustment,
+  reopenAttendancePeriod,
+  lockAttendancePeriod,
   submitAttendancePeriod,
   approveAttendancePeriodByManager,
   markAttendancePeriodPayrollReady,
