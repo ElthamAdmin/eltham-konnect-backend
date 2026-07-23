@@ -34,6 +34,9 @@ const {
   createAttendancePeriodDraft,
   refreshAttendancePeriodDraft,
   requestAttendanceAdjustment,
+  reviewAttendanceAdjustment,
+  reopenAttendancePeriod,
+  lockAttendancePeriod,
   submitAttendancePeriod,
   approveAttendancePeriodByManager,
   markAttendancePeriodPayrollReady,
@@ -226,6 +229,30 @@ router.post(
     "payrollManage",
   ]),
   markAttendancePeriodPayrollReady
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/adjustments/:adjustmentNumber/review",
+  protect,
+  requirePermission("hr"),
+  reviewAttendanceAdjustment
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/reopen",
+  protect,
+  requirePermission("hr"),
+  reopenAttendancePeriod
+);
+
+router.post(
+  "/attendance-periods/:periodNumber/lock",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payrollManage",
+  ]),
+  lockAttendancePeriod
 );
 
 // HR-management access only.
