@@ -45,6 +45,15 @@ const {
 );
 
 const {
+  getMinimumWageRules,
+  createMinimumWageRule,
+  updateDraftMinimumWageRule,
+  activateMinimumWageRule,
+} = require(
+  "../controllers/minimumWageRuleController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -253,6 +262,52 @@ router.post(
     "payrollManage",
   ]),
   lockAttendancePeriod
+);
+
+/*
+ * H4 effective-dated minimum-wage rules.
+ * These routes must remain before /:employeeId.
+ */
+router.get(
+  "/minimum-wage/rules",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payroll",
+    "payrollManage",
+    "payrollApprove",
+  ]),
+  getMinimumWageRules
+);
+
+router.post(
+  "/minimum-wage/rules",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payrollManage",
+  ]),
+  createMinimumWageRule
+);
+
+router.patch(
+  "/minimum-wage/rules/:ruleCode",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payrollManage",
+  ]),
+  updateDraftMinimumWageRule
+);
+
+router.post(
+  "/minimum-wage/rules/:ruleCode/activate",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "payrollApprove",
+  ]),
+  activateMinimumWageRule
 );
 
 // HR-management access only.
