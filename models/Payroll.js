@@ -230,13 +230,35 @@ const PayrollSchema = new mongoose.Schema(
       },
     },
 
-    minimumWageAssessment: {
+        minimumWageAssessment: {
       applicable: {
         type: Boolean,
         default: true,
       },
 
+      workerCategory: {
+        type: String,
+        enum: [
+          "General",
+          "Industrial Security Guard",
+          "Other",
+        ],
+        default: "General",
+      },
+
       hourlyRate: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      weeklyRate: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      standardWeeklyHours: {
         type: Number,
         default: 0,
         min: 0,
@@ -268,24 +290,30 @@ const PayrollSchema = new mongoose.Schema(
 
       compliant: {
         type: Boolean,
-        default: true,
+        default: false,
       },
 
       assessmentStatus: {
-  type: String,
-  enum: [
-    "Compliant",
-    "Non-Compliant",
-    "Not Assessed",
-    "Not Applicable",
-  ],
-  default: "Not Assessed",
-},
+        type: String,
+        enum: [
+          "Compliant",
+          "Non-Compliant",
+          "Not Assessed",
+          "Not Applicable",
+        ],
+        default: "Not Assessed",
+      },
 
       warning: {
         type: String,
         default: "",
         trim: true,
+      },
+
+      ruleId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "MinimumWageRule",
+        default: null,
       },
 
       ruleCode: {
@@ -294,11 +322,47 @@ const PayrollSchema = new mongoose.Schema(
         trim: true,
       },
 
+      ruleSnapshot: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null,
+      },
+
+      attendancePeriodId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "AttendancePeriod",
+        default: null,
+      },
+
+      attendancePeriodNumber: {
+        type: String,
+        default: "",
+        trim: true,
+        index: true,
+      },
+
+      attendancePeriodStatus: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      payableHoursSource: {
+        type: String,
+        enum: [
+          "",
+          "Payroll Ready Attendance",
+          "Manual Preview",
+          "Not Applicable",
+        ],
+        default: "",
+      },
+
       assessedAt: {
         type: Date,
         default: null,
       },
     },
+
 
         grossPay: {
       type: Number,
