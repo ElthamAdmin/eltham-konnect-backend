@@ -2990,12 +2990,118 @@ const approvePayroll = async (req, res) => {
       });
     }
 
-    if (payroll.status !== "Pending") {
+        if (payroll.status !== "Pending") {
       return res.status(400).json({
         success: false,
         message:
           `Only Pending Payroll can be approved. ` +
           `Current status: ${payroll.status}`,
+      });
+    }
+
+    /*
+     * H4 approval safeguard:
+     * Reassess against the currently effective minimum-wage
+     * rule and Payroll Ready attendance before approval.
+     */
+    payroll.minimumWageAssessment =
+      await resolvePayrollMinimumWageAssessment({
+        employeeId: payroll.employeeId,
+        payPeriod: payroll.payPeriod,
+        assessmentDate:
+          payroll.payDate ||
+          payroll.payPeriod,
+        grossPay: payroll.grossPay,
+        applicable:
+          payroll.minimumWageAssessment
+            ?.applicable !== false,
+        workerCategory:
+          payroll.minimumWageAssessment
+            ?.workerCategory ||
+          "General",
+        manualWorkedHours:
+          payroll.minimumWageAssessment
+            ?.workedHours ||
+          0,
+        attendancePeriodNumber:
+          payroll.minimumWageAssessment
+            ?.attendancePeriodNumber ||
+          "",
+      });
+
+    payroll.markModified(
+      "minimumWageAssessment"
+    );
+
+    /*
+     * Preserve the latest assessment evidence even when
+     * approval is rejected.
+     */
+    await payroll.save();
+
+    const wageAssessment =
+      payroll.minimumWageAssessment || {};
+
+    if (
+      wageAssessment.applicable !== false &&
+      (
+        wageAssessment.assessmentStatus !==
+          "Compliant" ||
+        wageAssessment.compliant !== true ||
+        Number(
+          wageAssessment.shortfall || 0
+        ) > 0
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          wageAssessment.warning ||
+          "Payroll cannot be approved until minimum-wage compliance is confirmed.",
+        data: {
+          payrollNumber:
+            payroll.payrollNumber,
+          employeeId:
+            payroll.employeeId,
+          employeeName:
+            payroll.employeeName,
+          payPeriod:
+            payroll.payPeriod,
+          assessmentStatus:
+            wageAssessment.assessmentStatus ||
+            "Not Assessed",
+          compliant:
+            wageAssessment.compliant === true,
+          minimumGrossPay:
+            Number(
+              wageAssessment.minimumGrossPay ||
+                0
+            ),
+          assessedGrossPay:
+            Number(
+              wageAssessment.assessedGrossPay ||
+                payroll.grossPay ||
+                0
+            ),
+          shortfall:
+            Number(
+              wageAssessment.shortfall || 0
+            ),
+          ruleCode:
+            wageAssessment.ruleCode || "",
+          attendancePeriodNumber:
+            wageAssessment
+              .attendancePeriodNumber ||
+            "",
+          attendancePeriodStatus:
+            wageAssessment
+              .attendancePeriodStatus ||
+            "",
+          payableHoursSource:
+            wageAssessment
+              .payableHoursSource ||
+            "",
+        },
       });
     }
 
