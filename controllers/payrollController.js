@@ -16,6 +16,10 @@ const {
   applyEmployeeAdvanceRecoveries,
 } = require("../services/employeeAdvanceService");
 
+const {
+  resolvePayrollMinimumWageAssessment,
+} = require("../services/payrollMinimumWageService");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -320,147 +324,6 @@ const formatDateForComparison = (value) => {
   }
 
   return date.toISOString().slice(0, 10);
-};
-
-const getMinimumWageRule = (payDate) => {
-  const normalizedDate =
-    formatDateForComparison(
-      normalizePayrollDate(payDate)
-    );
-
-  const date = new Date(
-    `${normalizedDate}T00:00:00.000Z`
-  );
-
-  if (date >= new Date("2026-07-01T00:00:00.000Z")) {
-    return {
-      ruleCode: "JM-NMW-2026-07",
-      hourlyRate: 425,
-      weeklyRate: 17000,
-    };
-  }
-
-  if (date >= new Date("2025-06-01T00:00:00.000Z")) {
-    return {
-      ruleCode: "JM-NMW-2025-06",
-      hourlyRate: 400,
-      weeklyRate: 16000,
-    };
-  }
-
-  if (date >= new Date("2024-06-01T00:00:00.000Z")) {
-    return {
-      ruleCode: "JM-NMW-2024-06",
-      hourlyRate: 375,
-      weeklyRate: 15000,
-    };
-  }
-
-  return {
-    ruleCode: "JM-NMW-HISTORICAL-REVIEW",
-    hourlyRate: 0,
-    weeklyRate: 0,
-  };
-};
-
-const buildMinimumWageAssessment = ({
-  payDate,
-  workedHours,
-  grossPay,
-  applicable = true,
-}) => {
-  const rule = getMinimumWageRule(
-    payDate
-  );
-
-  const safeWorkedHours = Math.max(
-    0,
-    Number(workedHours || 0)
-  );
-
-  const assessedGrossPay =
-    roundMoney(grossPay);
-
-  const canAssess =
-    applicable &&
-    rule.hourlyRate > 0 &&
-    safeWorkedHours > 0;
-
-  const minimumGrossPay = canAssess
-    ? roundMoney(
-        safeWorkedHours *
-          rule.hourlyRate
-      )
-    : 0;
-
-  const shortfall = canAssess
-    ? Math.max(
-        0,
-        roundMoney(
-          minimumGrossPay -
-            assessedGrossPay
-        )
-      )
-    : 0;
-
-  let compliant = false;
-  let assessmentStatus =
-    "Not Assessed";
-  let warning = "";
-
-  if (!applicable) {
-    compliant = true;
-    assessmentStatus =
-      "Not Applicable";
-    warning =
-      "Minimum-wage assessment was marked as not applicable for this Payroll record.";
-  } else if (rule.hourlyRate <= 0) {
-    compliant = false;
-    assessmentStatus =
-      "Not Assessed";
-    warning =
-      "Minimum-wage compliance could not be assessed because no effective wage rule was available for the payment date.";
-  } else if (safeWorkedHours <= 0) {
-    compliant = false;
-    assessmentStatus =
-      "Not Assessed";
-    warning =
-      "Minimum-wage compliance could not be assessed because worked hours were not supplied.";
-  } else if (shortfall > 0) {
-    compliant = false;
-    assessmentStatus =
-      "Non-Compliant";
-    warning =
-      `Entered gross pay is JMD ${shortfall.toFixed(
-        2
-      )} below the ` +
-      `minimum ordinary-time pay calculated from ${safeWorkedHours.toFixed(
-        2
-      )} hours at JMD ${rule.hourlyRate.toFixed(
-        2
-      )} per hour.`;
-  } else {
-    compliant = true;
-    assessmentStatus =
-      "Compliant";
-  }
-
-  return {
-    applicable,
-    hourlyRate:
-      rule.hourlyRate,
-    workedHours:
-      roundMoney(safeWorkedHours),
-    minimumGrossPay,
-    assessedGrossPay,
-    shortfall,
-    compliant,
-    assessmentStatus,
-    warning,
-    ruleCode:
-      rule.ruleCode,
-    assessedAt: new Date(),
-  };
 };
 
 const calculateEmployerAssistedPayroll = async ({
@@ -1311,7 +1174,7 @@ const reassessPayrollCompliance = async (
       });
     }
 
-    const workedHours = Number(
+        const workedHours = Number(
       req.body.workedHours ??
         payroll.minimumWageAssessment
           ?.workedHours ??
@@ -1324,15 +1187,26 @@ const reassessPayrollCompliance = async (
     };
 
     payroll.minimumWageAssessment =
-      buildMinimumWageAssessment({
-        payDate:
+      await resolvePayrollMinimumWageAssessment({
+        employeeId: payroll.employeeId,
+        payPeriod: payroll.payPeriod,
+        assessmentDate:
           payroll.payDate ||
           payroll.payPeriod,
-        workedHours,
         grossPay: payroll.grossPay,
         applicable:
           payroll.minimumWageAssessment
             ?.applicable !== false,
+        workerCategory:
+          payroll.minimumWageAssessment
+            ?.workerCategory ||
+          "General",
+        manualWorkedHours: workedHours,
+        attendancePeriodNumber:
+          req.body.attendancePeriodNumber ||
+          payroll.minimumWageAssessment
+            ?.attendancePeriodNumber ||
+          "",
       });
 
     await payroll.save();
@@ -1495,8 +1369,10 @@ const previewPayroll = async (req, res) => {
       statutoryTreatment = "Standard",
       targetNetPay = 0,
       statutoryExemption = {},
-      workedHours = 0,
+            workedHours = 0,
       minimumWageApplicable = true,
+      workerCategory = "General",
+      attendancePeriodNumber = "",
       applyEmployeeAdvances = true,
       requestedAdvanceRecovery,
     } = req.body;
@@ -1689,15 +1565,19 @@ const previewPayroll = async (req, res) => {
       normalizedStatutoryTreatment !==
       "Documented Exemption";
 
-    const minimumWageAssessment =
-      buildMinimumWageAssessment({
-        payDate: calculationDate,
-        workedHours,
+        const minimumWageAssessment =
+      await resolvePayrollMinimumWageAssessment({
+        employeeId,
+        payPeriod,
+        assessmentDate: calculationDate,
         grossPay: calculation.grossPay,
         applicable: normalizeBoolean(
           minimumWageApplicable,
           true
         ),
+        workerCategory,
+        manualWorkedHours: workedHours,
+        attendancePeriodNumber,
       });
 
     const shouldApplyAdvances = normalizeBoolean(
@@ -1843,7 +1723,9 @@ const createPayroll = async (req, res) => {
       statutoryTreatment = "Standard",
       targetNetPay = 0,
       statutoryExemption = {},
-      workedHours = 0,
+            workedHours = 0,
+      workerCategory = "General",
+      attendancePeriodNumber = "",
       applyEmployeeAdvances = true,
       requestedAdvanceRecovery,
     } = req.body;
@@ -2156,12 +2038,17 @@ const createPayroll = async (req, res) => {
       normalizedStatutoryTreatment !==
       "Documented Exemption";
 
-    const minimumWageAssessment =
-      buildMinimumWageAssessment({
-        payDate: calculationDate,
-        workedHours,
-        grossPay: payrollBreakdown.grossPay,
+        const minimumWageAssessment =
+      await resolvePayrollMinimumWageAssessment({
+        employeeId: finalEmployeeId,
+        payPeriod,
+        assessmentDate: calculationDate,
+        grossPay:
+          payrollBreakdown.grossPay,
         applicable: true,
+        workerCategory,
+        manualWorkedHours: workedHours,
+        attendancePeriodNumber,
       });
 
     const shouldApplyAdvances = normalizeBoolean(
