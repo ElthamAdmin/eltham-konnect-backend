@@ -203,22 +203,22 @@ MinimumWageRuleSchema.index({
 
 MinimumWageRuleSchema.pre(
   "validate",
-  function validateMinimumWageRule(next) {
+  function validateMinimumWageRule() {
     if (
       this.effectiveTo &&
       this.effectiveFrom &&
       this.effectiveTo <
         this.effectiveFrom
     ) {
-      return next(
-        new Error(
-          "Minimum-wage effective-to date cannot precede the effective-from date."
-        )
+      throw new Error(
+        "Minimum-wage effective-to date cannot precede the effective-from date."
       );
     }
 
     const expectedWeeklyRate =
-      Number(this.hourlyRate || 0) *
+      Number(
+        this.hourlyRate || 0
+      ) *
       Number(
         this.standardWeeklyHours || 0
       );
@@ -227,17 +227,15 @@ MinimumWageRuleSchema.pre(
       expectedWeeklyRate > 0 &&
       Math.abs(
         expectedWeeklyRate -
-          Number(this.weeklyRate || 0)
+          Number(
+            this.weeklyRate || 0
+          )
       ) > 0.01
     ) {
-      return next(
-        new Error(
-          "Weekly minimum wage must equal the hourly rate multiplied by standard weekly hours."
-        )
+      throw new Error(
+        "Weekly minimum wage must equal the hourly rate multiplied by standard weekly hours."
       );
     }
-
-    next();
   }
 );
 
