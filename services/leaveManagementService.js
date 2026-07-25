@@ -282,18 +282,24 @@ const validatePolicyEligibility = ({
   assessmentDate,
   requestedCalendarDays,
 }) => {
-  const serviceDays = calculateServiceDays(
-    employee,
-    assessmentDate
-  );
+  const serviceDays =
+    calculateServiceDays(
+      employee,
+      assessmentDate
+    );
 
-  const requiredServiceDays = Math.max(
-    Number(policy.minimumServiceDays || 0),
-    Number(policy.minimumServiceWeeks || 0) *
-      7,
-    Number(policy.minimumServiceMonths || 0) *
-      30
-  );
+  const requiredServiceDays =
+    Math.max(
+      Number(
+        policy.minimumServiceDays || 0
+      ),
+      Number(
+        policy.minimumServiceWeeks || 0
+      ) * 7,
+      Number(
+        policy.minimumServiceMonths || 0
+      ) * 30
+    );
 
   if (serviceDays < requiredServiceDays) {
     throw new Error(
@@ -301,17 +307,37 @@ const validatePolicyEligibility = ({
     );
   }
 
-  if (
+  const calendarWeekLimit =
+    policy.durationUnit ===
+      "Calendar Weeks" &&
     Number(
-      policy.maximumConsecutiveDays || 0
-    ) > 0 &&
+      policy.standardDurationUnits || 0
+    ) > 0
+      ? Number(
+          policy.standardDurationUnits
+        ) * 7
+      : 0;
+
+  const maximumCalendarDays =
+    calendarWeekLimit ||
+    Number(
+      policy.maximumConsecutiveDays ||
+        0
+    );
+
+  if (
+    maximumCalendarDays > 0 &&
     requestedCalendarDays >
-      Number(
-        policy.maximumConsecutiveDays
-      )
+      maximumCalendarDays
   ) {
+    const durationDescription =
+      policy.durationUnit ===
+      "Calendar Weeks"
+        ? `${policy.standardDurationUnits} calendar weeks`
+        : `${maximumCalendarDays} consecutive calendar days`;
+
     throw new Error(
-      `${policy.policyName} permits no more than ${policy.maximumConsecutiveDays} consecutive calendar days.`
+      `${policy.policyName} permits no more than ${durationDescription}.`
     );
   }
 };
@@ -404,7 +430,12 @@ const calculateLeaveRequestTreatment =
     let unpaidLeaveMinutes = 0;
     let scheduledLeaveDays = 0;
 
-    for (const workDate of dates) {
+        for (
+      const [
+        dateIndex,
+        workDate,
+      ] of dates.entries()
+    ) {
       const date = new Date(
         `${workDate}T12:00:00.000Z`
       );
@@ -454,25 +485,62 @@ const calculateLeaveRequestTreatment =
       ) {
         unpaidMinutes =
           scheduledMinutes;
-      } else if (
+            } else if (
         policy.payTreatment === "Mixed"
       ) {
-        payableMinutes =
-          roundMinutes(
-            scheduledMinutes *
-              (
-                Number(
-                  policy.payPercentage ||
-                    0
-                ) / 100
-              )
-          );
+        const usesCalendarWeeks =
+          policy.durationUnit ===
+            "Calendar Weeks" &&
+          Number(
+            policy.standardDurationUnits ||
+              0
+          ) > 0;
 
-        unpaidMinutes = Math.max(
-          0,
-          scheduledMinutes -
-            payableMinutes
-        );
+        if (usesCalendarWeeks) {
+          const paidCalendarDays =
+            Math.max(
+              0,
+              Number(
+                policy
+                  .employerPaidDurationUnits ||
+                  0
+              ) * 7
+            );
+
+          /*
+           * The calendar position determines the paid and
+           * unpaid portions. The employee's own schedule
+           * determines how many payable minutes occur on
+           * each date.
+           */
+          if (
+            dateIndex <
+            paidCalendarDays
+          ) {
+            payableMinutes =
+              scheduledMinutes;
+          } else {
+            unpaidMinutes =
+              scheduledMinutes;
+          }
+        } else {
+          payableMinutes =
+            roundMinutes(
+              scheduledMinutes *
+                (
+                  Number(
+                    policy.payPercentage ||
+                      0
+                  ) / 100
+                )
+            );
+
+          unpaidMinutes = Math.max(
+            0,
+            scheduledMinutes -
+              payableMinutes
+          );
+        }
       } else if (
         policy.payTreatment ===
         "NIS-Coordinated"
@@ -525,8 +593,27 @@ const calculateLeaveRequestTreatment =
           policy.legalClassification,
         payTreatment:
           policy.payTreatment,
-        payrollEffect:
+                payrollEffect:
           policy.payrollEffect,
+        durationUnit:
+          policy.durationUnit ||
+          "Scheduled Days",
+        standardDurationUnits:
+          Number(
+            policy.standardDurationUnits ||
+              0
+          ),
+        employerPaidDurationUnits:
+          Number(
+            policy
+              .employerPaidDurationUnits ||
+              0
+          ),
+        maximumExtensionUnits:
+          Number(
+            policy.maximumExtensionUnits ||
+              0
+          ),
         countsAsPayableAttendance:
           policy.countsAsPayableAttendance,
         balanceTracked:

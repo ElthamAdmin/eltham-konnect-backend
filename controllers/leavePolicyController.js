@@ -124,8 +124,27 @@ const buildPolicyPayload = (body = {}) => ({
     body.employerPaidDays || 0
   ),
 
-  unpaidDaysAvailable: Number(
+    unpaidDaysAvailable: Number(
     body.unpaidDaysAvailable || 0
+  ),
+
+  durationUnit:
+    normalizeString(
+      body.durationUnit
+    ) || "Scheduled Days",
+
+  standardDurationUnits: Number(
+    body.standardDurationUnits || 0
+  ),
+
+  employerPaidDurationUnits:
+    Number(
+      body.employerPaidDurationUnits ||
+        0
+    ),
+
+  maximumExtensionUnits: Number(
+    body.maximumExtensionUnits || 0
   ),
 
   nisCoordinationRequired:

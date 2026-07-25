@@ -44,6 +44,12 @@ const ACCRUAL_METHODS = [
   "Manual",
 ];
 
+const DURATION_UNITS = [
+  "Scheduled Days",
+  "Calendar Days",
+  "Calendar Weeks",
+];
+
 const POLICY_STATUSES = [
   "Draft",
   "Active",
@@ -215,7 +221,39 @@ const LeavePolicySchema = new mongoose.Schema(
       min: 0,
     },
 
-    unpaidDaysAvailable: {
+        unpaidDaysAvailable: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    /*
+     * Statutory-duration controls.
+     *
+     * Existing policies continue using Scheduled Days.
+     * Calendar Weeks allows maternity and similar statutory
+     * leave to remain accurate for employees with different
+     * weekly work schedules.
+     */
+    durationUnit: {
+      type: String,
+      enum: DURATION_UNITS,
+      default: "Scheduled Days",
+    },
+
+    standardDurationUnits: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    employerPaidDurationUnits: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    maximumExtensionUnits: {
       type: Number,
       default: 0,
       min: 0,
@@ -473,9 +511,48 @@ LeavePolicySchema.pre(
       this.effectiveTo <
         this.effectiveFrom
     ) {
-      throw new Error(
+            throw new Error(
         "Leave-policy effective-to date cannot be earlier than its effective-from date."
       );
+    }
+
+    const standardDurationUnits =
+      Number(
+        this.standardDurationUnits || 0
+      );
+
+    const employerPaidDurationUnits =
+      Number(
+        this.employerPaidDurationUnits ||
+          0
+      );
+
+    if (
+      this.durationUnit ===
+        "Calendar Weeks" &&
+      standardDurationUnits < 1
+    ) {
+      throw new Error(
+        "A calendar-week leave policy must specify its standard duration."
+      );
+    }
+
+    if (
+      employerPaidDurationUnits >
+      standardDurationUnits
+    ) {
+      throw new Error(
+        "Employer-paid duration cannot exceed the standard leave duration."
+      );
+    }
+
+    if (
+      this.durationUnit ===
+        "Calendar Weeks" &&
+      standardDurationUnits > 0
+    ) {
+      this.maximumConsecutiveDays =
+        standardDurationUnits * 7;
     }
 
     if (
