@@ -464,59 +464,82 @@ LeavePolicySchema.index({
   status: 1,
 });
 
-LeavePolicySchema.pre("validate", function validatePolicy(next) {
-  if (
-    this.effectiveFrom &&
-    this.effectiveTo &&
-    this.effectiveTo < this.effectiveFrom
-  ) {
-    return next(
-      new Error(
+LeavePolicySchema.pre(
+  "validate",
+  function validatePolicy() {
+    if (
+      this.effectiveFrom &&
+      this.effectiveTo &&
+      this.effectiveTo <
+        this.effectiveFrom
+    ) {
+      throw new Error(
         "Leave-policy effective-to date cannot be earlier than its effective-from date."
-      )
-    );
-  }
+      );
+    }
 
-  if (this.payTreatment === "Unpaid") {
-    this.payPercentage = 0;
-    this.countsAsPayableAttendance = false;
-    this.payrollEffect = "Exclude Leave Time";
-  }
+    if (
+      this.payTreatment === "Unpaid"
+    ) {
+      this.payPercentage = 0;
+      this.countsAsPayableAttendance =
+        false;
+      this.payrollEffect =
+        "Exclude Leave Time";
+    }
 
-  if (this.payTreatment === "Paid") {
-    this.countsAsPayableAttendance = true;
-    this.payrollEffect = "Include Scheduled Pay";
+    if (
+      this.payTreatment === "Paid"
+    ) {
+      this.countsAsPayableAttendance =
+        true;
+      this.payrollEffect =
+        "Include Scheduled Pay";
 
-    if (Number(this.payPercentage || 0) === 0) {
-      this.payPercentage = 100;
+      if (
+        Number(
+          this.payPercentage || 0
+        ) === 0
+      ) {
+        this.payPercentage = 100;
+      }
+    }
+
+    if (
+      this.payTreatment ===
+      "NIS-Coordinated"
+    ) {
+      this.nisCoordinationRequired =
+        true;
+      this.payrollEffect =
+        "NIS Benefit Coordination";
+    }
+
+    if (!this.balanceTracked) {
+      this.balanceType = "";
+      this.accrualMethod = "None";
+      this.annualEntitlementDays = 0;
+      this.monthlyAccrualDays = 0;
+      this.daysWorkedPerLeaveDay = 0;
+      this.maximumBalanceDays = 0;
+      this.maximumCarryForwardDays = 0;
+      this.negativeBalanceAllowed =
+        false;
+    }
+
+    if (
+      this.medicalCertificateRequired &&
+      Number(
+        this
+          .medicalCertificateRequiredAfterDays ||
+          0
+      ) < 1
+    ) {
+      this.medicalCertificateRequiredAfterDays =
+        1;
     }
   }
-
-  if (this.payTreatment === "NIS-Coordinated") {
-    this.nisCoordinationRequired = true;
-    this.payrollEffect = "NIS Benefit Coordination";
-  }
-
-  if (!this.balanceTracked) {
-    this.balanceType = "";
-    this.accrualMethod = "None";
-    this.annualEntitlementDays = 0;
-    this.monthlyAccrualDays = 0;
-    this.daysWorkedPerLeaveDay = 0;
-    this.maximumBalanceDays = 0;
-    this.maximumCarryForwardDays = 0;
-    this.negativeBalanceAllowed = false;
-  }
-
-  if (
-    this.medicalCertificateRequired &&
-    Number(this.medicalCertificateRequiredAfterDays || 0) < 1
-  ) {
-    this.medicalCertificateRequiredAfterDays = 1;
-  }
-
-  next();
-});
+);
 
 module.exports = mongoose.model(
   "LeavePolicy",
