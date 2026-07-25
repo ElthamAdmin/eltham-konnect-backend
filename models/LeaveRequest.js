@@ -689,49 +689,62 @@ LeaveRequestSchema.index({
   endDate: 1,
 });
 
-LeaveRequestSchema.pre("validate", function validateLeaveDates(next) {
-  if (
-    this.startDate &&
-    this.endDate &&
-    this.endDate < this.startDate
-  ) {
-    return next(
-      new Error(
+LeaveRequestSchema.pre(
+  "validate",
+  function validateLeaveDates() {
+    if (
+      this.startDate &&
+      this.endDate &&
+      this.endDate <
+        this.startDate
+    ) {
+      throw new Error(
         "Leave end date cannot be earlier than its start date."
-      )
-    );
-  }
+      );
+    }
 
-  if (
-    Number(this.payableLeaveMinutes || 0) +
-      Number(this.unpaidLeaveMinutes || 0) >
-    Number(this.totalScheduledMinutes || 0)
-  ) {
-    return next(
-      new Error(
+    if (
+      Number(
+        this.payableLeaveMinutes ||
+          0
+      ) +
+        Number(
+          this.unpaidLeaveMinutes ||
+            0
+        ) >
+      Number(
+        this.totalScheduledMinutes ||
+          0
+      )
+    ) {
+      throw new Error(
         "Combined payable and unpaid leave minutes cannot exceed scheduled leave minutes."
-      )
-    );
-  }
+      );
+    }
 
-  /*
-   * Preserve the central H5 distinction:
-   * unpaid leave can never be counted as payable attendance.
-   */
-  if (this.payTreatment === "Unpaid") {
-    this.countsAsPayableAttendance = false;
-    this.payrollEffect = "Exclude Leave Time";
-  }
+    /*
+     * Unpaid leave must never be
+     * counted as payable attendance.
+     */
+    if (
+      this.payTreatment === "Unpaid"
+    ) {
+      this.countsAsPayableAttendance =
+        false;
+      this.payrollEffect =
+        "Exclude Leave Time";
+    }
 
-  if (
-    this.payTreatment === "Paid" ||
-    this.payTreatment === "NIS-Coordinated"
-  ) {
-    this.countsAsPayableAttendance = true;
+    if (
+      this.payTreatment === "Paid" ||
+      this.payTreatment ===
+        "NIS-Coordinated"
+    ) {
+      this.countsAsPayableAttendance =
+        true;
+    }
   }
-
-  next();
-});
+);
 
 module.exports = mongoose.model(
   "LeaveRequest",

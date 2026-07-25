@@ -342,16 +342,22 @@ LeaveBalanceTransactionSchema.index(
 
 LeaveBalanceTransactionSchema.pre(
   "validate",
-  function validateTransaction(next) {
-    const units = Number(this.units || 0);
-    const before = Number(this.balanceBefore || 0);
-    const after = Number(this.balanceAfter || 0);
+  function validateTransaction() {
+    const units = Number(
+      this.units || 0
+    );
+
+    const before = Number(
+      this.balanceBefore || 0
+    );
+
+    const after = Number(
+      this.balanceAfter || 0
+    );
 
     if (units === 0) {
-      return next(
-        new Error(
-          "A leave-balance transaction must increase or decrease the balance."
-        )
+      throw new Error(
+        "A leave-balance transaction must increase or decrease the balance."
       );
     }
 
@@ -363,19 +369,18 @@ LeaveBalanceTransactionSchema.pre(
       after.toFixed(4)
     );
 
-    if (expectedAfter !== normalizedAfter) {
-      return next(
-        new Error(
-          "Leave balance after the transaction must equal its opening balance plus the transaction units."
-        )
+    if (
+      expectedAfter !==
+      normalizedAfter
+    ) {
+      throw new Error(
+        "Leave balance after the transaction must equal its opening balance plus the transaction units."
       );
     }
 
     if (after < 0) {
-      return next(
-        new Error(
-          "A posted leave-balance transaction cannot create a negative balance."
-        )
+      throw new Error(
+        "A posted leave-balance transaction cannot create a negative balance."
       );
     }
 
@@ -390,14 +395,10 @@ LeaveBalanceTransactionSchema.pre(
       this.status === "Reversed" &&
       !this.relatedTransactionNumber
     ) {
-      return next(
-        new Error(
-          "A reversed leave-balance transaction must identify its related transaction."
-        )
+      throw new Error(
+        "A reversed leave-balance transaction must identify its related transaction."
       );
     }
-
-    next();
   }
 );
 
