@@ -1,7 +1,97 @@
 const mongoose = require("mongoose");
 
-const LEAVE_TYPES = ["Vacation", "Sick", "Unpaid", "Emergency"];
-const LEAVE_STATUSES = ["Pending", "Approved", "Rejected", "Cancelled"];
+const LEAVE_TYPES = [
+  "Vacation",
+  "Sick",
+  "Maternity",
+  "Maternity Extension",
+  "Employment Injury",
+  "Emergency",
+  "Compassionate",
+  "Bereavement",
+  "Paternity",
+  "Family Care",
+  "Study",
+  "Unpaid",
+  "Other Authorized",
+];
+
+const LEAVE_STATUSES = [
+  "Draft",
+  "Pending",
+  "Approved",
+  "Rejected",
+  "Cancelled",
+  "Completed",
+];
+
+const LEGAL_CLASSIFICATIONS = [
+  "Statutory",
+  "Company Policy",
+];
+
+const PAY_TREATMENTS = [
+  "Paid",
+  "Unpaid",
+  "Mixed",
+  "NIS-Coordinated",
+];
+
+const PAYROLL_EFFECTS = [
+  "Include Scheduled Pay",
+  "Exclude Leave Time",
+  "Mixed Treatment",
+  "NIS Benefit Coordination",
+  "Manual Review",
+];
+
+const DOCUMENT_STATUSES = [
+  "Not Required",
+  "Pending",
+  "Provided",
+  "Verified",
+  "Rejected",
+];
+
+const BALANCE_EFFECTS = [
+  "Deduct",
+  "No Deduction",
+  "Manual Adjustment",
+];
+
+const WORKFLOW_ACTIONS = [
+  "Created",
+  "Submitted",
+  "Approved",
+  "Rejected",
+  "Cancelled",
+  "Completed",
+  "Document Added",
+  "Document Verified",
+  "Balance Applied",
+  "Payroll Effect Confirmed",
+];
+
+const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+const isValidYmdDate = (value) => {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return true;
+  }
+
+  if (!YMD_PATTERN.test(text)) {
+    return false;
+  }
+
+  const date = new Date(`${text}T12:00:00.000Z`);
+
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === text
+  );
+};
 
 const LeaveRequestSchema = new mongoose.Schema(
   {
@@ -10,18 +100,21 @@ const LeaveRequestSchema = new mongoose.Schema(
       required: true,
       unique: true,
       trim: true,
+      index: true,
     },
 
     employeeId: {
       type: String,
       required: true,
       trim: true,
+      index: true,
     },
 
     linkedUserId: {
       type: String,
       default: "",
       trim: true,
+      index: true,
     },
 
     employeeName: {
@@ -30,6 +123,53 @@ const LeaveRequestSchema = new mongoose.Schema(
       trim: true,
     },
 
+    employeeSnapshot: {
+      jobTitle: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      department: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      branch: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      employmentClassification: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      employmentStatus: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      payFrequency: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      payrollEnabled: {
+        type: Boolean,
+        default: false,
+      },
+    },
+
+    /*
+     * Legacy snapshot fields are retained so existing frontend
+     * and reporting code does not break.
+     */
     department: {
       type: String,
       default: "",
@@ -46,16 +186,62 @@ const LeaveRequestSchema = new mongoose.Schema(
       type: String,
       enum: LEAVE_TYPES,
       required: true,
+      index: true,
+    },
+
+    legalClassification: {
+      type: String,
+      enum: LEGAL_CLASSIFICATIONS,
+      default: "Company Policy",
+    },
+
+    policyCode: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    policyName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    policyEffectiveFrom: {
+      type: String,
+      default: "",
+      trim: true,
+      validate: {
+        validator: isValidYmdDate,
+        message:
+          "Leave-policy effective-from date must use YYYY-MM-DD.",
+      },
+    },
+
+    policySnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
 
     startDate: {
       type: String,
       required: true,
+      trim: true,
+      validate: {
+        validator: isValidYmdDate,
+        message: "Leave start date must use YYYY-MM-DD.",
+      },
     },
 
     endDate: {
       type: String,
       required: true,
+      trim: true,
+      validate: {
+        validator: isValidYmdDate,
+        message: "Leave end date must use YYYY-MM-DD.",
+      },
     },
 
     totalDays: {
@@ -64,7 +250,145 @@ const LeaveRequestSchema = new mongoose.Schema(
       min: 0,
     },
 
+    totalScheduledMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    payableLeaveMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    unpaidLeaveMinutes: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    dailyBreakdown: [
+      {
+        workDate: {
+          type: String,
+          required: true,
+          trim: true,
+          validate: {
+            validator: isValidYmdDate,
+            message:
+              "Leave breakdown work date must use YYYY-MM-DD.",
+          },
+        },
+
+        dayName: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        scheduledWorkday: {
+          type: Boolean,
+          default: false,
+        },
+
+        scheduledMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        payableMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        unpaidMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        payTreatment: {
+          type: String,
+          enum: PAY_TREATMENTS,
+          default: "Paid",
+        },
+
+        notes: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+      },
+    ],
+
+    payTreatment: {
+      type: String,
+      enum: PAY_TREATMENTS,
+      default: "Paid",
+      index: true,
+    },
+
+    payrollEffect: {
+      type: String,
+      enum: PAYROLL_EFFECTS,
+      default: "Include Scheduled Pay",
+    },
+
+    countsAsPayableAttendance: {
+      type: Boolean,
+      default: true,
+    },
+
+    balanceType: {
+      type: String,
+      enum: [
+        "",
+        "Vacation",
+        "Sick",
+        "Emergency",
+        "Other",
+      ],
+      default: "",
+    },
+
+    balanceEffect: {
+      type: String,
+      enum: BALANCE_EFFECTS,
+      default: "No Deduction",
+    },
+
+    balanceUnits: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    balanceApplied: {
+      type: Boolean,
+      default: false,
+    },
+
+    balanceAppliedAt: {
+      type: Date,
+      default: null,
+    },
+
+    balanceAppliedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
     reason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    employeeComments: {
       type: String,
       default: "",
       trim: true,
@@ -74,9 +398,131 @@ const LeaveRequestSchema = new mongoose.Schema(
       type: String,
       enum: LEAVE_STATUSES,
       default: "Pending",
+      index: true,
+    },
+
+    supportingDocumentsRequired: {
+      type: Boolean,
+      default: false,
+    },
+
+    documentStatus: {
+      type: String,
+      enum: DOCUMENT_STATUSES,
+      default: "Not Required",
+    },
+
+    documents: [
+      {
+        documentNumber: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        documentType: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        documentName: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        fileUrl: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        mimeType: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        confidential: {
+          type: Boolean,
+          default: true,
+        },
+
+        uploadedBy: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        uploadedAt: {
+          type: Date,
+          default: Date.now,
+        },
+
+        verified: {
+          type: Boolean,
+          default: false,
+        },
+
+        verifiedBy: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        verifiedAt: {
+          type: Date,
+          default: null,
+        },
+
+        verificationNotes: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+      },
+    ],
+
+    medicalCertificateRequired: {
+      type: Boolean,
+      default: false,
+    },
+
+    medicalCertificateReceived: {
+      type: Boolean,
+      default: false,
+    },
+
+    expectedReturnDate: {
+      type: String,
+      default: "",
+      trim: true,
+      validate: {
+        validator: isValidYmdDate,
+        message:
+          "Expected return date must use YYYY-MM-DD.",
+      },
+    },
+
+    actualReturnDate: {
+      type: String,
+      default: "",
+      trim: true,
+      validate: {
+        validator: isValidYmdDate,
+        message:
+          "Actual return date must use YYYY-MM-DD.",
+      },
     },
 
     adminComment: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    approvalNotes: {
       type: String,
       default: "",
       trim: true,
@@ -93,7 +539,124 @@ const LeaveRequestSchema = new mongoose.Schema(
       trim: true,
     },
 
+    submittedAt: {
+      type: Date,
+      default: null,
+    },
+
     submittedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
+
+    cancelledBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    cancellationReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    payrollProcessed: {
+      type: Boolean,
+      default: false,
+    },
+
+    payrollNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    payrollProcessedAt: {
+      type: Date,
+      default: null,
+    },
+
+    attendancePeriodsUpdated: [
+      {
+        periodNumber: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        periodKey: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        updatedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
+    workflowHistory: [
+      {
+        action: {
+          type: String,
+          enum: WORKFLOW_ACTIONS,
+          required: true,
+        },
+
+        fromStatus: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        toStatus: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        notes: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        performedBy: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        performedByUserId: {
+          type: String,
+          default: "",
+          trim: true,
+        },
+
+        performedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+
+    createdBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    updatedBy: {
       type: String,
       default: "",
       trim: true,
@@ -104,4 +667,73 @@ const LeaveRequestSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("LeaveRequest", LeaveRequestSchema);
+LeaveRequestSchema.index({
+  employeeId: 1,
+  startDate: 1,
+  endDate: 1,
+});
+
+LeaveRequestSchema.index({
+  employeeId: 1,
+  status: 1,
+});
+
+LeaveRequestSchema.index({
+  linkedUserId: 1,
+  status: 1,
+});
+
+LeaveRequestSchema.index({
+  status: 1,
+  startDate: 1,
+  endDate: 1,
+});
+
+LeaveRequestSchema.pre("validate", function validateLeaveDates(next) {
+  if (
+    this.startDate &&
+    this.endDate &&
+    this.endDate < this.startDate
+  ) {
+    return next(
+      new Error(
+        "Leave end date cannot be earlier than its start date."
+      )
+    );
+  }
+
+  if (
+    Number(this.payableLeaveMinutes || 0) +
+      Number(this.unpaidLeaveMinutes || 0) >
+    Number(this.totalScheduledMinutes || 0)
+  ) {
+    return next(
+      new Error(
+        "Combined payable and unpaid leave minutes cannot exceed scheduled leave minutes."
+      )
+    );
+  }
+
+  /*
+   * Preserve the central H5 distinction:
+   * unpaid leave can never be counted as payable attendance.
+   */
+  if (this.payTreatment === "Unpaid") {
+    this.countsAsPayableAttendance = false;
+    this.payrollEffect = "Exclude Leave Time";
+  }
+
+  if (
+    this.payTreatment === "Paid" ||
+    this.payTreatment === "NIS-Coordinated"
+  ) {
+    this.countsAsPayableAttendance = true;
+  }
+
+  next();
+});
+
+module.exports = mongoose.model(
+  "LeaveRequest",
+  LeaveRequestSchema
+);
