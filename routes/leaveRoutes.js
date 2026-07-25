@@ -7,36 +7,122 @@ const {
   createLeaveRequest,
   approveLeaveRequest,
   rejectLeaveRequest,
-} = require("../controllers/leaveController");
+} = require(
+  "../controllers/leaveController"
+);
+
+const {
+  getLeavePolicies,
+  createLeavePolicyDraft,
+  updateLeavePolicyDraft,
+  activateLeavePolicy,
+  retireLeavePolicy,
+} = require(
+  "../controllers/leavePolicyController"
+);
 
 const {
   protect,
   requirePermission,
   requireAnyPermission,
-} = require("../middleware/authMiddleware");
+} = require(
+  "../middleware/authMiddleware"
+);
 
-// Admin HR or approved self-service users can view leave requests.
-// Controller will securely limit staff to only their own requests.
+const canAccessLeaveSelfService =
+  requireAnyPermission([
+    "hr",
+    "leaveSelfService",
+    "hrSelfService",
+  ]);
+
+/*
+ * H5 effective-dated leave policies.
+ *
+ * These routes must remain above
+ * the generic /:leaveRequestId route.
+ */
+
+router.get(
+  "/policies",
+  protect,
+  requirePermission("hr"),
+  getLeavePolicies
+);
+
+router.post(
+  "/policies",
+  protect,
+  requirePermission("hr"),
+  createLeavePolicyDraft
+);
+
+router.patch(
+  "/policies/:policyCode",
+  protect,
+  requirePermission("hr"),
+  updateLeavePolicyDraft
+);
+
+router.post(
+  "/policies/:policyCode/activate",
+  protect,
+  requirePermission("hr"),
+  activateLeavePolicy
+);
+
+router.post(
+  "/policies/:policyCode/retire",
+  protect,
+  requirePermission("hr"),
+  retireLeavePolicy
+);
+
+/*
+ * Leave requests.
+ *
+ * HR users can retrieve all records.
+ * Self-service users are restricted
+ * to their own records by the controller.
+ */
+
 router.get(
   "/",
   protect,
-  requireAnyPermission(["hr", "leaveSelfService", "hrSelfService"]),
+  canAccessLeaveSelfService,
   getLeaveRequests
 );
 
-// Staff self-service or HR admin can create leave requests
 router.post(
   "/",
   protect,
-  requireAnyPermission(["hr", "leaveSelfService", "hrSelfService"]),
+  canAccessLeaveSelfService,
   createLeaveRequest
 );
 
-// Admin HR can view a single leave request
-router.get("/:leaveRequestId", protect, requirePermission("hr"), getLeaveRequestById);
+/*
+ * Generic parameter routes must remain last.
+ */
 
-// Admin HR actions
-router.put("/:leaveRequestId/approve", protect, requirePermission("hr"), approveLeaveRequest);
-router.put("/:leaveRequestId/reject", protect, requirePermission("hr"), rejectLeaveRequest);
+router.get(
+  "/:leaveRequestId",
+  protect,
+  canAccessLeaveSelfService,
+  getLeaveRequestById
+);
+
+router.put(
+  "/:leaveRequestId/approve",
+  protect,
+  requirePermission("hr"),
+  approveLeaveRequest
+);
+
+router.put(
+  "/:leaveRequestId/reject",
+  protect,
+  requirePermission("hr"),
+  rejectLeaveRequest
+);
 
 module.exports = router;
