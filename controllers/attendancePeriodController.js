@@ -4,8 +4,17 @@ const AttendancePeriod = require(
 
 const {
   buildAttendancePeriodPreview,
+  isValidYmdDate,
 } = require(
   "../services/attendancePeriodService"
+);
+
+const {
+  shiftYmdDate,
+  getScheduledMonthlyPayDate,
+  getMonthlyAttendanceCutoffDate,
+} = require(
+  "../utils/payrollSchedule"
 );
 
 const {
@@ -45,45 +54,97 @@ const getJamaicaTodayYmd = () => {
   return `${values.year}-${values.month}-${values.day}`;
 };
 
-const validatePeriodRequest = ({
-  periodKey,
-  periodStart,
-  periodEnd,
-}) => {
-  const normalizedPeriodKey =
-    normalizeString(periodKey);
+const resolveAttendancePeriodDates =
+  async ({
+    employeeId,
+    periodKey,
+    requestedPeriodStart,
+  }) => {
+    const normalizedEmployeeId =
+      normalizeString(employeeId);
 
-  if (
-    !PERIOD_KEY_PATTERN.test(
-      normalizedPeriodKey
-    )
-  ) {
-    throw new Error(
-      "Attendance period key must use YYYY-MM format."
-    );
-  }
+    const normalizedPeriodKey =
+      normalizeString(periodKey);
 
-  const normalizedStart =
-    normalizeString(periodStart);
+    if (!normalizedEmployeeId) {
+      throw new Error(
+        "Employee ID is required."
+      );
+    }
 
-  const normalizedEnd =
-    normalizeString(periodEnd);
+    if (
+      !PERIOD_KEY_PATTERN.test(
+        normalizedPeriodKey
+      )
+    ) {
+      throw new Error(
+        "Attendance period key must use YYYY-MM format."
+      );
+    }
 
-  if (
-    !normalizedStart.startsWith(
-      `${normalizedPeriodKey}-`
-    ) ||
-    !normalizedEnd.startsWith(
-      `${normalizedPeriodKey}-`
-    )
-  ) {
-    throw new Error(
-      "Attendance period dates must belong to the selected period key."
-    );
-  }
+    const scheduledPayDate =
+      getScheduledMonthlyPayDate(
+        normalizedPeriodKey
+      );
 
-  return normalizedPeriodKey;
-};
+    const periodEnd =
+      getMonthlyAttendanceCutoffDate(
+        normalizedPeriodKey
+      );
+
+    /*
+     * Continue from the preceding controlled
+     * attendance period so no work dates are
+     * omitted or counted twice.
+     */
+    const precedingPeriod =
+      await AttendancePeriod.findOne({
+        employeeId:
+          normalizedEmployeeId,
+        periodKey: {
+          $lt: normalizedPeriodKey,
+        },
+      })
+        .sort({
+          periodEnd: -1,
+          createdAt: -1,
+        })
+        .select(
+          "periodKey periodEnd"
+        );
+
+    let periodStart = "";
+
+    if (precedingPeriod?.periodEnd) {
+      periodStart = shiftYmdDate(
+        precedingPeriod.periodEnd,
+        1
+      );
+    } else {
+      const suppliedStart =
+        normalizeString(
+          requestedPeriodStart
+        );
+
+      periodStart =
+        isValidYmdDate(suppliedStart)
+          ? suppliedStart
+          : `${normalizedPeriodKey}-01`;
+    }
+
+    if (periodStart > periodEnd) {
+      throw new Error(
+        `Attendance period start ${periodStart} cannot be later than payroll cutoff ${periodEnd}.`
+      );
+    }
+
+    return {
+      normalizedPeriodKey,
+      periodStart,
+      periodEnd,
+      scheduledPayDate,
+    };
+  };
 
 const buildSafeAttendanceAuditSnapshot = (
   period
@@ -423,20 +484,28 @@ const generateAttendancePreview =
       publicHolidays = [],
     } = body;
 
-    const normalizedPeriodKey =
-      validatePeriodRequest({
+        const {
+      normalizedPeriodKey,
+      periodStart:
+        resolvedPeriodStart,
+      periodEnd:
+        resolvedPeriodEnd,
+    } =
+      await resolveAttendancePeriodDates({
+        employeeId,
         periodKey,
-        periodStart,
-        periodEnd,
+        requestedPeriodStart:
+          periodStart,
       });
 
     return buildAttendancePeriodPreview({
       employeeId,
-      periodKey: normalizedPeriodKey,
+      periodKey:
+        normalizedPeriodKey,
       periodStart:
-        normalizeString(periodStart),
+        resolvedPeriodStart,
       periodEnd:
-        normalizeString(periodEnd),
+        resolvedPeriodEnd,
       defaultStartTime,
       defaultEndTime,
       lateGraceMinutes,
@@ -922,6 +991,12 @@ const createAttendancePeriodDraft =
        * Only the server-generated employee, schedule,
        * attendance and totals snapshots are refreshed.
        */
+            attendancePeriod.periodStart =
+        periodDraft.periodStart;
+
+      attendancePeriod.periodEnd =
+        periodDraft.periodEnd;
+
       attendancePeriod.employeeSnapshot =
         periodDraft.employeeSnapshot;
 
@@ -1893,8 +1968,8 @@ const lockAttendancePeriod =
       const today =
         getJamaicaTodayYmd();
 
-      if (
-        attendancePeriod.periodEnd >
+            if (
+        attendancePeriod.periodEnd >=
         today
       ) {
         return res.status(409).json({
@@ -2337,8 +2412,8 @@ const lockAttendancePeriod =
       const today =
         getJamaicaTodayYmd();
 
-      if (
-        attendancePeriod.periodEnd >
+            if (
+        attendancePeriod.periodEnd >=
         today
       ) {
         return res.status(409).json({

@@ -20,6 +20,10 @@ const {
   resolvePayrollMinimumWageAssessment,
 } = require("../services/payrollMinimumWageService");
 
+const {
+  getScheduledMonthlyPayDate,
+} = require("../utils/payrollSchedule");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -254,42 +258,6 @@ const normalizeBoolean = (value, fallback = false) => {
   }
 
   return value === true || value === "true";
-};
-
-const getScheduledMonthlyPayDate = (payPeriod) => {
-  const normalizedPeriod = String(
-    payPeriod || ""
-  ).trim();
-
-  if (!/^\d{4}-\d{2}$/.test(normalizedPeriod)) {
-    throw new Error(
-      "Pay period must use the YYYY-MM format."
-    );
-  }
-
-  const [yearValue, monthValue] =
-    normalizedPeriod.split("-");
-
-  const year = Number(yearValue);
-  const monthIndex = Number(monthValue) - 1;
-
-  const scheduledDate = new Date(
-    Date.UTC(year, monthIndex, 25)
-  );
-
-  const scheduledDay = scheduledDate.getUTCDay();
-
-  if ([0, 1, 6].includes(scheduledDay)) {
-    while (scheduledDate.getUTCDay() !== 4) {
-      scheduledDate.setUTCDate(
-        scheduledDate.getUTCDate() - 1
-      );
-    }
-  }
-
-  return scheduledDate
-    .toISOString()
-    .slice(0, 10);
 };
 
 const getJamaicaToday = () => {
