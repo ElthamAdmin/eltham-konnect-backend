@@ -1,8 +1,11 @@
+const mongoose = require("mongoose");
+
 const LeaveRequest = require("../models/LeaveRequest");
 const HREmployee = require("../models/HREmployee");
 
 const {
   calculateLeaveRequestTreatment,
+  postLeaveBalanceTransaction,
 } = require("../services/leaveManagementService");
 
 const {
@@ -886,6 +889,287 @@ const approveLeaveRequestByManager =
     }
   };
 
+const approveLeaveRequestByHr =
+  async (req, res) => {
+    const session =
+      await mongoose.startSession();
+
+    let approvedRequest = null;
+    let beforeValues = null;
+    let balanceTransaction = null;
+
+    try {
+      await session.withTransaction(
+        async () => {
+          const leaveRequest =
+            await LeaveRequest.findOne({
+              leaveRequestId:
+                req.params.leaveRequestId,
+            }).session(session);
+
+          if (!leaveRequest) {
+            const error = new Error(
+              "Leave request was not found."
+            );
+
+            error.statusCode = 404;
+            throw error;
+          }
+
+          if (
+            leaveRequest.status !==
+            "Manager Approved"
+          ) {
+            const error = new Error(
+              `${leaveRequest.leaveRequestId} must have Manager Approved status before HR approval.`
+            );
+
+            error.statusCode = 409;
+            error.data = {
+              currentStatus:
+                leaveRequest.status,
+              requiredStatus:
+                "Manager Approved",
+            };
+            throw error;
+          }
+
+          if (
+            leaveRequest
+              .supportingDocumentsRequired &&
+            leaveRequest.documentStatus !==
+              "Verified"
+          ) {
+            const error = new Error(
+              "Required supporting documents must be verified before HR approval."
+            );
+
+            error.statusCode = 409;
+            error.data = {
+              documentStatus:
+                leaveRequest.documentStatus,
+              requiredStatus:
+                "Verified",
+            };
+            throw error;
+          }
+
+          if (
+            leaveRequest
+              .medicalCertificateRequired &&
+            !leaveRequest
+              .medicalCertificateReceived
+          ) {
+            const error = new Error(
+              "The required medical certificate must be received before HR approval."
+            );
+
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const employee =
+            await HREmployee.findOne({
+              employeeId:
+                leaveRequest.employeeId,
+            }).session(session);
+
+          if (!employee) {
+            const error = new Error(
+              "The related employee was not found."
+            );
+
+            error.statusCode = 404;
+            throw error;
+          }
+
+          beforeValues =
+            leaveRequest.toObject();
+
+          if (
+            leaveRequest.balanceEffect ===
+              "Deduct" &&
+            Number(
+              leaveRequest.balanceUnits ||
+                0
+            ) > 0
+          ) {
+            if (
+              leaveRequest.balanceApplied ||
+              leaveRequest
+                .balanceTransactionNumber
+            ) {
+              const error = new Error(
+                "The leave balance has already been applied to this request."
+              );
+
+              error.statusCode = 409;
+              throw error;
+            }
+
+            balanceTransaction =
+              await postLeaveBalanceTransaction(
+                {
+                  employee,
+                  balanceType:
+                    leaveRequest
+                      .balanceType,
+                  transactionType:
+                    "Approved Leave",
+                  units:
+                    Number(
+                      leaveRequest
+                        .balanceUnits
+                    ) * -1,
+                  effectiveDate:
+                    leaveRequest
+                      .startDate,
+                  policy:
+                    leaveRequest
+                      .policySnapshot,
+                  leaveRequestId:
+                    leaveRequest
+                      .leaveRequestId,
+                  sourceType:
+                    "Leave Request",
+                  sourceReference:
+                    leaveRequest
+                      .leaveRequestId,
+                  reason:
+                    `Approved ${leaveRequest.leaveType} leave.`,
+                  notes:
+                    normalizeString(
+                      req.body
+                        .approvalNotes
+                    ),
+                  user: req.user,
+                  session,
+                }
+              );
+
+            leaveRequest.balanceApplied =
+              true;
+            leaveRequest.balanceAppliedAt =
+              new Date();
+            leaveRequest.balanceAppliedBy =
+              getUserName(req.user);
+            leaveRequest.balanceTransactionNumber =
+              balanceTransaction.transactionNumber;
+
+            appendWorkflow({
+              leaveRequest,
+              action: "Balance Applied",
+              fromStatus:
+                "Manager Approved",
+              toStatus:
+                "Manager Approved",
+              notes:
+                `${leaveRequest.balanceUnits} ${leaveRequest.balanceType} day(s) deducted through ${balanceTransaction.transactionNumber}.`,
+              user: req.user,
+            });
+          }
+
+          leaveRequest.status =
+            "Approved";
+          leaveRequest.hrDecision = {
+            status: "Approved",
+            decidedBy:
+              getUserName(req.user),
+            decidedByUserId:
+              getUserId(req.user),
+            decidedAt: new Date(),
+            notes: normalizeString(
+              req.body.approvalNotes
+            ),
+          };
+          leaveRequest.approvalNotes =
+            normalizeString(
+              req.body.approvalNotes
+            );
+          leaveRequest.adminComment =
+            normalizeString(
+              req.body.approvalNotes
+            );
+          leaveRequest.reviewedAt =
+            new Date();
+          leaveRequest.reviewedBy =
+            getUserName(req.user);
+          leaveRequest.updatedBy =
+            getUserName(req.user);
+
+          appendWorkflow({
+            leaveRequest,
+            action: "HR Approved",
+            fromStatus:
+              "Manager Approved",
+            toStatus: "Approved",
+            notes:
+              req.body.approvalNotes,
+            user: req.user,
+          });
+
+          await leaveRequest.save({
+            session,
+          });
+
+          approvedRequest =
+            leaveRequest;
+        }
+      );
+
+      await writeAuditLog({
+        req,
+        action:
+          "HR_APPROVE_LEAVE_REQUEST",
+        module: "HR",
+        description:
+          `Leave request ${approvedRequest.leaveRequestId} HR approved.`,
+        targetType: "LeaveRequest",
+        targetId:
+          approvedRequest.leaveRequestId,
+        beforeValues,
+        afterValues:
+          approvedRequest.toObject(),
+        metadata: {
+          employeeId:
+            approvedRequest.employeeId,
+          policyCode:
+            approvedRequest.policyCode,
+          balanceTransactionNumber:
+            balanceTransaction
+              ?.transactionNumber || "",
+          payrollEffect:
+            approvedRequest
+              .payrollEffect,
+        },
+      });
+
+      return res.json({
+        success: true,
+        message:
+          "Leave request HR-approved successfully",
+        data: {
+          leaveRequest:
+            approvedRequest,
+          balanceTransaction,
+        },
+      });
+    } catch (error) {
+      console.error(
+        "HR approve leave error:",
+        error
+      );
+
+      return sendControllerError(
+        res,
+        error,
+        "Could not HR-approve the leave request."
+      );
+    } finally {
+      await session.endSession();
+    }
+  };
+
 const rejectLeaveRequest = async (
   req,
   res
@@ -1027,5 +1311,6 @@ module.exports = {
   createLeaveRequest,
   submitLeaveRequest,
   approveLeaveRequestByManager,
+  approveLeaveRequestByHr,
   rejectLeaveRequest,
 };
