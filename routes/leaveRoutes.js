@@ -24,6 +24,14 @@ const {
 );
 
 const {
+  previewLegacyLeaveBalanceMigration,
+  migrateLegacyLeaveBalances,
+  getEmployeeLeaveBalanceLedger,
+} = require(
+  "../controllers/leaveBalanceController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -86,6 +94,34 @@ router.post(
  * Preview and collection routes must remain
  * above the generic /:leaveRequestId routes.
  */
+
+/*
+ * H5 controlled leave-balance ledger.
+ *
+ * Static migration routes must remain above
+ * the generic /balances/:employeeId route.
+ */
+
+router.get(
+  "/balances/legacy-migration-preview",
+  protect,
+  requirePermission("hr"),
+  previewLegacyLeaveBalanceMigration
+);
+
+router.post(
+  "/balances/legacy-migration",
+  protect,
+  requirePermission("hr"),
+  migrateLegacyLeaveBalances
+);
+
+router.get(
+  "/balances/:employeeId",
+  protect,
+  requirePermission("hr"),
+  getEmployeeLeaveBalanceLedger
+);
 
 router.post(
   "/preview",
