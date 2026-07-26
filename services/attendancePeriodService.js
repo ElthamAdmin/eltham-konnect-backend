@@ -252,12 +252,186 @@ const normalizePublicHolidays = (
   return holidayMap;
 };
 
+const resolveLeaveDayTreatment = ({
+  leave,
+  workDate,
+  scheduledWorkday,
+  scheduledMinutes,
+}) => {
+  if (!leave || !scheduledWorkday) {
+    return {
+      leavePayableMinutes: 0,
+      leaveUnpaidMinutes: 0,
+      leaveNisCoordinatedMinutes: 0,
+      leaveRequiresPayrollReview: false,
+      leaveProcessingNotes: "",
+    };
+  }
+
+  const dailyTreatment =
+    Array.isArray(leave.dailyBreakdown)
+      ? leave.dailyBreakdown.find(
+          (entry) =>
+            entry.workDate === workDate
+        )
+      : null;
+
+  const payTreatment = String(
+    dailyTreatment?.payTreatment ||
+      leave.payTreatment ||
+      ""
+  ).trim();
+
+  let leavePayableMinutes =
+    roundMinutes(
+      dailyTreatment?.payableMinutes
+    );
+
+  let leaveUnpaidMinutes =
+    roundMinutes(
+      dailyTreatment?.unpaidMinutes
+    );
+
+  let leaveNisCoordinatedMinutes = 0;
+  let leaveRequiresPayrollReview =
+    false;
+
+  const notes = [];
+
+  if (payTreatment === "Paid") {
+    if (!dailyTreatment) {
+      leavePayableMinutes =
+        scheduledMinutes;
+    }
+
+    leaveUnpaidMinutes = 0;
+  } else if (
+    payTreatment === "Unpaid"
+  ) {
+    leavePayableMinutes = 0;
+
+    if (!dailyTreatment) {
+      leaveUnpaidMinutes =
+        scheduledMinutes;
+    }
+  } else if (
+    payTreatment === "NIS-Coordinated"
+  ) {
+    leavePayableMinutes = 0;
+    leaveUnpaidMinutes = 0;
+    leaveNisCoordinatedMinutes =
+      scheduledMinutes;
+    leaveRequiresPayrollReview = true;
+
+    notes.push(
+      "NIS-coordinated leave requires a controlled benefit decision before payroll treatment is final."
+    );
+  } else if (
+    payTreatment === "Mixed"
+  ) {
+    if (!dailyTreatment) {
+      leavePayableMinutes = 0;
+      leaveUnpaidMinutes = 0;
+      leaveRequiresPayrollReview =
+        true;
+
+      notes.push(
+        "Mixed leave treatment has no daily paid/unpaid allocation and requires payroll review."
+      );
+    }
+  } else {
+    leavePayableMinutes = 0;
+    leaveUnpaidMinutes = 0;
+    leaveRequiresPayrollReview = true;
+
+    notes.push(
+      "The approved leave request does not contain a recognized pay treatment."
+    );
+  }
+
+  const requestedAllocatedMinutes =
+    leavePayableMinutes +
+    leaveUnpaidMinutes +
+    leaveNisCoordinatedMinutes;
+
+  if (
+    requestedAllocatedMinutes >
+    scheduledMinutes
+  ) {
+    const excess =
+      requestedAllocatedMinutes -
+      scheduledMinutes;
+
+    leaveRequiresPayrollReview = true;
+
+    notes.push(
+      `Leave treatment exceeds the controlled schedule by ${excess} minutes.`
+    );
+  }
+
+  leavePayableMinutes = Math.min(
+    scheduledMinutes,
+    leavePayableMinutes
+  );
+
+  leaveUnpaidMinutes = Math.min(
+    Math.max(
+      0,
+      scheduledMinutes -
+        leavePayableMinutes
+    ),
+    leaveUnpaidMinutes
+  );
+
+  leaveNisCoordinatedMinutes =
+    Math.min(
+      Math.max(
+        0,
+        scheduledMinutes -
+          leavePayableMinutes -
+          leaveUnpaidMinutes
+      ),
+      leaveNisCoordinatedMinutes
+    );
+
+  const allocatedMinutes =
+    leavePayableMinutes +
+    leaveUnpaidMinutes +
+    leaveNisCoordinatedMinutes;
+
+  if (
+    payTreatment === "Mixed" &&
+    allocatedMinutes !==
+      scheduledMinutes
+  ) {
+    leaveRequiresPayrollReview = true;
+
+    notes.push(
+      "Mixed leave treatment does not fully reconcile to the controlled scheduled minutes."
+    );
+  }
+
+  return {
+    leavePayableMinutes,
+    leaveUnpaidMinutes,
+    leaveNisCoordinatedMinutes,
+    leaveRequiresPayrollReview,
+    leaveProcessingNotes:
+      notes.join(" "),
+  };
+};
+
 const sumTotals = (
   dailyEntries
 ) => {
   const totals = {
     scheduledMinutes: 0,
     sourceWorkedMinutes: 0,
+    payablePhysicalWorkedMinutes: 0,
+    payableLeaveMinutes: 0,
+    unpaidLeaveMinutes: 0,
+    nisCoordinatedLeaveMinutes: 0,
+    leavePayrollReviewDayCount: 0,
     approvedAdjustmentMinutes: 0,
     payableWorkedMinutes: 0,
     regularMinutes: 0,
@@ -281,6 +455,36 @@ const sumTotals = (
       Number(
         day.sourceWorkedMinutes || 0
       );
+
+    totals.payablePhysicalWorkedMinutes +=
+      Number(
+        day.payablePhysicalWorkedMinutes ||
+          0
+      );
+
+    totals.payableLeaveMinutes +=
+      Number(
+        day.leavePayableMinutes || 0
+      );
+
+    totals.unpaidLeaveMinutes +=
+      Number(
+        day.leaveUnpaidMinutes || 0
+      );
+
+    totals.nisCoordinatedLeaveMinutes +=
+      Number(
+        day.leaveNisCoordinatedMinutes ||
+          0
+      );
+
+    if (
+      day.leaveRequiresPayrollReview ===
+      true
+    ) {
+      totals.leavePayrollReviewDayCount +=
+        1;
+    }
 
     totals.approvedAdjustmentMinutes +=
       Number(
@@ -325,8 +529,8 @@ const sumTotals = (
     }
 
     if (
-      day.dayStatus ===
-      "Approved Leave"
+      day.approvedLeave === true &&
+      day.scheduledWorkday === true
     ) {
       totals.leaveDayCount += 1;
     }
@@ -741,12 +945,36 @@ const buildAttendancePeriodPreview =
             )
           : 0;
 
-      const payableWorkedMinutes =
+      const payablePhysicalWorkedMinutes =
         Math.max(
           0,
           sourceWorkedMinutes -
             unrecordedBreakDeduction
         );
+
+      const leaveTreatment =
+        resolveLeaveDayTreatment({
+          leave,
+          workDate,
+          scheduledWorkday,
+          scheduledMinutes,
+        });
+
+      /*
+       * A raw attendance record during approved leave is
+       * held for manager review. Do not add paid-leave
+       * minutes to physical worked minutes because that
+       * would duplicate pay for the same scheduled time.
+       */
+      const effectiveLeavePayableMinutes =
+        leave && dayLogs.length === 0
+          ? leaveTreatment
+              .leavePayableMinutes
+          : 0;
+
+      const payableWorkedMinutes =
+        payablePhysicalWorkedMinutes +
+        effectiveLeavePayableMinutes;
 
       const firstLog =
         dayLogs[0] || null;
@@ -782,12 +1010,22 @@ const buildAttendancePeriodPreview =
         );
       }
 
-            if (
+      if (
         leave &&
         dayLogs.length > 0
       ) {
         exceptionNotes.push(
           "Attendance was recorded during an approved leave period."
+        );
+      }
+
+      if (
+        leaveTreatment
+          .leaveProcessingNotes
+      ) {
+        exceptionNotes.push(
+          leaveTreatment
+            .leaveProcessingNotes
         );
       }
 
@@ -906,6 +1144,41 @@ const buildAttendancePeriodPreview =
           Boolean(leave),
         leaveRequestNumber:
           leave?.leaveRequestId || "",
+        leaveType:
+          leave?.leaveType || "",
+        leavePolicyCode:
+          leave?.policyCode || "",
+        leavePolicyName:
+          leave?.policyName || "",
+        leaveLegalClassification:
+          leave?.legalClassification ||
+          "",
+        leavePayTreatment:
+          leave?.payTreatment || "",
+        leavePayrollEffect:
+          leave?.payrollEffect || "",
+        leavePayableMinutes:
+          effectiveLeavePayableMinutes,
+        leaveUnpaidMinutes:
+          leave && dayLogs.length === 0
+            ? leaveTreatment
+                .leaveUnpaidMinutes
+            : 0,
+        leaveNisCoordinatedMinutes:
+          leave && dayLogs.length === 0
+            ? leaveTreatment
+                .leaveNisCoordinatedMinutes
+            : 0,
+        leaveRequiresPayrollReview:
+          Boolean(leave) &&
+          (
+            leaveTreatment
+              .leaveRequiresPayrollReview ||
+            dayLogs.length > 0
+          ),
+        leaveProcessingNotes:
+          leaveTreatment
+            .leaveProcessingNotes,
                 scheduledStartTime:
           scheduledWorkday
             ? scheduledStartTime
@@ -937,8 +1210,9 @@ const buildAttendancePeriodPreview =
         lunchMinutes:
           sourceLunchMinutes,
         sourceWorkedMinutes,
+        payablePhysicalWorkedMinutes,
         approvedAdjustmentMinutes: 0,
-                payableWorkedMinutes,
+        payableWorkedMinutes,
         regularMinutes,
         lateMinutes,
         absenceMinutes,
@@ -978,9 +1252,15 @@ const buildAttendancePeriodPreview =
           ) || 0
         );
 
-      const payableMinutes =
+      /*
+       * Only physical work contributes to the weekly
+       * overtime threshold. Paid leave remains payable
+       * attendance but cannot manufacture overtime.
+       */
+      const physicalPayableMinutes =
         roundMinutes(
-          entry.payableWorkedMinutes
+          entry
+            .payablePhysicalWorkedMinutes
         );
 
       const remainingRegularMinutes =
@@ -992,21 +1272,21 @@ const buildAttendancePeriodPreview =
 
       entry.regularMinutes =
         Math.min(
-          payableMinutes,
+          physicalPayableMinutes,
           remainingRegularMinutes
         );
 
       entry.overtimeMinutes =
         Math.max(
           0,
-          payableMinutes -
+          physicalPayableMinutes -
             entry.regularMinutes
         );
 
       workedMinutesByWeek.set(
         weekKey,
         workedBefore +
-          payableMinutes
+          physicalPayableMinutes
       );
     }
 

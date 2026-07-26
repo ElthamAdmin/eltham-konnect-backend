@@ -30,6 +30,23 @@ const DAY_STATUSES = [
   "No Record",
 ];
 
+const LEAVE_PAY_TREATMENTS = [
+  "",
+  "Paid",
+  "Unpaid",
+  "Mixed",
+  "NIS-Coordinated",
+];
+
+const LEAVE_PAYROLL_EFFECTS = [
+  "",
+  "Include Scheduled Pay",
+  "Exclude Leave Time",
+  "Mixed Treatment",
+  "NIS Benefit Coordination",
+  "Manual Review",
+];
+
 const ADJUSTMENT_TYPES = [
   "Clock In",
   "Clock Out",
@@ -327,6 +344,71 @@ const AttendancePeriodSchema =
             trim: true,
           },
 
+          leaveType: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leavePolicyCode: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leavePolicyName: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leaveLegalClassification: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leavePayTreatment: {
+            type: String,
+            enum: LEAVE_PAY_TREATMENTS,
+            default: "",
+          },
+
+          leavePayrollEffect: {
+            type: String,
+            enum: LEAVE_PAYROLL_EFFECTS,
+            default: "",
+          },
+
+          leavePayableMinutes: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+
+          leaveUnpaidMinutes: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+
+          leaveNisCoordinatedMinutes: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+
+          leaveRequiresPayrollReview: {
+            type: Boolean,
+            default: false,
+          },
+
+          leaveProcessingNotes: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
           scheduledStartTime: {
             type: String,
             default: "",
@@ -378,6 +460,12 @@ const AttendancePeriodSchema =
           },
 
           sourceWorkedMinutes: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+
+          payablePhysicalWorkedMinutes: {
             type: Number,
             default: 0,
             min: 0,
@@ -519,6 +607,36 @@ const AttendancePeriodSchema =
         },
 
         sourceWorkedMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        payablePhysicalWorkedMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        payableLeaveMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        unpaidLeaveMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        nisCoordinatedLeaveMinutes: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
+
+        leavePayrollReviewDayCount: {
           type: Number,
           default: 0,
           min: 0,
