@@ -686,7 +686,12 @@ const getEmployeeLeaveBalances =
       LeaveBalanceTransaction.find({
         employeeId:
           normalizedEmployeeId,
-        status: "Posted",
+        status: {
+  $in: [
+    "Posted",
+    "Reversed",
+  ],
+},
         effectiveDate: {
           $lte: normalizedDate,
         },
@@ -959,7 +964,7 @@ const reverseLeaveBalanceTransaction =
         units:
           Number(original.units) * -1,
         effectiveDate:
-          getJamaicaTodayYmd(),
+  original.effectiveDate,
         leaveRequestId:
           original.leaveRequestId,
         relatedTransactionNumber:
@@ -976,8 +981,10 @@ const reverseLeaveBalanceTransaction =
       });
 
     original.status = "Reversed";
-    original.reversedBy =
-      getUserName(user);
+original.relatedTransactionNumber =
+  reversal.transactionNumber;
+original.reversedBy =
+  getUserName(user);
     original.reversedByUserId =
       getUserId(user);
     original.reversedAt =
