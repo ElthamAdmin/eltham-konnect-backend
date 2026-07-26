@@ -6,6 +6,7 @@ const HREmployee = require("../models/HREmployee");
 const {
   calculateLeaveRequestTreatment,
   postLeaveBalanceTransaction,
+  reverseLeaveBalanceTransaction,
 } = require("../services/leaveManagementService");
 
 const {
@@ -1170,6 +1171,270 @@ const approveLeaveRequestByHr =
     }
   };
 
+const cancelLeaveRequest = async (
+  req,
+  res
+) => {
+  const session =
+    await mongoose.startSession();
+
+  let cancelledRequest = null;
+  let beforeValues = null;
+  let reversalResult = null;
+
+  try {
+    await session.withTransaction(
+      async () => {
+        const leaveRequest =
+          await LeaveRequest.findOne({
+            leaveRequestId:
+              req.params.leaveRequestId,
+          }).session(session);
+
+        if (!leaveRequest) {
+          const error = new Error(
+            "Leave request was not found."
+          );
+
+          error.statusCode = 404;
+          throw error;
+        }
+
+        if (
+          !canAccessRequest(
+            req,
+            leaveRequest
+          )
+        ) {
+          const error = new Error(
+            "Access denied."
+          );
+
+          error.statusCode = 403;
+          throw error;
+        }
+
+        const cancellableStatuses = [
+          "Draft",
+          "Pending",
+          "Submitted",
+          "Manager Approved",
+          "Approved",
+        ];
+
+        if (
+          !cancellableStatuses.includes(
+            leaveRequest.status
+          )
+        ) {
+          const error = new Error(
+            `${leaveRequest.leaveRequestId} cannot be cancelled while its status is ${leaveRequest.status}.`
+          );
+
+          error.statusCode = 409;
+          throw error;
+        }
+
+        if (
+          !isHrUser(req) &&
+          ![
+            "Draft",
+            "Pending",
+            "Submitted",
+          ].includes(
+            leaveRequest.status
+          )
+        ) {
+          const error = new Error(
+            "An HR user must cancel a manager-approved or approved leave request."
+          );
+
+          error.statusCode = 403;
+          throw error;
+        }
+
+        const cancellationReason =
+          normalizeString(
+            req.body
+              .cancellationReason
+          );
+
+        if (!cancellationReason) {
+          const error = new Error(
+            "A cancellation reason is required."
+          );
+
+          error.statusCode = 400;
+          throw error;
+        }
+
+        if (
+          leaveRequest
+            .attendanceProcessing
+            ?.status === "Applied"
+        ) {
+          const error = new Error(
+            "Attendance effects must be reversed before this leave request can be cancelled."
+          );
+
+          error.statusCode = 409;
+          throw error;
+        }
+
+        if (
+          leaveRequest.payrollProcessed ||
+          leaveRequest
+            .payrollProcessing
+            ?.status === "Applied"
+        ) {
+          const error = new Error(
+            "Payroll effects must be reversed before this leave request can be cancelled."
+          );
+
+          error.statusCode = 409;
+          throw error;
+        }
+
+        beforeValues =
+          leaveRequest.toObject();
+        const previousStatus =
+          leaveRequest.status;
+
+        if (
+          leaveRequest.balanceApplied &&
+          normalizeString(
+            leaveRequest
+              .balanceTransactionNumber
+          )
+        ) {
+          if (
+            normalizeString(
+              leaveRequest
+                .balanceReversalTransactionNumber
+            )
+          ) {
+            const error = new Error(
+              "The leave balance transaction has already been reversed."
+            );
+
+            error.statusCode = 409;
+            throw error;
+          }
+
+          reversalResult =
+            await reverseLeaveBalanceTransaction(
+              {
+                transactionNumber:
+                  leaveRequest
+                    .balanceTransactionNumber,
+                reversalReason:
+                  cancellationReason,
+                user: req.user,
+                session,
+              }
+            );
+
+          leaveRequest.balanceReversalTransactionNumber =
+            reversalResult.reversal
+              .transactionNumber;
+
+          appendWorkflow({
+            leaveRequest,
+            action:
+              "Balance Reversed",
+            fromStatus:
+              previousStatus,
+            toStatus:
+              previousStatus,
+            notes:
+              `Balance transaction ${leaveRequest.balanceTransactionNumber} reversed by ${reversalResult.reversal.transactionNumber}.`,
+            user: req.user,
+          });
+        }
+
+        leaveRequest.status =
+          "Cancelled";
+        leaveRequest.cancelledAt =
+          new Date();
+        leaveRequest.cancelledBy =
+          getUserName(req.user);
+        leaveRequest.cancellationReason =
+          cancellationReason;
+        leaveRequest.updatedBy =
+          getUserName(req.user);
+
+        appendWorkflow({
+          leaveRequest,
+          action: "Cancelled",
+          fromStatus:
+            previousStatus,
+          toStatus: "Cancelled",
+          notes:
+            cancellationReason,
+          user: req.user,
+        });
+
+        await leaveRequest.save({
+          session,
+        });
+
+        cancelledRequest =
+          leaveRequest;
+      }
+    );
+
+    await writeAuditLog({
+      req,
+      action:
+        "CANCEL_LEAVE_REQUEST",
+      module: "HR",
+      description:
+        `Leave request ${cancelledRequest.leaveRequestId} cancelled.`,
+      targetType: "LeaveRequest",
+      targetId:
+        cancelledRequest.leaveRequestId,
+      beforeValues,
+      afterValues:
+        cancelledRequest.toObject(),
+      metadata: {
+        employeeId:
+          cancelledRequest.employeeId,
+        balanceTransactionNumber:
+          cancelledRequest
+            .balanceTransactionNumber,
+        balanceReversalTransactionNumber:
+          cancelledRequest
+            .balanceReversalTransactionNumber,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message:
+        "Leave request cancelled successfully",
+      data: {
+        leaveRequest:
+          cancelledRequest,
+        balanceReversal:
+          reversalResult,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Cancel leave request error:",
+      error
+    );
+
+    return sendControllerError(
+      res,
+      error,
+      "Could not cancel the leave request."
+    );
+  } finally {
+    await session.endSession();
+  }
+};
+
 const rejectLeaveRequest = async (
   req,
   res
@@ -1312,5 +1577,6 @@ module.exports = {
   submitLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
+  cancelLeaveRequest,
   rejectLeaveRequest,
 };

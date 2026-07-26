@@ -9,6 +9,7 @@ const {
   submitLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
+  cancelLeaveRequest,
   rejectLeaveRequest,
 } = require(
   "../controllers/leaveController"
@@ -175,6 +176,13 @@ router.post(
   protect,
   requirePermission("hr"),
   approveLeaveRequestByHr
+);
+
+router.post(
+  "/:leaveRequestId/cancel",
+  protect,
+  canAccessLeaveSelfService,
+  cancelLeaveRequest
 );
 
 router.post(
