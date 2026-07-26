@@ -4,8 +4,10 @@ const router = express.Router();
 const {
   getLeaveRequests,
   getLeaveRequestById,
+  previewLeaveRequest,
   createLeaveRequest,
-  approveLeaveRequest,
+  submitLeaveRequest,
+  approveLeaveRequestByManager,
   rejectLeaveRequest,
 } = require(
   "../controllers/leaveController"
@@ -79,12 +81,18 @@ router.post(
 );
 
 /*
- * Leave requests.
+ * H5 controlled leave requests.
  *
- * HR users can retrieve all records.
- * Self-service users are restricted
- * to their own records by the controller.
+ * Preview and collection routes must remain
+ * above the generic /:leaveRequestId routes.
  */
+
+router.post(
+  "/preview",
+  protect,
+  canAccessLeaveSelfService,
+  previewLeaveRequest
+);
 
 router.get(
   "/",
@@ -111,14 +119,21 @@ router.get(
   getLeaveRequestById
 );
 
-router.put(
-  "/:leaveRequestId/approve",
+router.post(
+  "/:leaveRequestId/submit",
   protect,
-  requirePermission("hr"),
-  approveLeaveRequest
+  canAccessLeaveSelfService,
+  submitLeaveRequest
 );
 
-router.put(
+router.post(
+  "/:leaveRequestId/manager-approve",
+  protect,
+  requirePermission("hr"),
+  approveLeaveRequestByManager
+);
+
+router.post(
   "/:leaveRequestId/reject",
   protect,
   requirePermission("hr"),
