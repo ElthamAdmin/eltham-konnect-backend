@@ -19,6 +19,8 @@ const LEAVE_TYPES = [
 const LEAVE_STATUSES = [
   "Draft",
   "Pending",
+  "Submitted",
+  "Manager Approved",
   "Approved",
   "Rejected",
   "Cancelled",
@@ -59,17 +61,49 @@ const BALANCE_EFFECTS = [
   "Manual Adjustment",
 ];
 
-const WORKFLOW_ACTIONS = [
-  "Created",
+const DECISION_STATUSES = [
+  "Not Required",
+  "Pending",
+  "Approved",
+  "Rejected",
+];
+
+const PROCESSING_STATUSES = [
+  "Not Required",
+  "Pending",
+  "Applied",
+  "Failed",
+  "Reversed",
+];
+
+const NIS_COORDINATION_STATUSES = [
+  "Not Required",
+  "Pending",
   "Submitted",
   "Approved",
   "Rejected",
+  "Paid",
+];
+
+const WORKFLOW_ACTIONS = [
+  "Created",
+  "Submitted",
+  "Manager Approved",
+  "HR Approved",
+  "Rejected",
   "Cancelled",
   "Completed",
+  "Employee Acknowledged",
   "Document Added",
   "Document Verified",
+  "Document Rejected",
   "Balance Applied",
+  "Balance Reversed",
+  "Attendance Applied",
+  "Attendance Reversed",
   "Payroll Effect Confirmed",
+  "Payroll Effect Reversed",
+  "NIS Coordination Updated",
 ];
 
 const YMD_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -382,6 +416,20 @@ const LeaveRequestSchema = new mongoose.Schema(
       trim: true,
     },
 
+        balanceTransactionNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    balanceReversalTransactionNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
     reason: {
       type: String,
       default: "",
@@ -550,6 +598,103 @@ const LeaveRequestSchema = new mongoose.Schema(
       trim: true,
     },
 
+        managerDecision: {
+      status: {
+        type: String,
+        enum: DECISION_STATUSES,
+        default: "Pending",
+      },
+
+      decidedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      decidedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      decidedAt: {
+        type: Date,
+        default: null,
+      },
+
+      notes: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
+    hrDecision: {
+      status: {
+        type: String,
+        enum: DECISION_STATUSES,
+        default: "Pending",
+      },
+
+      decidedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      decidedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      decidedAt: {
+        type: Date,
+        default: null,
+      },
+
+      notes: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
+    employeeAcknowledgement: {
+      required: {
+        type: Boolean,
+        default: false,
+      },
+
+      acknowledged: {
+        type: Boolean,
+        default: false,
+      },
+
+      acknowledgedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      acknowledgedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      acknowledgedAt: {
+        type: Date,
+        default: null,
+      },
+
+      comments: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
     cancelledAt: {
       type: Date,
       default: null,
@@ -582,6 +727,121 @@ const LeaveRequestSchema = new mongoose.Schema(
     payrollProcessedAt: {
       type: Date,
       default: null,
+    },
+
+        attendanceProcessing: {
+      status: {
+        type: String,
+        enum: PROCESSING_STATUSES,
+        default: "Pending",
+      },
+
+      processedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      processedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      processedAt: {
+        type: Date,
+        default: null,
+      },
+
+      errorMessage: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
+    payrollProcessing: {
+      status: {
+        type: String,
+        enum: PROCESSING_STATUSES,
+        default: "Pending",
+      },
+
+      processedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      processedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      processedAt: {
+        type: Date,
+        default: null,
+      },
+
+      errorMessage: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
+    nisCoordination: {
+      required: {
+        type: Boolean,
+        default: false,
+      },
+
+      status: {
+        type: String,
+        enum: NIS_COORDINATION_STATUSES,
+        default: "Not Required",
+      },
+
+      claimReference: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      benefitDecisionReference: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      approvedBenefitAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      benefitPaidAmount: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      submittedAt: {
+        type: Date,
+        default: null,
+      },
+
+      decidedAt: {
+        type: Date,
+        default: null,
+      },
+
+      notes: {
+        type: String,
+        default: "",
+        trim: true,
+      },
     },
 
     attendancePeriodsUpdated: [
@@ -735,13 +995,30 @@ LeaveRequestSchema.pre(
         "Exclude Leave Time";
     }
 
-    if (
-      this.payTreatment === "Paid" ||
-      this.payTreatment ===
-        "NIS-Coordinated"
-    ) {
+        /*
+     * Paid leave is employer-payable attendance.
+     * Mixed and NIS-coordinated treatments must preserve
+     * the value resolved from their effective policy.
+     */
+    if (this.payTreatment === "Paid") {
       this.countsAsPayableAttendance =
         true;
+    }
+
+    if (
+      this.payTreatment ===
+      "NIS-Coordinated"
+    ) {
+      this.nisCoordination.required =
+        true;
+
+      if (
+        this.nisCoordination.status ===
+        "Not Required"
+      ) {
+        this.nisCoordination.status =
+          "Pending";
+      }
     }
   }
 );

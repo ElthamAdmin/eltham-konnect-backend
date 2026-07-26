@@ -541,16 +541,24 @@ const calculateLeaveRequestTreatment =
               payableMinutes
           );
         }
-      } else if (
+            } else if (
         policy.payTreatment ===
         "NIS-Coordinated"
       ) {
         /*
-         * Preserve scheduled payable time for attendance,
-         * while payroll separately reviews NIS coordination.
+         * Preserve the scheduled absence as evidence, but
+         * do not classify it as employer-payable attendance
+         * unless the effective policy explicitly requires it.
          */
-        payableMinutes =
-          scheduledMinutes;
+        if (
+          policy.countsAsPayableAttendance
+        ) {
+          payableMinutes =
+            scheduledMinutes;
+        } else {
+          unpaidMinutes =
+            scheduledMinutes;
+        }
       }
 
       totalScheduledMinutes +=
@@ -571,10 +579,13 @@ const calculateLeaveRequestTreatment =
         unpaidMinutes,
         payTreatment:
           policy.payTreatment,
-        notes:
-          scheduledWorkday
-            ? `${policy.policyName} applied.`
-            : "Not a required workday.",
+                notes:
+          !scheduledWorkday
+            ? "Not a required workday."
+            : policy.payTreatment ===
+                "NIS-Coordinated"
+              ? `${policy.policyName} applied; NIS benefit coordination is required.`
+              : `${policy.policyName} applied.`,
       });
     }
 
