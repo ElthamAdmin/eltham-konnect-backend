@@ -263,6 +263,9 @@ const resolveLeaveDayTreatment = ({
       leavePayableMinutes: 0,
       leaveUnpaidMinutes: 0,
       leaveNisCoordinatedMinutes: 0,
+      leaveNisCoordinationStatus: "",
+      leaveNisDecisionReference: "",
+      leaveNisApprovedBenefitAmount: 0,
       leaveRequiresPayrollReview: false,
       leaveProcessingNotes: "",
     };
@@ -293,6 +296,24 @@ const resolveLeaveDayTreatment = ({
     );
 
   let leaveNisCoordinatedMinutes = 0;
+  const leaveNisCoordinationStatus =
+    String(
+      leave.nisCoordination?.status ||
+        ""
+    ).trim();
+  const leaveNisDecisionReference =
+    String(
+      leave.nisCoordination
+        ?.benefitDecisionReference || ""
+    ).trim();
+  const leaveNisApprovedBenefitAmount =
+    Math.max(
+      0,
+      Number(
+        leave.nisCoordination
+          ?.approvedBenefitAmount || 0
+      )
+    );
   let leaveRequiresPayrollReview =
     false;
 
@@ -321,11 +342,20 @@ const resolveLeaveDayTreatment = ({
     leaveUnpaidMinutes = 0;
     leaveNisCoordinatedMinutes =
       scheduledMinutes;
-    leaveRequiresPayrollReview = true;
+    leaveRequiresPayrollReview =
+      ![
+        "Approved",
+        "Rejected",
+        "Paid",
+      ].includes(
+        leaveNisCoordinationStatus
+      );
 
-    notes.push(
-      "NIS-coordinated leave requires a controlled benefit decision before payroll treatment is final."
-    );
+    if (leaveRequiresPayrollReview) {
+      notes.push(
+        "NIS-coordinated leave requires a controlled benefit decision before payroll treatment is final."
+      );
+    }
   } else if (
     payTreatment === "Mixed"
   ) {
@@ -415,6 +445,9 @@ const resolveLeaveDayTreatment = ({
     leavePayableMinutes,
     leaveUnpaidMinutes,
     leaveNisCoordinatedMinutes,
+    leaveNisCoordinationStatus,
+    leaveNisDecisionReference,
+    leaveNisApprovedBenefitAmount,
     leaveRequiresPayrollReview,
     leaveProcessingNotes:
       notes.join(" "),
@@ -1169,6 +1202,15 @@ const buildAttendancePeriodPreview =
             ? leaveTreatment
                 .leaveNisCoordinatedMinutes
             : 0,
+        leaveNisCoordinationStatus:
+          leaveTreatment
+            .leaveNisCoordinationStatus,
+        leaveNisDecisionReference:
+          leaveTreatment
+            .leaveNisDecisionReference,
+        leaveNisApprovedBenefitAmount:
+          leaveTreatment
+            .leaveNisApprovedBenefitAmount,
         leaveRequiresPayrollReview:
           Boolean(leave) &&
           (

@@ -174,6 +174,32 @@ const buildSafeAttendanceAuditSnapshot = (
     period.totals
       ?.payableWorkedMinutes || 0
   ),
+  payablePhysicalWorkedMinutes:
+    Number(
+      period.totals
+        ?.payablePhysicalWorkedMinutes ||
+        0
+    ),
+  payableLeaveMinutes: Number(
+    period.totals
+      ?.payableLeaveMinutes || 0
+  ),
+  unpaidLeaveMinutes: Number(
+    period.totals
+      ?.unpaidLeaveMinutes || 0
+  ),
+  nisCoordinatedLeaveMinutes:
+    Number(
+      period.totals
+        ?.nisCoordinatedLeaveMinutes ||
+        0
+    ),
+  leavePayrollReviewDayCount:
+    Number(
+      period.totals
+        ?.leavePayrollReviewDayCount ||
+        0
+    ),
   overtimeMinutes: Number(
     period.totals?.overtimeMinutes || 0
   ),
@@ -277,14 +303,38 @@ const recalculateAttendancePeriodTotals = (
           0
       );
 
-    const sourcePayableMinutes =
-      Math.max(
-        0,
-        Number(
-          entry.payableWorkedMinutes ||
-            0
-        ) - previousApprovedMinutes
+    const storedPhysicalMinutes =
+      Number(
+        entry
+          .payablePhysicalWorkedMinutes ||
+          0
       );
+
+    /*
+     * Older records do not contain the Stage 1 physical
+     * minutes field. Derive their physical base from the
+     * legacy payable value after removing leave and the
+     * previously approved adjustment.
+     */
+    const sourcePhysicalMinutes =
+      storedPhysicalMinutes > 0
+        ? Math.max(
+            0,
+            storedPhysicalMinutes -
+              previousApprovedMinutes
+          )
+        : Math.max(
+            0,
+            Number(
+              entry.payableWorkedMinutes ||
+                0
+            ) -
+              Number(
+                entry.leavePayableMinutes ||
+                  0
+              ) -
+              previousApprovedMinutes
+          );
 
     const approvedMinutes =
       Number(
@@ -293,21 +343,37 @@ const recalculateAttendancePeriodTotals = (
         ) || 0
       );
 
-    const payableWorkedMinutes =
+    const payablePhysicalWorkedMinutes =
       Math.max(
         0,
-        sourcePayableMinutes +
+        sourcePhysicalMinutes +
           approvedMinutes
       );
 
+    const leavePayableMinutes =
+      Math.max(
+        0,
+        Number(
+          entry.leavePayableMinutes || 0
+        )
+      );
+
+    const payableWorkedMinutes =
+      payablePhysicalWorkedMinutes +
+      leavePayableMinutes;
+
     entry.approvedAdjustmentMinutes =
       approvedMinutes;
+
+    entry.payablePhysicalWorkedMinutes =
+      payablePhysicalWorkedMinutes;
 
     entry.payableWorkedMinutes =
       payableWorkedMinutes;
 
     if (
-      payableWorkedMinutes > 0 &&
+      payablePhysicalWorkedMinutes > 0 &&
+      entry.approvedLeave !== true &&
       [
         "Absent",
         "Incomplete",
@@ -327,11 +393,13 @@ const recalculateAttendancePeriodTotals = (
           0,
           Number(
             entry.scheduledMinutes || 0
-          ) - payableWorkedMinutes
+          ) -
+            payablePhysicalWorkedMinutes
         );
 
       if (
-        payableWorkedMinutes === 0 &&
+        payablePhysicalWorkedMinutes ===
+          0 &&
         entry.workDate <=
           getJamaicaTodayYmd()
       ) {
@@ -355,7 +423,7 @@ const recalculateAttendancePeriodTotals = (
 
     const updatedWeekMinutes =
       priorWeekMinutes +
-      payableWorkedMinutes;
+      payablePhysicalWorkedMinutes;
 
     const overtimeBefore =
       Math.max(
@@ -381,18 +449,18 @@ const recalculateAttendancePeriodTotals = (
     entry.regularMinutes =
       Math.max(
         0,
-        payableWorkedMinutes -
+        payablePhysicalWorkedMinutes -
           entry.overtimeMinutes
       );
 
     entry.restDayMinutes =
       entry.restDay === true
-        ? payableWorkedMinutes
+        ? payablePhysicalWorkedMinutes
         : 0;
 
     entry.publicHolidayMinutes =
       entry.publicHoliday === true
-        ? payableWorkedMinutes
+        ? payablePhysicalWorkedMinutes
         : 0;
 
     weeklyPayableMinutes.set(
@@ -414,6 +482,25 @@ const recalculateAttendancePeriodTotals = (
       sum("scheduledMinutes"),
     sourceWorkedMinutes:
       sum("sourceWorkedMinutes"),
+    payablePhysicalWorkedMinutes:
+      sum(
+        "payablePhysicalWorkedMinutes"
+      ),
+    payableLeaveMinutes:
+      sum("leavePayableMinutes"),
+    unpaidLeaveMinutes:
+      sum("leaveUnpaidMinutes"),
+    nisCoordinatedLeaveMinutes:
+      sum(
+        "leaveNisCoordinatedMinutes"
+      ),
+    leavePayrollReviewDayCount:
+      entries.filter(
+        (entry) =>
+          entry
+            .leaveRequiresPayrollReview ===
+          true
+      ).length,
     approvedAdjustmentMinutes:
       sum(
         "approvedAdjustmentMinutes"
@@ -451,8 +538,8 @@ const recalculateAttendancePeriodTotals = (
     leaveDayCount:
       entries.filter(
         (entry) =>
-          entry.dayStatus ===
-          "Approved Leave"
+          entry.approvedLeave === true &&
+          entry.scheduledWorkday === true
       ).length,
     incompleteDayCount:
       entries.filter(
@@ -1969,7 +2056,7 @@ const lockAttendancePeriod =
         getJamaicaTodayYmd();
 
             if (
-        attendancePeriod.periodEnd >=
+        attendancePeriod.periodEnd >
         today
       ) {
         return res.status(409).json({
@@ -2413,7 +2500,7 @@ const lockAttendancePeriod =
         getJamaicaTodayYmd();
 
             if (
-        attendancePeriod.periodEnd >=
+        attendancePeriod.periodEnd >
         today
       ) {
         return res.status(409).json({
@@ -2479,6 +2566,49 @@ const lockAttendancePeriod =
           message:
             "Pending attendance adjustments must be resolved before the period can become Payroll Ready.",
           pendingAdjustments,
+        });
+      }
+
+      const unresolvedLeaveDates =
+        attendancePeriod.dailyEntries
+          .filter(
+            (entry) =>
+              entry.approvedLeave ===
+                true &&
+              entry
+                .leaveRequiresPayrollReview ===
+                true
+          )
+          .map((entry) => ({
+            workDate:
+              entry.workDate,
+            leaveRequestNumber:
+              entry.leaveRequestNumber ||
+              "",
+            leaveType:
+              entry.leaveType || "",
+            payTreatment:
+              entry.leavePayTreatment ||
+              "",
+            nisCoordinationStatus:
+              entry
+                .leaveNisCoordinationStatus ||
+              "",
+            notes:
+              entry.leaveProcessingNotes ||
+              entry.exceptionNotes ||
+              "",
+          }));
+
+      if (
+        unresolvedLeaveDates.length >
+        0
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Unresolved mixed or NIS-coordinated leave treatment must be reviewed before the attendance period can become Payroll Ready.",
+          unresolvedLeaveDates,
         });
       }
 

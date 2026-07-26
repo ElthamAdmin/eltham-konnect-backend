@@ -398,6 +398,24 @@ const AttendancePeriodSchema =
             min: 0,
           },
 
+          leaveNisCoordinationStatus: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leaveNisDecisionReference: {
+            type: String,
+            default: "",
+            trim: true,
+          },
+
+          leaveNisApprovedBenefitAmount: {
+            type: Number,
+            default: 0,
+            min: 0,
+          },
+
           leaveRequiresPayrollReview: {
             type: Boolean,
             default: false,
