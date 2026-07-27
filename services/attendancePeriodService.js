@@ -1069,17 +1069,23 @@ const buildAttendancePeriodPreview =
       }
 
       const futureDate =
-        workDate > previewAsOfDate;
+  workDate > previewAsOfDate;
 
-      if (futureDate) {
-        dayStatus = "No Record";
+/*
+ * Future scheduled dates normally remain unassessed.
+ * An approved leave request is already a controlled
+ * assessment, so it may display as Approved Leave
+ * before the leave date occurs.
+ */
+if (futureDate && !leave) {
+  dayStatus = "No Record";
 
-        if (scheduledWorkday) {
-          exceptionNotes.push(
-            "Future scheduled date; absence has not been assessed."
-          );
-        }
-      } else if (holiday) {
+  if (scheduledWorkday) {
+    exceptionNotes.push(
+      "Future scheduled date; absence has not been assessed."
+    );
+  }
+} else if (holiday) {
         if (
           sourceWorkedMinutes > 0
         ) {
