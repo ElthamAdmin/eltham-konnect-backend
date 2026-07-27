@@ -7,6 +7,7 @@ const {
   previewLeaveRequest,
   createLeaveRequest,
   submitLeaveRequest,
+  upgradeLegacyLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
   cancelLeaveRequest,
@@ -162,6 +163,13 @@ router.post(
   protect,
   canAccessLeaveSelfService,
   submitLeaveRequest
+);
+
+router.post(
+  "/:leaveRequestId/upgrade-legacy",
+  protect,
+  requirePermission("hr"),
+  upgradeLegacyLeaveRequest
 );
 
 router.post(

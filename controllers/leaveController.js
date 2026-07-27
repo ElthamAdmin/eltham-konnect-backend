@@ -789,6 +789,209 @@ const submitLeaveRequest = async (
   }
 };
 
+const upgradeLegacyLeaveRequest = async (
+  req,
+  res
+) => {
+  try {
+    const leaveRequest =
+      await LeaveRequest.findOne({
+        leaveRequestId:
+          req.params.leaveRequestId,
+      });
+
+    if (!leaveRequest) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Leave request was not found.",
+      });
+    }
+
+    if (
+      leaveRequest.status !== "Pending"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${leaveRequest.leaveRequestId} must have legacy Pending status before it can be upgraded.`,
+        data: {
+          currentStatus:
+            leaveRequest.status,
+          requiredStatus: "Pending",
+        },
+      });
+    }
+
+    if (
+      normalizeString(
+        leaveRequest.policyCode
+      ) ||
+      (
+        Array.isArray(
+          leaveRequest.dailyBreakdown
+        ) &&
+        leaveRequest.dailyBreakdown
+          .length > 0
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${leaveRequest.leaveRequestId} already contains controlled H5 policy treatment and cannot be upgraded again.`,
+      });
+    }
+
+    const employee =
+      await HREmployee.findOne({
+        employeeId:
+          leaveRequest.employeeId,
+      });
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "The HR employee linked to this legacy request was not found.",
+      });
+    }
+
+    const calculation =
+      await calculateLeaveRequestTreatment({
+        employeeId:
+          employee.employeeId,
+        leaveType:
+          leaveRequest.leaveType,
+        startDate:
+          leaveRequest.startDate,
+        endDate:
+          leaveRequest.endDate,
+      });
+
+    await ensureNoOverlap({
+      employeeId:
+        employee.employeeId,
+      startDate:
+        leaveRequest.startDate,
+      endDate:
+        leaveRequest.endDate,
+      excludeLeaveRequestId:
+        leaveRequest.leaveRequestId,
+    });
+
+    const beforeValues =
+      leaveRequest.toObject();
+
+    const preservedSubmittedAt =
+      leaveRequest.submittedAt ||
+      leaveRequest.createdAt ||
+      new Date();
+
+    const preservedSubmittedBy =
+      normalizeString(
+        leaveRequest.submittedBy
+      ) ||
+      leaveRequest.employeeName ||
+      employee.fullName;
+
+    const upgradeNotes =
+      normalizeString(
+        req.body?.upgradeNotes
+      ) ||
+      "Legacy Pending request upgraded to the controlled H5 leave workflow.";
+
+    leaveRequest.set(
+      buildLeaveRequestFields({
+        employee:
+          calculation.employee,
+        policy:
+          calculation.policy,
+        treatment:
+          calculation.treatment,
+        leaveType:
+          leaveRequest.leaveType,
+        startDate:
+          leaveRequest.startDate,
+        endDate:
+          leaveRequest.endDate,
+        reason:
+          leaveRequest.reason,
+        employeeComments:
+          leaveRequest.employeeComments,
+      })
+    );
+
+    leaveRequest.status = "Submitted";
+    leaveRequest.submittedAt =
+      preservedSubmittedAt;
+    leaveRequest.submittedBy =
+      preservedSubmittedBy;
+    leaveRequest.updatedBy =
+      getUserName(req.user);
+
+    appendWorkflow({
+      leaveRequest,
+      action: "Submitted",
+      fromStatus: "Pending",
+      toStatus: "Submitted",
+      notes: upgradeNotes,
+      user: req.user,
+    });
+
+    await leaveRequest.save();
+
+    await writeAuditLog({
+      req,
+      action:
+        "UPGRADE_LEGACY_LEAVE_REQUEST",
+      module: "HR",
+      description:
+        `Legacy leave request ${leaveRequest.leaveRequestId} upgraded to the controlled H5 workflow.`,
+      targetType: "LeaveRequest",
+      targetId:
+        leaveRequest.leaveRequestId,
+      beforeValues,
+      afterValues:
+        leaveRequest.toObject(),
+      metadata: {
+        employeeId:
+          leaveRequest.employeeId,
+        legacyStatus: "Pending",
+        upgradedStatus:
+          leaveRequest.status,
+        policyCode:
+          leaveRequest.policyCode,
+        payTreatment:
+          leaveRequest.payTreatment,
+        payrollEffect:
+          leaveRequest.payrollEffect,
+        balanceType:
+          leaveRequest.balanceType,
+        balanceUnits:
+          leaveRequest.balanceUnits,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message:
+        "Legacy leave request upgraded and submitted successfully",
+      data: leaveRequest,
+    });
+  } catch (error) {
+    console.error(
+      "Upgrade legacy leave request error:",
+      error
+    );
+
+    return sendControllerError(
+      res,
+      error,
+      "Could not upgrade the legacy leave request."
+    );
+  }
+};
+
 const approveLeaveRequestByManager =
   async (req, res) => {
     try {
@@ -1575,6 +1778,7 @@ module.exports = {
   previewLeaveRequest,
   createLeaveRequest,
   submitLeaveRequest,
+  upgradeLegacyLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
   cancelLeaveRequest,
