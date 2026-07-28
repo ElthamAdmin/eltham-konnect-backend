@@ -2,6 +2,9 @@ const mongoose = require("mongoose");
 
 const LeaveRequest = require("../models/LeaveRequest");
 const HREmployee = require("../models/HREmployee");
+const AttendancePeriod = require(
+  "../models/AttendancePeriod"
+);
 
 const {
   calculateLeaveRequestTreatment,
@@ -323,6 +326,182 @@ const sendControllerError = (
           }
         : {}),
     });
+
+    const reverseAttendanceEvidenceForCancellation =
+  async ({
+    leaveRequest,
+    cancellationReason,
+    user,
+    session,
+  }) => {
+    if (
+      leaveRequest.attendanceProcessing
+        ?.status !== "Applied"
+    ) {
+      return [];
+    }
+
+    const linkedPeriods = Array.from(
+      new Map(
+        (
+          leaveRequest
+            .attendancePeriodsUpdated ||
+          []
+        )
+          .filter((entry) =>
+            normalizeString(
+              entry.periodNumber
+            )
+          )
+          .map((entry) => [
+            normalizeString(
+              entry.periodNumber
+            ),
+            {
+              periodNumber:
+                normalizeString(
+                  entry.periodNumber
+                ),
+              periodKey:
+                normalizeString(
+                  entry.periodKey
+                ),
+            },
+          ])
+      ).values()
+    );
+
+    if (linkedPeriods.length === 0) {
+      const error = new Error(
+        "Attendance processing is marked Applied, but no linked attendance period was recorded."
+      );
+
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const periodNumbers =
+      linkedPeriods.map(
+        (entry) => entry.periodNumber
+      );
+
+    const attendancePeriods =
+      await AttendancePeriod.find({
+        periodNumber: {
+          $in: periodNumbers,
+        },
+      })
+        .session(session)
+        .select(
+          "periodNumber periodKey status payrollNumber"
+        );
+
+    const periodsByNumber = new Map(
+      attendancePeriods.map((period) => [
+        period.periodNumber,
+        period,
+      ])
+    );
+
+    const missingPeriodNumbers =
+      periodNumbers.filter(
+        (periodNumber) =>
+          !periodsByNumber.has(
+            periodNumber
+          )
+      );
+
+    if (missingPeriodNumbers.length > 0) {
+      const error = new Error(
+        "One or more linked attendance periods could not be found. Attendance evidence cannot be reversed automatically."
+      );
+
+      error.statusCode = 409;
+      error.data = {
+        leaveRequestId:
+          leaveRequest.leaveRequestId,
+        missingPeriodNumbers,
+      };
+
+      throw error;
+    }
+
+    const blockedPeriods =
+      attendancePeriods
+        .filter(
+          (period) =>
+            ![
+              "Draft",
+              "Reopened",
+            ].includes(period.status)
+        )
+        .map((period) => ({
+          periodNumber:
+            period.periodNumber,
+          periodKey:
+            period.periodKey,
+          status: period.status,
+          payrollNumber:
+            period.payrollNumber || "",
+        }));
+
+    if (blockedPeriods.length > 0) {
+      const error = new Error(
+        "Attendance evidence cannot be reversed because one or more linked periods have entered a controlled approval or payroll stage."
+      );
+
+      error.statusCode = 409;
+      error.data = {
+        leaveRequestId:
+          leaveRequest.leaveRequestId,
+        allowedStatuses: [
+          "Draft",
+          "Reopened",
+        ],
+        blockedPeriods,
+      };
+
+      throw error;
+    }
+
+    const reversedPeriods =
+      attendancePeriods.map(
+        (period) => ({
+          periodNumber:
+            period.periodNumber,
+          periodKey:
+            period.periodKey,
+          status: period.status,
+        })
+      );
+
+    leaveRequest.attendanceProcessing = {
+      status: "Reversed",
+      processedBy:
+        getUserName(user),
+      processedByUserId:
+        getUserId(user),
+      processedAt: new Date(),
+      errorMessage: "",
+    };
+
+    appendWorkflow({
+      leaveRequest,
+      action:
+        "Attendance Reversed",
+      fromStatus:
+        leaveRequest.status,
+      toStatus:
+        leaveRequest.status,
+      notes:
+        `Attendance evidence reversed before cancellation. Refresh affected Draft or Reopened periods to remove this leave: ${periodNumbers.join(
+          ", "
+        )}. Reason: ${cancellationReason}`,
+      user,
+    });
+
+    return reversedPeriods;
+  };
 
 const getLeaveRequests = async (
   req,
@@ -1382,8 +1561,9 @@ const cancelLeaveRequest = async (
     await mongoose.startSession();
 
   let cancelledRequest = null;
-  let beforeValues = null;
-  let reversalResult = null;
+let beforeValues = null;
+let reversalResult = null;
+let attendanceReversalPeriods = [];
 
   try {
     await session.withTransaction(
@@ -1472,19 +1652,6 @@ const cancelLeaveRequest = async (
         }
 
         if (
-          leaveRequest
-            .attendanceProcessing
-            ?.status === "Applied"
-        ) {
-          const error = new Error(
-            "Attendance effects must be reversed before this leave request can be cancelled."
-          );
-
-          error.statusCode = 409;
-          throw error;
-        }
-
-        if (
           leaveRequest.payrollProcessed ||
           leaveRequest
             .payrollProcessing
@@ -1499,12 +1666,22 @@ const cancelLeaveRequest = async (
         }
 
         beforeValues =
-          leaveRequest.toObject();
-        const previousStatus =
-          leaveRequest.status;
+  leaveRequest.toObject();
+const previousStatus =
+  leaveRequest.status;
 
-        if (
-          leaveRequest.balanceApplied &&
+attendanceReversalPeriods =
+  await reverseAttendanceEvidenceForCancellation(
+    {
+      leaveRequest,
+      cancellationReason,
+      user: req.user,
+      session,
+    }
+  );
+
+if (
+  leaveRequest.balanceApplied &&
           normalizeString(
             leaveRequest
               .balanceTransactionNumber
@@ -1608,6 +1785,7 @@ const cancelLeaveRequest = async (
         balanceReversalTransactionNumber:
           cancelledRequest
             .balanceReversalTransactionNumber,
+            attendanceReversalPeriods,
       },
     });
 
@@ -1616,11 +1794,15 @@ const cancelLeaveRequest = async (
       message:
         "Leave request cancelled successfully",
       data: {
-        leaveRequest:
-          cancelledRequest,
-        balanceReversal:
-          reversalResult,
-      },
+  leaveRequest:
+    cancelledRequest,
+  balanceReversal:
+    reversalResult,
+  attendanceReversalPeriods,
+  attendanceRefreshRequired:
+    attendanceReversalPeriods.length >
+    0,
+},
     });
   } catch (error) {
     console.error(
