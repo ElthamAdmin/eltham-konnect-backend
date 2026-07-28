@@ -2,6 +2,10 @@ const AttendancePeriod = require(
   "../models/AttendancePeriod"
 );
 
+const LeaveRequest = require(
+  "../models/LeaveRequest"
+);
+
 const {
   buildAttendancePeriodPreview,
   isValidYmdDate,
@@ -30,8 +34,190 @@ const getUserName = (user) =>
   user?.email ||
   "System User";
 
+const getUserId = (user) =>
+  String(
+    user?.userId || user?._id || ""
+  );
+
 const normalizeString = (value) =>
   String(value || "").trim();
+
+const synchronizeAttendanceLeaveEvidence =
+  async ({
+    attendancePeriod,
+    user,
+  }) => {
+    const leaveRequestIds = Array.from(
+      new Set(
+        (
+          attendancePeriod.dailyEntries ||
+          []
+        )
+          .filter(
+            (entry) =>
+              entry.approvedLeave ===
+                true &&
+              normalizeString(
+                entry.leaveRequestNumber
+              )
+          )
+          .map((entry) =>
+            normalizeString(
+              entry.leaveRequestNumber
+            )
+          )
+      )
+    );
+
+    if (leaveRequestIds.length === 0) {
+      return {
+        appliedLeaveRequestIds: [],
+        alreadyLinkedLeaveRequestIds: [],
+      };
+    }
+
+    const leaveRequests =
+      await LeaveRequest.find({
+        leaveRequestId: {
+          $in: leaveRequestIds,
+        },
+        employeeId:
+          attendancePeriod.employeeId,
+        status: "Approved",
+      });
+
+    const foundIds = new Set(
+      leaveRequests.map(
+        (leaveRequest) =>
+          leaveRequest.leaveRequestId
+      )
+    );
+
+    const missingIds =
+      leaveRequestIds.filter(
+        (leaveRequestId) =>
+          !foundIds.has(leaveRequestId)
+      );
+
+    if (missingIds.length > 0) {
+      const error = new Error(
+        "One or more attendance leave references no longer resolve to an Approved leave request."
+      );
+
+      error.statusCode = 409;
+      error.data = {
+        periodNumber:
+          attendancePeriod.periodNumber,
+        missingLeaveRequestIds:
+          missingIds,
+      };
+
+      throw error;
+    }
+
+    const userName =
+      getUserName(user);
+    const userId =
+      getUserId(user);
+
+    const appliedLeaveRequestIds = [];
+    const alreadyLinkedLeaveRequestIds =
+      [];
+
+    for (
+      const leaveRequest of
+      leaveRequests
+    ) {
+      const alreadyLinked =
+        (
+          leaveRequest
+            .attendancePeriodsUpdated ||
+          []
+        ).some(
+          (entry) =>
+            entry.periodNumber ===
+            attendancePeriod.periodNumber
+        );
+
+      if (!alreadyLinked) {
+        leaveRequest
+          .attendancePeriodsUpdated
+          .push({
+            periodNumber:
+              attendancePeriod
+                .periodNumber,
+            periodKey:
+              attendancePeriod.periodKey,
+            updatedAt: new Date(),
+          });
+
+        leaveRequest.workflowHistory.push({
+          action:
+            "Attendance Applied",
+          fromStatus:
+            leaveRequest.status,
+          toStatus:
+            leaveRequest.status,
+          notes:
+            `Applied to attendance period ${attendancePeriod.periodNumber} for ${attendancePeriod.periodKey}.`,
+          performedBy:
+            userName,
+          performedByUserId:
+            userId,
+          performedAt:
+            new Date(),
+        });
+
+        appliedLeaveRequestIds.push(
+          leaveRequest.leaveRequestId
+        );
+      } else {
+        alreadyLinkedLeaveRequestIds.push(
+          leaveRequest.leaveRequestId
+        );
+      }
+
+      const processingAlreadyApplied =
+        leaveRequest
+          .attendanceProcessing
+          ?.status === "Applied";
+
+      if (
+        !alreadyLinked ||
+        !processingAlreadyApplied
+      ) {
+        leaveRequest
+          .attendanceProcessing.status =
+          "Applied";
+
+        leaveRequest
+          .attendanceProcessing
+          .processedBy = userName;
+
+        leaveRequest
+          .attendanceProcessing
+          .processedByUserId = userId;
+
+        leaveRequest
+          .attendanceProcessing
+          .processedAt = new Date();
+
+        leaveRequest
+          .attendanceProcessing
+          .errorMessage = "";
+
+        leaveRequest.updatedBy =
+          userName;
+
+        await leaveRequest.save();
+      }
+    }
+
+    return {
+      appliedLeaveRequestIds,
+      alreadyLinkedLeaveRequestIds,
+    };
+  };
 
 const getJamaicaTodayYmd = () => {
   const parts = new Intl.DateTimeFormat(
@@ -736,40 +922,52 @@ const createAttendancePeriodDraft =
        * submit or override calculated totals.
        */
       const attendancePeriod =
-        await AttendancePeriod.create(
-          periodDraft
-        );
+  await AttendancePeriod.create(
+    periodDraft
+  );
 
-      await writeAuditLog({
-        req,
-        action:
-          "CREATE_ATTENDANCE_PERIOD_DRAFT",
-        module: "HR",
-        description:
-          `Attendance period ${attendancePeriod.periodNumber} created for ${attendancePeriod.employeeId}`,
-        targetType:
-          "AttendancePeriod",
-        targetId:
-          attendancePeriod.periodNumber,
-        afterValues:
-          buildSafeAttendanceAuditSnapshot(
-            attendancePeriod
-          ),
-        metadata: {
-          source:
-            "Controlled Attendance Period",
-          calculationMode:
-            "System Generated",
-          containsFutureDates:
-            attendancePeriod.dailyEntries.some(
-              (entry) =>
-                entry.dayStatus ===
-                "No Record" &&
-                entry.scheduledWorkday ===
-                  true
-            ),
-        },
-      });
+const leaveSyncResult =
+  await synchronizeAttendanceLeaveEvidence({
+    attendancePeriod,
+    user: req.user,
+  });
+
+await writeAuditLog({
+  req,
+  action:
+    "CREATE_ATTENDANCE_PERIOD_DRAFT",
+  module: "HR",
+  description:
+    `Attendance period ${attendancePeriod.periodNumber} created for ${attendancePeriod.employeeId}`,
+  targetType:
+    "AttendancePeriod",
+  targetId:
+    attendancePeriod.periodNumber,
+  afterValues:
+    buildSafeAttendanceAuditSnapshot(
+      attendancePeriod
+    ),
+  metadata: {
+    source:
+      "Controlled Attendance Period",
+    calculationMode:
+      "System Generated",
+    containsFutureDates:
+      attendancePeriod.dailyEntries.some(
+        (entry) =>
+          entry.dayStatus ===
+            "No Record" &&
+          entry.scheduledWorkday ===
+            true
+      ),
+    appliedLeaveRequestIds:
+      leaveSyncResult
+        .appliedLeaveRequestIds,
+    alreadyLinkedLeaveRequestIds:
+      leaveSyncResult
+        .alreadyLinkedLeaveRequestIds,
+  },
+});
 
       return res.status(201).json({
         success: true,
@@ -1135,32 +1333,44 @@ const createAttendancePeriodDraft =
 
       await attendancePeriod.save();
 
-      await writeAuditLog({
-        req,
-        action:
-          "REFRESH_ATTENDANCE_PERIOD_DRAFT",
-        module: "HR",
-        description:
-          `Attendance period ${attendancePeriod.periodNumber} refreshed`,
-        targetType:
-          "AttendancePeriod",
-        targetId:
-          attendancePeriod.periodNumber,
-        beforeValues:
-          beforeSnapshot,
-        afterValues:
-          buildSafeAttendanceAuditSnapshot(
-            attendancePeriod
-          ),
-        metadata: {
-          source:
-            "Controlled Attendance Period",
-          calculationMode:
-            "System Regenerated",
-          publicHolidayCount:
-            publicHolidays.length,
-        },
-      });
+const leaveSyncResult =
+  await synchronizeAttendanceLeaveEvidence({
+    attendancePeriod,
+    user: req.user,
+  });
+
+await writeAuditLog({
+  req,
+  action:
+    "REFRESH_ATTENDANCE_PERIOD_DRAFT",
+  module: "HR",
+  description:
+    `Attendance period ${attendancePeriod.periodNumber} refreshed`,
+  targetType:
+    "AttendancePeriod",
+  targetId:
+    attendancePeriod.periodNumber,
+  beforeValues:
+    beforeSnapshot,
+  afterValues:
+    buildSafeAttendanceAuditSnapshot(
+      attendancePeriod
+    ),
+  metadata: {
+    source:
+      "Controlled Attendance Period",
+    calculationMode:
+      "System Regenerated",
+    publicHolidayCount:
+      publicHolidays.length,
+    appliedLeaveRequestIds:
+      leaveSyncResult
+        .appliedLeaveRequestIds,
+    alreadyLinkedLeaveRequestIds:
+      leaveSyncResult
+        .alreadyLinkedLeaveRequestIds,
+  },
+});
 
       return res.json({
         success: true,
