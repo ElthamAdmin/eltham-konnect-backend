@@ -23,6 +23,12 @@ const {
 );
 
 const {
+  previewLegacyEmploymentDocumentMigration,
+} = require(
+  "../controllers/employmentDocumentMigrationController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -125,6 +131,13 @@ const controlledUploadSingle =
  * the legacy generic
  * /:employeeId route.
  */
+
+router.get(
+  "/controlled/legacy-migration-preview",
+  protect,
+  requirePermission("hr"),
+  previewLegacyEmploymentDocumentMigration
+);
 
 router.post(
   "/controlled/upload/:employeeId",
