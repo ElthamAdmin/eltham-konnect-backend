@@ -439,9 +439,256 @@ const resolvePayrollLeaveAssessment =
     assessment.assessmentStatus =
       "Ready";
 
-    return assessment;
+        return assessment;
+  };
+
+/*
+ * Confirms approved leave against an approved payroll.
+ *
+ * This function must always be called inside the same
+ * MongoDB transaction that approves the Payroll record.
+ */
+const confirmPayrollLeaveEffects =
+  async ({
+    payroll,
+    user,
+    session,
+  }) => {
+    const assessment =
+      payroll.leavePayrollAssessment ||
+      {};
+
+    const leaveRequestIds =
+      Array.from(
+        new Set(
+          (
+            assessment.leaveRequestIds ||
+            []
+          )
+            .map(normalizeString)
+            .filter(Boolean)
+        )
+      );
+
+    /*
+     * A payroll without leave has no LeaveRequest
+     * records to update.
+     */
+    if (leaveRequestIds.length === 0) {
+      return {
+        confirmedLeaveRequestIds: [],
+        alreadyConfirmedLeaveRequestIds:
+          [],
+      };
+    }
+
+    if (
+      assessment.assessmentStatus !==
+      "Ready"
+    ) {
+      const error = new Error(
+        "Leave payroll effects must have Ready status before they can be confirmed."
+      );
+
+      error.statusCode = 409;
+      error.data = assessment;
+
+      throw error;
+    }
+
+    const leaveRequests =
+      await LeaveRequest.find({
+        leaveRequestId: {
+          $in: leaveRequestIds,
+        },
+
+        employeeId:
+          payroll.employeeId,
+
+        status: "Approved",
+      }).session(session);
+
+    const foundIds = new Set(
+      leaveRequests.map(
+        (leaveRequest) =>
+          leaveRequest.leaveRequestId
+      )
+    );
+
+    const missingLeaveRequestIds =
+      leaveRequestIds.filter(
+        (leaveRequestId) =>
+          !foundIds.has(
+            leaveRequestId
+          )
+      );
+
+    if (
+      missingLeaveRequestIds.length >
+      0
+    ) {
+      const error = new Error(
+        "One or more approved leave requests changed after payroll creation. Cancel and recreate the payroll."
+      );
+
+      error.statusCode = 409;
+      error.data = {
+        payrollNumber:
+          payroll.payrollNumber,
+        missingLeaveRequestIds,
+      };
+
+      throw error;
+    }
+
+    const userName =
+      user?.fullName ||
+      user?.name ||
+      user?.email ||
+      "System User";
+
+    const userId = String(
+      user?.userId ||
+        user?._id ||
+        ""
+    );
+
+    const confirmedLeaveRequestIds =
+      [];
+
+    const alreadyConfirmedLeaveRequestIds =
+      [];
+
+    for (
+      const leaveRequest of
+      leaveRequests
+    ) {
+      const existingPayrollNumber =
+        normalizeString(
+          leaveRequest.payrollNumber
+        );
+
+      const alreadyConfirmed =
+        leaveRequest.payrollProcessed ===
+          true &&
+        leaveRequest.payrollProcessing
+          ?.status === "Applied" &&
+        existingPayrollNumber ===
+          payroll.payrollNumber;
+
+      /*
+       * Repeated approval processing must not add another
+       * workflow entry or change the original evidence.
+       */
+      if (alreadyConfirmed) {
+        alreadyConfirmedLeaveRequestIds.push(
+          leaveRequest.leaveRequestId
+        );
+
+        continue;
+      }
+
+      /*
+       * One approved leave request must not be linked to
+       * two different payroll records.
+       */
+      if (
+        leaveRequest.payrollProcessing
+          ?.status === "Applied" ||
+        (
+          leaveRequest.payrollProcessed ===
+            true &&
+          existingPayrollNumber &&
+          existingPayrollNumber !==
+            payroll.payrollNumber
+        )
+      ) {
+        const error = new Error(
+          `${leaveRequest.leaveRequestId} is already linked to payroll ${existingPayrollNumber || "another payroll"}.`
+        );
+
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const confirmedAt = new Date();
+
+      leaveRequest.payrollProcessing = {
+        status: "Applied",
+        processedBy: userName,
+        processedByUserId: userId,
+        processedAt: confirmedAt,
+        errorMessage: "",
+      };
+
+      leaveRequest.payrollProcessed =
+        true;
+
+      leaveRequest.payrollNumber =
+        payroll.payrollNumber;
+
+      leaveRequest.payrollProcessedAt =
+        confirmedAt;
+
+      leaveRequest.updatedBy =
+        userName;
+
+      const workflowAlreadyRecorded =
+        (
+          leaveRequest.workflowHistory ||
+          []
+        ).some(
+          (entry) =>
+            entry.action ===
+              "Payroll Effect Confirmed" &&
+            normalizeString(
+              entry.notes
+            ).includes(
+              payroll.payrollNumber
+            )
+        );
+
+      if (!workflowAlreadyRecorded) {
+        leaveRequest.workflowHistory.push({
+          action:
+            "Payroll Effect Confirmed",
+
+          fromStatus:
+            leaveRequest.status,
+
+          toStatus:
+            leaveRequest.status,
+
+          notes:
+            `Payroll effect confirmed in ${payroll.payrollNumber} for ${payroll.payPeriod}.`,
+
+          performedBy:
+            userName,
+
+          performedByUserId:
+            userId,
+
+          performedAt:
+            confirmedAt,
+        });
+      }
+
+      await leaveRequest.save({
+        session,
+      });
+
+      confirmedLeaveRequestIds.push(
+        leaveRequest.leaveRequestId
+      );
+    }
+
+    return {
+      confirmedLeaveRequestIds,
+      alreadyConfirmedLeaveRequestIds,
+    };
   };
 
 module.exports = {
   resolvePayrollLeaveAssessment,
+  confirmPayrollLeaveEffects,
 };
