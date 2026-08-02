@@ -1,3 +1,5 @@
+const mongoose = require("mongoose");
+
 const Payroll = require("../models/Payroll");
 const HREmployee = require("../models/HREmployee");
 const EmployeeCompensation = require("../models/EmployeeCompensation");
@@ -22,6 +24,7 @@ const {
 
 const {
   resolvePayrollLeaveAssessment,
+  confirmPayrollLeaveEffects,
 } = require(
   "../services/payrollLeaveService"
 );
@@ -3031,180 +3034,517 @@ const createPayrollBatch = async (
   }
 };
 
-const approvePayroll = async (req, res) => {
+const buildLeaveAssessmentFingerprint =
+  (assessment = {}) =>
+    JSON.stringify({
+      attendancePeriodNumber:
+        String(
+          assessment
+            .attendancePeriodNumber ||
+            ""
+        ),
+
+      scheduledMinutes:
+        Number(
+          assessment.scheduledMinutes ||
+            0
+        ),
+
+      payableLeaveMinutes:
+        Number(
+          assessment
+            .payableLeaveMinutes || 0
+        ),
+
+      unpaidLeaveMinutes:
+        Number(
+          assessment
+            .unpaidLeaveMinutes || 0
+        ),
+
+      nisCoordinatedLeaveMinutes:
+        Number(
+          assessment
+            .nisCoordinatedLeaveMinutes ||
+            0
+        ),
+
+      unpaidLeaveDeduction:
+        roundMoney(
+          assessment
+            .unpaidLeaveDeduction || 0
+        ),
+
+      adjustedGrossPay:
+        roundMoney(
+          assessment.adjustedGrossPay ||
+            0
+        ),
+
+      leaveRequestIds:
+        Array.from(
+          new Set(
+            assessment
+              .leaveRequestIds || []
+          )
+        ).sort(),
+    });
+
+const approvePayroll = async (
+  req,
+  res
+) => {
+  const session =
+    await mongoose.startSession();
+
+  let approvedPayroll = null;
+  let approvalBlock = null;
+
+  let leaveEffectConfirmation = {
+    confirmedLeaveRequestIds: [],
+    alreadyConfirmedLeaveRequestIds:
+      [],
+  };
+
   try {
-    const { payrollNumber } = req.params;
-    const { approvalNotes = "" } = req.body;
+    await session.withTransaction(
+      async () => {
+        const { payrollNumber } =
+          req.params;
 
-    const payroll = await Payroll.findOne({ payrollNumber });
+        const approvalNotes = String(
+          req.body.approvalNotes || ""
+        ).trim();
 
-    if (!payroll) {
-      return res.status(404).json({
-        success: false,
-        message: "Payroll record not found",
-      });
-    }
+        const payroll =
+          await Payroll.findOne({
+            payrollNumber,
+          }).session(session);
 
-        if (payroll.status !== "Pending") {
-      return res.status(400).json({
-        success: false,
-        message:
-          `Only Pending Payroll can be approved. ` +
-          `Current status: ${payroll.status}`,
-      });
-    }
+        if (!payroll) {
+          const error = new Error(
+            "Payroll record not found"
+          );
 
-    /*
-     * H4 approval safeguard:
-     * Reassess against the currently effective minimum-wage
-     * rule and Payroll Ready attendance before approval.
-     */
-    payroll.minimumWageAssessment =
-      await resolvePayrollMinimumWageAssessment({
-        employeeId: payroll.employeeId,
-        payPeriod: payroll.payPeriod,
-        assessmentDate:
-          payroll.payDate ||
-          payroll.payPeriod,
-        grossPay: payroll.grossPay,
-        applicable:
-          payroll.minimumWageAssessment
-            ?.applicable !== false,
-        workerCategory:
-          payroll.minimumWageAssessment
-            ?.workerCategory ||
-          "General",
-        manualWorkedHours:
-          payroll.minimumWageAssessment
-            ?.workedHours ||
-          0,
-        attendancePeriodNumber:
-          payroll.minimumWageAssessment
-            ?.attendancePeriodNumber ||
-          "",
-      });
+          error.statusCode = 404;
+          throw error;
+        }
 
-    payroll.markModified(
-      "minimumWageAssessment"
+        if (
+          payroll.status !== "Pending"
+        ) {
+          const error = new Error(
+            `Only Pending Payroll can be approved. Current status: ${payroll.status}`
+          );
+
+          error.statusCode = 409;
+          throw error;
+        }
+
+        const storedLeaveAssessment =
+          payroll
+            .leavePayrollAssessment ||
+          null;
+
+        /*
+         * The original controlled compensation amount is
+         * the starting point before unpaid-leave deduction.
+         */
+        const baseGrossPay =
+          roundMoney(
+            storedLeaveAssessment
+              ?.baseGrossPay ??
+              payroll
+                .compensationAmount ??
+              payroll.grossPay
+          );
+
+        /*
+         * Reassess using current Payroll Ready attendance
+         * and current Approved leave records.
+         */
+        const latestLeaveAssessment =
+          await resolvePayrollLeaveAssessment(
+            {
+              employeeId:
+                payroll.employeeId,
+
+              payPeriod:
+                payroll.payPeriod,
+
+              baseGrossPay,
+
+              attendancePeriodNumber:
+                storedLeaveAssessment
+                  ?.attendancePeriodNumber ||
+                payroll
+                  .minimumWageAssessment
+                  ?.attendancePeriodNumber ||
+                "",
+
+              session,
+            }
+          );
+
+        payroll.leavePayrollAssessment =
+          latestLeaveAssessment;
+
+        payroll.markModified(
+          "leavePayrollAssessment"
+        );
+
+        /*
+         * Preserve the latest assessment while leaving the
+         * Payroll Pending when treatment is unresolved.
+         */
+        if (
+          latestLeaveAssessment
+            .assessmentStatus ===
+          "Review Required"
+        ) {
+          approvalBlock = {
+            message:
+              latestLeaveAssessment
+                .warning ||
+              "Leave payroll effects require review before payroll approval.",
+
+            data:
+              latestLeaveAssessment,
+          };
+
+          await payroll.save({
+            session,
+          });
+
+          return;
+        }
+
+        const expectedGrossPay =
+          latestLeaveAssessment
+            .assessmentStatus ===
+            "Ready"
+            ? roundMoney(
+                latestLeaveAssessment
+                  .adjustedGrossPay
+              )
+            : baseGrossPay;
+
+        const assessmentChanged =
+          storedLeaveAssessment &&
+          buildLeaveAssessmentFingerprint(
+            storedLeaveAssessment
+          ) !==
+            buildLeaveAssessmentFingerprint(
+              latestLeaveAssessment
+            );
+
+        /*
+         * Payroll calculations cannot be silently changed
+         * during approval. Changed evidence requires a new
+         * payroll calculation and statutory assessment.
+         */
+        if (
+          roundMoney(
+            payroll.grossPay
+          ) !== expectedGrossPay ||
+          assessmentChanged
+        ) {
+          approvalBlock = {
+            message:
+              "Approved leave or attendance evidence changed after this Payroll was created. Cancel and recreate the Payroll before approval.",
+
+            data: {
+              payrollNumber:
+                payroll.payrollNumber,
+
+              storedGrossPay:
+                roundMoney(
+                  payroll.grossPay
+                ),
+
+              expectedGrossPay,
+
+              latestLeaveAssessment,
+            },
+          };
+
+          await payroll.save({
+            session,
+          });
+
+          return;
+        }
+
+        /*
+         * H4 must use the same attendance period selected
+         * by the H5 leave assessment.
+         */
+        payroll.minimumWageAssessment =
+          await resolvePayrollMinimumWageAssessment(
+            {
+              employeeId:
+                payroll.employeeId,
+
+              payPeriod:
+                payroll.payPeriod,
+
+              assessmentDate:
+                payroll.payDate ||
+                payroll.payPeriod,
+
+              grossPay:
+                payroll.grossPay,
+
+              applicable:
+                payroll
+                  .minimumWageAssessment
+                  ?.applicable !== false,
+
+              workerCategory:
+                payroll
+                  .minimumWageAssessment
+                  ?.workerCategory ||
+                "General",
+
+              manualWorkedHours:
+                payroll
+                  .minimumWageAssessment
+                  ?.workedHours || 0,
+
+              attendancePeriodNumber:
+                latestLeaveAssessment
+                  .attendancePeriodNumber ||
+                payroll
+                  .minimumWageAssessment
+                  ?.attendancePeriodNumber ||
+                "",
+            }
+          );
+
+        payroll.markModified(
+          "minimumWageAssessment"
+        );
+
+        const wageAssessment =
+          payroll
+            .minimumWageAssessment ||
+          {};
+
+        if (
+          wageAssessment.applicable !==
+            false &&
+          (
+            wageAssessment
+              .assessmentStatus !==
+              "Compliant" ||
+            wageAssessment.compliant !==
+              true ||
+            Number(
+              wageAssessment.shortfall ||
+                0
+            ) > 0
+          )
+        ) {
+          approvalBlock = {
+            message:
+              wageAssessment.warning ||
+              "Payroll cannot be approved until minimum-wage compliance is confirmed.",
+
+            data: {
+              payrollNumber:
+                payroll.payrollNumber,
+
+              employeeId:
+                payroll.employeeId,
+
+              employeeName:
+                payroll.employeeName,
+
+              payPeriod:
+                payroll.payPeriod,
+
+              minimumWageAssessment:
+                wageAssessment,
+
+              leavePayrollAssessment:
+                latestLeaveAssessment,
+            },
+          };
+
+          /*
+           * Preserve both current assessments even though
+           * approval remains blocked.
+           */
+          await payroll.save({
+            session,
+          });
+
+          return;
+        }
+
+        /*
+         * These LeaveRequest changes and the Payroll status
+         * change share one MongoDB transaction.
+         */
+        leaveEffectConfirmation =
+          await confirmPayrollLeaveEffects({
+            payroll,
+            user: req.user,
+            session,
+          });
+
+        payroll.leavePayrollAssessment = {
+          ...latestLeaveAssessment,
+
+          assessmentStatus:
+            latestLeaveAssessment
+              .assessmentStatus ===
+            "Ready"
+              ? "Applied"
+              : latestLeaveAssessment
+                  .assessmentStatus,
+
+          confirmedBy:
+            getUserName(req.user),
+
+          confirmedAt:
+            new Date(),
+
+          confirmation:
+            leaveEffectConfirmation,
+        };
+
+        payroll.markModified(
+          "leavePayrollAssessment"
+        );
+
+        payroll.status = "Approved";
+
+        payroll.approvedBy =
+          getUserName(req.user);
+
+        payroll.approvedAt =
+          new Date();
+
+        payroll.approvalNotes =
+          approvalNotes;
+
+        await payroll.save({
+          session,
+        });
+
+        approvedPayroll =
+          payroll;
+      }
     );
 
-    /*
-     * Preserve the latest assessment evidence even when
-     * approval is rejected.
-     */
-    await payroll.save();
-
-    const wageAssessment =
-      payroll.minimumWageAssessment || {};
-
-    if (
-      wageAssessment.applicable !== false &&
-      (
-        wageAssessment.assessmentStatus !==
-          "Compliant" ||
-        wageAssessment.compliant !== true ||
-        Number(
-          wageAssessment.shortfall || 0
-        ) > 0
-      )
-    ) {
+    if (approvalBlock) {
       return res.status(409).json({
         success: false,
         message:
-          wageAssessment.warning ||
-          "Payroll cannot be approved until minimum-wage compliance is confirmed.",
-        data: {
-          payrollNumber:
-            payroll.payrollNumber,
-          employeeId:
-            payroll.employeeId,
-          employeeName:
-            payroll.employeeName,
-          payPeriod:
-            payroll.payPeriod,
-          assessmentStatus:
-            wageAssessment.assessmentStatus ||
-            "Not Assessed",
-          compliant:
-            wageAssessment.compliant === true,
-          minimumGrossPay:
-            Number(
-              wageAssessment.minimumGrossPay ||
-                0
-            ),
-          assessedGrossPay:
-            Number(
-              wageAssessment.assessedGrossPay ||
-                payroll.grossPay ||
-                0
-            ),
-          shortfall:
-            Number(
-              wageAssessment.shortfall || 0
-            ),
-          ruleCode:
-            wageAssessment.ruleCode || "",
-          attendancePeriodNumber:
-            wageAssessment
-              .attendancePeriodNumber ||
-            "",
-          attendancePeriodStatus:
-            wageAssessment
-              .attendancePeriodStatus ||
-            "",
-          payableHoursSource:
-            wageAssessment
-              .payableHoursSource ||
-            "",
-        },
+          approvalBlock.message,
+        data:
+          approvalBlock.data,
       });
     }
 
-    payroll.status = "Approved";
-    payroll.approvedBy = getUserName(req.user);
-    payroll.approvedAt = new Date();
-    payroll.approvalNotes = String(approvalNotes || "").trim();
-
-    await payroll.save();
-
+    /*
+     * Audit is written after the controlled transaction.
+     * An audit-service issue must not misreport an already
+     * committed Payroll as unapproved.
+     */
     try {
       await writeAuditLog({
         req,
-        action: "APPROVE_PAYROLL",
+        action:
+          "APPROVE_PAYROLL",
         module: "Payroll",
+
         description:
-          `Payroll ${payroll.payrollNumber} approved ` +
-          `for ${payroll.employeeName}`,
+          `Payroll ${approvedPayroll.payrollNumber} approved for ${approvedPayroll.employeeName}`,
+
         targetType: "Payroll",
-        targetId: payroll.payrollNumber,
+
+        targetId:
+          approvedPayroll
+            .payrollNumber,
+
         metadata: {
-          employeeId: payroll.employeeId,
-          employeeName: payroll.employeeName,
-          payPeriod: payroll.payPeriod,
-          grossPay: payroll.grossPay,
-          netPay: payroll.netPay,
-          advanceRecovery: payroll.advanceRecovery,
-          approvedBy: payroll.approvedBy,
-          approvedAt: payroll.approvedAt,
+          employeeId:
+            approvedPayroll.employeeId,
+
+          employeeName:
+            approvedPayroll.employeeName,
+
+          payPeriod:
+            approvedPayroll.payPeriod,
+
+          grossPay:
+            approvedPayroll.grossPay,
+
+          netPay:
+            approvedPayroll.netPay,
+
+          advanceRecovery:
+            approvedPayroll
+              .advanceRecovery,
+
+          minimumWageAssessment:
+            approvedPayroll
+              .minimumWageAssessment,
+
+          leavePayrollAssessment:
+            approvedPayroll
+              .leavePayrollAssessment,
+
+          leaveEffectConfirmation,
+
+          approvedBy:
+            approvedPayroll.approvedBy,
+
+          approvedAt:
+            approvedPayroll.approvedAt,
         },
       });
     } catch (auditError) {
-      console.error("Payroll approval audit error:", auditError);
+      console.error(
+        "Payroll approval audit error:",
+        auditError
+      );
     }
 
     return res.json({
       success: true,
-      message: "Payroll approved successfully",
-      data: payroll,
+      message:
+        "Payroll approved successfully",
+      data:
+        approvedPayroll,
     });
   } catch (error) {
-    console.error("Error approving Payroll:", error);
+    console.error(
+      "Error approving Payroll:",
+      error
+    );
 
-    return res.status(500).json({
-      success: false,
-      message: "Could not approve Payroll",
-      error: error.message,
-    });
+    return res
+      .status(
+        error.statusCode || 500
+      )
+      .json({
+        success: false,
+
+        message:
+          error.message ||
+          "Could not approve Payroll",
+
+        ...(error.data
+          ? {
+              data: error.data,
+            }
+          : {}),
+      });
+  } finally {
+    await session.endSession();
   }
 };
 
