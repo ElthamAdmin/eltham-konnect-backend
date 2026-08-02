@@ -21,6 +21,12 @@ const {
 } = require("../services/payrollMinimumWageService");
 
 const {
+  resolvePayrollLeaveAssessment,
+} = require(
+  "../services/payrollLeaveService"
+);
+
+const {
   getScheduledMonthlyPayDate,
 } = require("../utils/payrollSchedule");
 
@@ -1457,12 +1463,28 @@ const previewPayroll = async (req, res) => {
     }
 
     const resolvedGrossPay =
-      resolvedCompensation.grossPay;
+  resolvedCompensation.grossPay;
 
-    const normalizedCompensationType =
-      resolvedCompensation.compensationType;
+const normalizedCompensationType =
+  resolvedCompensation.compensationType;
 
-    validateStatutorySelection({
+const leavePayrollAssessment =
+  await resolvePayrollLeaveAssessment({
+    employeeId,
+    payPeriod,
+    baseGrossPay:
+      resolvedGrossPay,
+    attendancePeriodNumber,
+  });
+
+const leaveAdjustedGrossPay =
+  leavePayrollAssessment
+    .assessmentStatus === "Ready"
+    ? leavePayrollAssessment
+        .adjustedGrossPay
+    : resolvedGrossPay;
+
+validateStatutorySelection({
       statutoryTreatment:
         normalizedStatutoryTreatment,
       compensationType:
@@ -1488,7 +1510,8 @@ const previewPayroll = async (req, res) => {
     ) {
       const assistedResult =
         await calculateEmployerAssistedPayroll({
-          baseGrossPay: resolvedGrossPay,
+          baseGrossPay:
+  leaveAdjustedGrossPay,
           targetNetPay,
           pensionEmployee: Number(pensionEmployee || 0),
           payPeriod,
@@ -1506,7 +1529,8 @@ const previewPayroll = async (req, res) => {
         assistedResult.employerSupportAllowance;
     } else {
             calculation = await calculateJamaicanPayroll({
-        grossPay: resolvedGrossPay,
+        grossPay:
+  leaveAdjustedGrossPay,
         pensionEmployee,
         payPeriod,
         payDate: calculationDate,
@@ -1653,9 +1677,10 @@ const previewPayroll = async (req, res) => {
         applyEmployeeStatutoryDeductions,
         applyEmployerStatutoryContributions,
         targetNetPay: finalTargetNetPay,
-        employerSupportAllowance,
-        minimumWageAssessment,
-        netPayBeforeAdvance,
+employerSupportAllowance,
+leavePayrollAssessment,
+minimumWageAssessment,
+netPayBeforeAdvance,
         advanceRecovery:
           recoveryPlan.totalAdvanceRecovery,
         advanceRecoveries:
@@ -1911,12 +1936,51 @@ const createPayroll = async (req, res) => {
     }
 
     enteredGrossPay =
-      resolvedCompensation.grossPay;
+  resolvedCompensation.grossPay;
 
-    normalizedCompensationType =
-      resolvedCompensation.compensationType;
+normalizedCompensationType =
+  resolvedCompensation.compensationType;
 
-    validateStatutorySelection({
+const leavePayrollAssessment =
+  await resolvePayrollLeaveAssessment({
+    employeeId:
+      finalEmployeeId,
+    payPeriod,
+    baseGrossPay:
+      enteredGrossPay,
+    attendancePeriodNumber,
+  });
+
+if (
+  leavePayrollAssessment
+    .assessmentStatus ===
+  "Review Required"
+) {
+  const error = new Error(
+    leavePayrollAssessment.warning ||
+      "Leave payroll effects require review before payroll can be created."
+  );
+
+  error.statusCode = 409;
+  error.data =
+    leavePayrollAssessment;
+
+  throw error;
+}
+
+const compensationGrossPay =
+  enteredGrossPay;
+
+if (
+  leavePayrollAssessment
+    .assessmentStatus === "Ready"
+) {
+  enteredGrossPay =
+    leavePayrollAssessment
+      .adjustedGrossPay;
+}
+
+validateStatutorySelection({
       statutoryTreatment:
         normalizedStatutoryTreatment,
       compensationType:
@@ -2016,7 +2080,10 @@ const createPayroll = async (req, res) => {
         applicable: true,
         workerCategory,
         manualWorkedHours: workedHours,
-        attendancePeriodNumber,
+        attendancePeriodNumber:
+  leavePayrollAssessment
+    .attendancePeriodNumber ||
+  attendancePeriodNumber,
       });
 
     const shouldApplyAdvances = normalizeBoolean(
@@ -2170,7 +2237,10 @@ const createPayroll = async (req, res) => {
 
       minimumWageAssessment,
 
-      grossPay: payrollBreakdown.grossPay,
+leavePayrollAssessment,
+
+grossPay:
+  payrollBreakdown.grossPay,
 
       statutoryIncome:
         payrollBreakdown.statutoryIncome,
@@ -2287,10 +2357,18 @@ const createPayroll = async (req, res) => {
               newPayroll.applyEmployeeStatutoryDeductions,
             applyEmployerStatutoryContributions:
               newPayroll.applyEmployerStatutoryContributions,
-            enteredGrossPay,
-            grossPay: newPayroll.grossPay,
-            targetNetPay:
-              newPayroll.targetNetPay,
+           enteredGrossPay,
+compensationGrossPay,
+
+leavePayrollAssessment:
+  newPayroll
+    .leavePayrollAssessment,
+
+grossPay:
+  newPayroll.grossPay,
+
+targetNetPay:
+  newPayroll.targetNetPay,
             employerSupportAllowance:
               newPayroll.employerSupportAllowance,
             totalEmployeeDeductions:
@@ -2340,12 +2418,21 @@ const createPayroll = async (req, res) => {
       error
     );
 
-    return res.status(400).json({
-      success: false,
-      message:
-        error.message ||
-        "Failed to create Payroll record",
-    });
+    return res
+  .status(
+    error.statusCode || 400
+  )
+  .json({
+    success: false,
+    message:
+      error.message ||
+      "Failed to create Payroll record",
+    ...(error.data
+      ? {
+          data: error.data,
+        }
+      : {}),
+  });
   }
 };
 
