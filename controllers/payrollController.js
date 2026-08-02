@@ -25,6 +25,7 @@ const {
 const {
   resolvePayrollLeaveAssessment,
   confirmPayrollLeaveEffects,
+  reversePayrollLeaveEffects,
 } = require(
   "../services/payrollLeaveService"
 );
@@ -3774,76 +3775,213 @@ const payPayroll = async (req, res) => {
 };
 
 const cancelPayroll = async (req, res) => {
+  const session =
+    await mongoose.startSession();
+
+  let cancelledPayroll = null;
+  let leaveReversalResult = {
+    reversedLeaveRequestIds: [],
+    alreadyReversedLeaveRequestIds:
+      [],
+    notAppliedLeaveRequestIds: [],
+  };
+
   try {
-    const { payrollNumber } = req.params;
-    const { reason = "" } = req.body;
+    const { payrollNumber } =
+      req.params;
 
-    if (!String(reason || "").trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Cancellation reason is required",
-      });
-    }
+    const cancellationReason =
+      String(
+        req.body?.reason || ""
+      ).trim();
 
-    const payroll = await Payroll.findOne({ payrollNumber });
-
-    if (!payroll) {
-      return res.status(404).json({
-        success: false,
-        message: "Payroll record not found",
-      });
-    }
-
-    if (!["Pending", "Approved"].includes(payroll.status)) {
+    if (!cancellationReason) {
       return res.status(400).json({
         success: false,
         message:
-          "Only Pending or Approved Payroll can be cancelled",
+          "Cancellation reason is required",
       });
     }
 
-    payroll.status = "Cancelled";
-    payroll.cancelledBy = getUserName(req.user);
-    payroll.cancelledAt = new Date();
-    payroll.cancellationReason = String(reason).trim();
+    await session.withTransaction(
+      async () => {
+        const payroll =
+          await Payroll.findOne({
+            payrollNumber,
+          }).session(session);
 
-    await payroll.save();
+        if (!payroll) {
+          const error = new Error(
+            "Payroll record not found"
+          );
 
+          error.statusCode = 404;
+          throw error;
+        }
+
+        /*
+         * Paid payroll cannot be cancelled here.
+         * A paid and posted payroll requires the
+         * separate accounting reversal workflow.
+         */
+        if (
+          ![
+            "Pending",
+            "Approved",
+          ].includes(payroll.status)
+        ) {
+          const error = new Error(
+            "Only Pending or Approved Payroll can be cancelled. Paid payroll requires a controlled accounting reversal."
+          );
+
+          error.statusCode = 409;
+          error.data = {
+            payrollNumber:
+              payroll.payrollNumber,
+            currentStatus:
+              payroll.status,
+            allowedStatuses: [
+              "Pending",
+              "Approved",
+            ],
+          };
+
+          throw error;
+        }
+
+        leaveReversalResult =
+          await reversePayrollLeaveEffects({
+            payroll,
+            user: req.user,
+            reversalReason:
+              cancellationReason,
+            session,
+          });
+
+        const leaveEffectWasReversed =
+          leaveReversalResult
+            .reversedLeaveRequestIds
+            .length > 0 ||
+          leaveReversalResult
+            .alreadyReversedLeaveRequestIds
+            .length > 0;
+
+        if (
+          payroll.leavePayrollAssessment &&
+          leaveEffectWasReversed
+        ) {
+          payroll.leavePayrollAssessment = {
+            ...payroll
+              .leavePayrollAssessment,
+            payrollEffectStatus:
+              "Reversed",
+            payrollEffectReversedAt:
+              new Date(),
+            payrollEffectReversedBy:
+              getUserName(req.user),
+            payrollEffectReversalReason:
+              cancellationReason,
+            reversedLeaveRequestIds:
+              leaveReversalResult
+                .reversedLeaveRequestIds,
+            alreadyReversedLeaveRequestIds:
+              leaveReversalResult
+                .alreadyReversedLeaveRequestIds,
+          };
+        }
+
+        payroll.status = "Cancelled";
+        payroll.cancelledBy =
+          getUserName(req.user);
+        payroll.cancelledAt =
+          new Date();
+        payroll.cancellationReason =
+          cancellationReason;
+
+        await payroll.save({
+          session,
+        });
+
+        cancelledPayroll = payroll;
+      }
+    );
+
+    /*
+     * The database transaction is already
+     * committed here. Audit failure must not
+     * incorrectly report cancellation failure.
+     */
     try {
       await writeAuditLog({
         req,
         action: "CANCEL_PAYROLL",
         module: "Payroll",
         description:
-          `Payroll ${payroll.payrollNumber} cancelled`,
+          `Payroll ${cancelledPayroll.payrollNumber} cancelled`,
         targetType: "Payroll",
-        targetId: payroll.payrollNumber,
+        targetId:
+          cancelledPayroll.payrollNumber,
         metadata: {
-          employeeId: payroll.employeeId,
-          employeeName: payroll.employeeName,
-          payPeriod: payroll.payPeriod,
-          cancelledBy: payroll.cancelledBy,
-          cancelledAt: payroll.cancelledAt,
-          reason: payroll.cancellationReason,
+          employeeId:
+            cancelledPayroll.employeeId,
+          employeeName:
+            cancelledPayroll.employeeName,
+          payPeriod:
+            cancelledPayroll.payPeriod,
+          previousAllowedStatuses: [
+            "Pending",
+            "Approved",
+          ],
+          finalStatus:
+            cancelledPayroll.status,
+          cancelledBy:
+            cancelledPayroll.cancelledBy,
+          cancelledAt:
+            cancelledPayroll.cancelledAt,
+          reason:
+            cancelledPayroll
+              .cancellationReason,
+          leaveReversalResult,
         },
       });
     } catch (auditError) {
-      console.error("Payroll cancellation audit error:", auditError);
+      console.error(
+        "Payroll cancellation audit error:",
+        auditError
+      );
     }
 
     return res.json({
       success: true,
-      message: "Payroll cancelled successfully",
-      data: payroll,
+      message:
+        "Payroll cancelled successfully",
+      data: cancelledPayroll,
+      leaveReversal:
+        leaveReversalResult,
     });
   } catch (error) {
-    console.error("Error cancelling Payroll:", error);
+    console.error(
+      "Error cancelling Payroll:",
+      error
+    );
 
-    return res.status(500).json({
-      success: false,
-      message: "Could not cancel Payroll",
-      error: error.message,
-    });
+    return res
+      .status(
+        error.statusCode || 500
+      )
+      .json({
+        success: false,
+        message:
+          error.message ||
+          "Could not cancel Payroll",
+        ...(error.data
+          ? {
+              data: error.data,
+            }
+          : {}),
+      });
+  } finally {
+    await session.endSession();
   }
 };
 
