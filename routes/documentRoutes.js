@@ -9,25 +9,202 @@ const {
   getEmployeeDocuments,
   deleteDocument,
   removeMissingDocuments,
-} = require("../controllers/documentController");
+} = require(
+  "../controllers/documentController"
+);
 
-const { protect, requireAnyPermission, requirePermission } = require("../middleware/authMiddleware");
+const {
+  uploadControlledDocument,
+  getControlledEmployeeDocuments,
+  getControlledDocumentByNumber,
+  createControlledDownload,
+} = require(
+  "../controllers/employmentDocumentController"
+);
 
-const uploadDir = path.join(__dirname, "../uploads/hr-documents");
+const {
+  protect,
+  requireAnyPermission,
+  requirePermission,
+} = require(
+  "../middleware/authMiddleware"
+);
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+const canAccessDocumentSelfService =
+  requireAnyPermission([
+    "hr",
+    "documentSelfService",
+  ]);
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
+/*
+ * H6 controlled Cloudinary uploads.
+ *
+ * Files remain in memory only until
+ * the controlled controller sends
+ * them to authenticated Cloudinary
+ * storage.
+ */
+
+const controlledAllowedTypes = [
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
+];
+
+const controlledUpload = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize:
+      10 * 1024 * 1024,
+
+    files: 1,
   },
-  filename: function (req, file, cb) {
-    const uniqueName = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`;
-    cb(null, uniqueName);
+
+  fileFilter: (
+    req,
+    file,
+    callback
+  ) => {
+    if (
+      controlledAllowedTypes.includes(
+        file.mimetype
+      )
+    ) {
+      callback(null, true);
+      return;
+    }
+
+    callback(
+      new Error(
+        "Only PDF, JPG, JPEG, PNG, WEBP, DOC and DOCX employment documents are allowed."
+      )
+    );
   },
 });
+
+const controlledUploadSingle =
+  (req, res, next) => {
+    controlledUpload.single(
+      "file"
+    )(
+      req,
+      res,
+      (error) => {
+        if (!error) {
+          next();
+          return;
+        }
+
+        const isSizeError =
+          error.code ===
+          "LIMIT_FILE_SIZE";
+
+        return res
+          .status(400)
+          .json({
+            success: false,
+
+            message:
+              isSizeError
+                ? "Employment documents cannot exceed 10 MB."
+                : error.message ||
+                  "The employment document could not be processed.",
+          });
+      }
+    );
+  };
+
+/*
+ * Controlled H6 routes.
+ *
+ * These routes must remain above
+ * the legacy generic
+ * /:employeeId route.
+ */
+
+router.post(
+  "/controlled/upload/:employeeId",
+  protect,
+  canAccessDocumentSelfService,
+  controlledUploadSingle,
+  uploadControlledDocument
+);
+
+router.get(
+  "/controlled/employee/:employeeId",
+  protect,
+  canAccessDocumentSelfService,
+  getControlledEmployeeDocuments
+);
+
+router.get(
+  "/controlled/:documentNumber",
+  protect,
+  canAccessDocumentSelfService,
+  getControlledDocumentByNumber
+);
+
+router.post(
+  "/controlled/:documentNumber/download",
+  protect,
+  canAccessDocumentSelfService,
+  createControlledDownload
+);
+
+/*
+ * Legacy embedded-document routes.
+ *
+ * These remain temporarily available
+ * until the preview-only H6 migration
+ * confirms every existing signed
+ * document.
+ */
+
+const uploadDir = path.join(
+  __dirname,
+  "../uploads/hr-documents"
+);
+
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, {
+    recursive: true,
+  });
+}
+
+const storage =
+  multer.diskStorage({
+    destination: function (
+      req,
+      file,
+      callback
+    ) {
+      callback(
+        null,
+        uploadDir
+      );
+    },
+
+    filename: function (
+      req,
+      file,
+      callback
+    ) {
+      const uniqueName =
+        `${Date.now()}-${file.originalname.replace(
+          /\s+/g,
+          "-"
+        )}`;
+
+      callback(
+        null,
+        uniqueName
+      );
+    },
+  });
 
 const allowedTypes = [
   "application/pdf",
@@ -35,17 +212,30 @@ const allowedTypes = [
   "image/jpg",
   "image/png",
   "image/webp",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // DOCX
-  "application/msword", // DOC
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/msword",
 ];
 
 const upload = multer({
   storage,
-  fileFilter: function (req, file, cb) {
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
+
+  fileFilter: function (
+    req,
+    file,
+    callback
+  ) {
+    if (
+      allowedTypes.includes(
+        file.mimetype
+      )
+    ) {
+      callback(null, true);
     } else {
-      cb(new Error("Only PDF, JPG, JPEG, PNG, and WEBP files are allowed"));
+      callback(
+        new Error(
+          "Only PDF, JPG, JPEG, PNG, WEBP, DOC and DOCX files are allowed."
+        )
+      );
     }
   },
 });
@@ -53,7 +243,10 @@ const upload = multer({
 router.post(
   "/upload/:employeeId",
   protect,
-  requireAnyPermission(["hr", "documentSelfService"]),
+  requireAnyPermission([
+    "hr",
+    "documentSelfService",
+  ]),
   upload.single("file"),
   uploadDocument
 );
@@ -61,7 +254,10 @@ router.post(
 router.get(
   "/:employeeId",
   protect,
-  requireAnyPermission(["hr", "documentSelfService"]),
+  requireAnyPermission([
+    "hr",
+    "documentSelfService",
+  ]),
   getEmployeeDocuments
 );
 
