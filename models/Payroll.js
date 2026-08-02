@@ -357,14 +357,25 @@ const PayrollSchema = new mongoose.Schema(
         default: "",
       },
 
-      assessedAt: {
+            assessedAt: {
         type: Date,
         default: null,
       },
     },
 
+    /*
+     * H5 controlled leave-payroll evidence.
+     *
+     * This preserves the Payroll Ready attendance period,
+     * approved leave requests, payable leave, unpaid leave,
+     * NIS coordination and the resulting gross-pay treatment.
+     */
+    leavePayrollAssessment: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
+    },
 
-        grossPay: {
+    grossPay: {
       type: Number,
       required: true,
       min: 0,
