@@ -106,10 +106,37 @@ const actorSchema =
 const fileSchema =
   new mongoose.Schema(
     {
-      storageProvider: {
+            storageProvider: {
         type: String,
         enum: STORAGE_PROVIDERS,
-        default: "Local",
+        default: "Cloudinary",
+      },
+
+      resourceType: {
+        type: String,
+        enum: [
+          "image",
+          "raw",
+          "video",
+        ],
+        default: "raw",
+      },
+
+      deliveryType: {
+        type: String,
+        enum: [
+          "authenticated",
+          "upload",
+          "private",
+        ],
+        default: "authenticated",
+      },
+
+      format: {
+        type: String,
+        default: "",
+        trim: true,
+        lowercase: true,
       },
 
       storageKey: {
