@@ -35,6 +35,14 @@ const {
 );
 
 const {
+  updateControlledDocumentMetadata,
+  verifyControlledDocument,
+  rejectControlledDocument,
+} = require(
+  "../controllers/employmentDocumentReviewController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -151,6 +159,34 @@ router.post(
   requirePermission("hr"),
   controlledUploadSingle,
   recoverLegacyEmploymentDocument
+);
+
+/*
+ * H6 controlled metadata and HR review.
+ *
+ * These routes must remain above the generic
+ * /controlled/:documentNumber route.
+ */
+
+router.patch(
+  "/controlled/:documentNumber/metadata",
+  protect,
+  requirePermission("hr"),
+  updateControlledDocumentMetadata
+);
+
+router.post(
+  "/controlled/:documentNumber/verify",
+  protect,
+  requirePermission("hr"),
+  verifyControlledDocument
+);
+
+router.post(
+  "/controlled/:documentNumber/reject",
+  protect,
+  requirePermission("hr"),
+  rejectControlledDocument
 );
 
 router.post(
