@@ -29,6 +29,12 @@ const {
 );
 
 const {
+  recoverLegacyEmploymentDocument,
+} = require(
+  "../controllers/employmentDocumentRecoveryController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -137,6 +143,14 @@ router.get(
   protect,
   requirePermission("hr"),
   previewLegacyEmploymentDocumentMigration
+);
+
+router.post(
+  "/controlled/legacy-recovery/:employeeId/:legacyDocumentId",
+  protect,
+  requirePermission("hr"),
+  controlledUploadSingle,
+  recoverLegacyEmploymentDocument
 );
 
 router.post(
