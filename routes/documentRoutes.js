@@ -55,6 +55,13 @@ const {
 );
 
 const {
+  archiveControlledDocument,
+  supersedeControlledDocument,
+} = require(
+  "../controllers/employmentDocumentLifecycleController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -261,6 +268,26 @@ router.post(
   requirePermission("hr"),
   controlledUploadSingle,
   uploadControlledDocumentVersion
+);
+
+/*
+ * H6 controlled superseding and archival.
+ *
+ * Files and prior versions remain preserved.
+ */
+
+router.post(
+  "/controlled/:documentNumber/supersede",
+  protect,
+  requirePermission("hr"),
+  supersedeControlledDocument
+);
+
+router.post(
+  "/controlled/:documentNumber/archive",
+  protect,
+  requirePermission("hr"),
+  archiveControlledDocument
 );
 
 /*
