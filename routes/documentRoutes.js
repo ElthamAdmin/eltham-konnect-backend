@@ -62,6 +62,14 @@ const {
 );
 
 const {
+  getEmploymentDocumentExpiryMonitor,
+  recordEmploymentDocumentExpiryReminder,
+  expireControlledDocument,
+} = require(
+  "../controllers/employmentDocumentExpiryController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -170,6 +178,20 @@ router.get(
   protect,
   requirePermission("hr"),
   previewLegacyEmploymentDocumentMigration
+);
+
+/*
+ * H6 expiry monitor.
+ *
+ * This static route must remain above
+ * /controlled/:documentNumber.
+ */
+
+router.get(
+  "/controlled/expiry-monitor",
+  protect,
+  requirePermission("hr"),
+  getEmploymentDocumentExpiryMonitor
 );
 
 router.post(
@@ -288,6 +310,20 @@ router.post(
   protect,
   requirePermission("hr"),
   archiveControlledDocument
+);
+
+router.post(
+  "/controlled/:documentNumber/expiry-reminder",
+  protect,
+  requirePermission("hr"),
+  recordEmploymentDocumentExpiryReminder
+);
+
+router.post(
+  "/controlled/:documentNumber/expire",
+  protect,
+  requirePermission("hr"),
+  expireControlledDocument
 );
 
 /*
