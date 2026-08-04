@@ -49,6 +49,12 @@ const {
 );
 
 const {
+  uploadControlledDocumentVersion,
+} = require(
+  "../controllers/employmentDocumentVersionController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -240,6 +246,21 @@ router.post(
     "hrSelfService",
   ]),
   acknowledgeControlledDocument
+);
+
+/*
+ * H6 controlled document replacement/versioning.
+ *
+ * Existing Cloudinary files are preserved as
+ * inactive historical versions.
+ */
+
+router.post(
+  "/controlled/:documentNumber/versions",
+  protect,
+  requirePermission("hr"),
+  controlledUploadSingle,
+  uploadControlledDocumentVersion
 );
 
 /*
