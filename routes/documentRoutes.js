@@ -43,6 +43,12 @@ const {
 );
 
 const {
+  acknowledgeControlledDocument,
+} = require(
+  "../controllers/employmentDocumentAcknowledgementController"
+);
+
+const {
   protect,
   requireAnyPermission,
   requirePermission,
@@ -216,6 +222,24 @@ router.post(
   protect,
   canAccessDocumentSelfService,
   createControlledDownload
+);
+
+/*
+ * H6 employee acknowledgement.
+ *
+ * The controller enforces ownership using
+ * the document's linkedUserId.
+ */
+
+router.post(
+  "/controlled/:documentNumber/acknowledge",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "documentSelfService",
+    "hrSelfService",
+  ]),
+  acknowledgeControlledDocument
 );
 
 /*
