@@ -18,6 +18,15 @@ const {
 );
 
 const {
+  submitDisciplineCase,
+  startCaseInvestigation,
+  scheduleCaseHearing,
+  completeCaseHearing,
+} = require(
+  "../controllers/employeeRelationsWorkflowController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -73,6 +82,41 @@ router.post(
   protect,
   requirePermission("hr"),
   createDisciplineCaseDraft
+);
+
+/*
+ * H7 controlled workflow transitions.
+ *
+ * All action routes must remain above
+ * the generic GET /:caseNumber route.
+ */
+
+router.post(
+  "/:caseNumber/submit",
+  protect,
+  requirePermission("hr"),
+  submitDisciplineCase
+);
+
+router.post(
+  "/:caseNumber/investigation",
+  protect,
+  requirePermission("hr"),
+  startCaseInvestigation
+);
+
+router.post(
+  "/:caseNumber/hearings",
+  protect,
+  requirePermission("hr"),
+  scheduleCaseHearing
+);
+
+router.post(
+  "/:caseNumber/hearings/:hearingNumber/complete",
+  protect,
+  requirePermission("hr"),
+  completeCaseHearing
 );
 
 /*
