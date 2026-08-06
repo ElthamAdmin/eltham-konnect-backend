@@ -34,6 +34,15 @@ const {
 );
 
 const {
+  submitCaseAppeal,
+  decideCaseAppeal,
+  withdrawGrievanceCase,
+  closeEmployeeRelationsCase,
+} = require(
+  "../controllers/employeeRelationsAppealController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -138,6 +147,34 @@ router.post(
   protect,
   canUseEmployeeRelationsSelfService,
   acknowledgeCaseDecision
+);
+
+router.post(
+  "/:caseNumber/appeals",
+  protect,
+  canUseEmployeeRelationsSelfService,
+  submitCaseAppeal
+);
+
+router.post(
+  "/:caseNumber/appeals/:appealNumber/decision",
+  protect,
+  requirePermission("hr"),
+  decideCaseAppeal
+);
+
+router.post(
+  "/:caseNumber/withdraw",
+  protect,
+  canUseEmployeeRelationsSelfService,
+  withdrawGrievanceCase
+);
+
+router.post(
+  "/:caseNumber/close",
+  protect,
+  requirePermission("hr"),
+  closeEmployeeRelationsCase
 );
 
 /*
