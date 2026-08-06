@@ -12,6 +12,12 @@ const {
 );
 
 const {
+  previewLegacyDisciplineMigration,
+} = require(
+  "../controllers/employeeRelationsMigrationController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -29,6 +35,13 @@ const canUseEmployeeRelationsSelfService =
  * Employee-owned routes must remain above
  * the generic /:caseNumber route.
  */
+
+router.get(
+  "/legacy-migration-preview",
+  protect,
+  requirePermission("hr"),
+  previewLegacyDisciplineMigration
+);
 
 router.get(
   "/me",
