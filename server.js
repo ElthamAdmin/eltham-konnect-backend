@@ -21,6 +21,9 @@ const financeRoutes = require("./routes/financeRoutes");
 const payrollRoutes = require("./routes/payrollRoutes");
 const systemUserRoutes = require("./routes/systemUserRoutes");
 const hrRoutes = require("./routes/hrRoutes");
+const employeeRelationsRoutes = require(
+  "./routes/employeeRelationsRoutes"
+);
 const leaveRoutes = require("./routes/leaveRoutes");
 const settingRoutes = require("./routes/settingRoutes");
 const importRoutes = require("./routes/importRoutes");
@@ -212,6 +215,10 @@ app.use("/api/payroll", payrollRoutes);
 app.use("/api/finance/payroll", payrollRoutes);
 app.use("/api/system-users", systemUserRoutes);
 app.use("/api/hr", hrRoutes);
+app.use(
+  "/api/employee-relations",
+  employeeRelationsRoutes
+);
 app.use("/api/leave-requests", leaveRoutes);
 app.use("/api/settings", settingRoutes);
 app.use("/api/import", importRoutes);
