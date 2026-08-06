@@ -234,7 +234,7 @@ const EvidenceSchema = new mongoose.Schema(
       default: true,
     },
 
-    file: {
+        file: {
       originalFileName: {
         type: String,
         default: "",
@@ -275,6 +275,20 @@ const EvidenceSchema = new mongoose.Schema(
       cloudinaryResourceType: {
         type: String,
         default: "raw",
+        trim: true,
+        select: false,
+      },
+
+      cloudinaryDeliveryType: {
+        type: String,
+        default: "authenticated",
+        trim: true,
+        select: false,
+      },
+
+      cloudinaryFormat: {
+        type: String,
+        default: "",
         trim: true,
         select: false,
       },
