@@ -1,4 +1,6 @@
 const express = require("express");
+const multer = require("multer");
+
 const router = express.Router();
 
 const {
@@ -43,6 +45,14 @@ const {
 );
 
 const {
+  uploadCaseEvidence,
+  downloadCaseEvidence,
+  reviewCaseEvidence,
+} = require(
+  "../controllers/employeeRelationsEvidenceController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -55,6 +65,119 @@ const canUseEmployeeRelationsSelfService =
     "hr",
     "hrSelfService",
   ]);
+
+const ALLOWED_EVIDENCE_MIME_TYPES =
+  new Set([
+    "application/pdf",
+
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+
+    "text/plain",
+    "text/csv",
+
+    "message/rfc822",
+
+    "application/msword",
+
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+    "application/vnd.ms-excel",
+
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ]);
+
+const evidenceUpload =
+  multer({
+    storage:
+      multer.memoryStorage(),
+
+    limits: {
+      files: 1,
+
+      fileSize:
+        10 * 1024 * 1024,
+    },
+
+    fileFilter: (
+      req,
+      file,
+      callback
+    ) => {
+      if (
+        !ALLOWED_EVIDENCE_MIME_TYPES
+          .has(file.mimetype)
+      ) {
+        callback(
+          new Error(
+            "Only PDF, JPG, PNG, WEBP, TXT, CSV, EML, DOC, DOCX, XLS and XLSX evidence files are allowed."
+          )
+        );
+
+        return;
+      }
+
+      callback(
+        null,
+        true
+      );
+    },
+  });
+
+const uploadEvidenceFile = (
+  req,
+  res,
+  next
+) => {
+  evidenceUpload.single("file")(
+    req,
+    res,
+    (error) => {
+      if (!error) {
+        next();
+        return;
+      }
+
+      if (
+        error instanceof
+          multer.MulterError &&
+        error.code ===
+          "LIMIT_FILE_SIZE"
+      ) {
+        return res
+          .status(413)
+          .json({
+            success: false,
+            message:
+              "The employee-relations evidence file cannot exceed 10 MB.",
+          });
+      }
+
+      if (
+        error instanceof
+        multer.MulterError
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            message:
+              `Evidence upload failed: ${error.message}`,
+          });
+      }
+
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message:
+            error.message ||
+            "The employee-relations evidence file could not be accepted.",
+        });
+    }
+  );
+};
 
 /*
  * Employee-owned routes must remain above
@@ -175,6 +298,39 @@ router.post(
   protect,
   requirePermission("hr"),
   closeEmployeeRelationsCase
+);
+
+/*
+ * H7 controlled evidence.
+ *
+ * Files remain in memory only until they
+ * are transferred to authenticated
+ * Cloudinary storage.
+ *
+ * These routes must remain above the
+ * generic GET /:caseNumber route.
+ */
+
+router.post(
+  "/:caseNumber/evidence",
+  protect,
+  canUseEmployeeRelationsSelfService,
+  uploadEvidenceFile,
+  uploadCaseEvidence
+);
+
+router.get(
+  "/:caseNumber/evidence/:evidenceNumber/download",
+  protect,
+  canUseEmployeeRelationsSelfService,
+  downloadCaseEvidence
+);
+
+router.post(
+  "/:caseNumber/evidence/:evidenceNumber/review",
+  protect,
+  requirePermission("hr"),
+  reviewCaseEvidence
 );
 
 /*
