@@ -27,6 +27,13 @@ const {
 );
 
 const {
+  issueCaseDecision,
+  acknowledgeCaseDecision,
+} = require(
+  "../controllers/employeeRelationsDecisionController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -117,6 +124,20 @@ router.post(
   protect,
   requirePermission("hr"),
   completeCaseHearing
+);
+
+router.post(
+  "/:caseNumber/decision",
+  protect,
+  requirePermission("hr"),
+  issueCaseDecision
+);
+
+router.post(
+  "/:caseNumber/acknowledge",
+  protect,
+  canUseEmployeeRelationsSelfService,
+  acknowledgeCaseDecision
 );
 
 /*
