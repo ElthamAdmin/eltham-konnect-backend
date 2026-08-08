@@ -78,6 +78,12 @@ const {
 );
 
 const {
+  submitPerformanceSelfAssessment,
+} = require(
+  "../controllers/performanceReviewAssessmentController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -207,6 +213,16 @@ router.post(
     "hrSelfService",
   ]),
   submitPerformanceGoals
+);
+
+router.post(
+  "/performance/:reviewNumber/self-assessment",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  submitPerformanceSelfAssessment
 );
 
 router.get(
