@@ -54,6 +54,12 @@ const {
 );
 
 const {
+  previewLegacyPerformanceReviewMigration,
+} = require(
+  "../controllers/performanceReviewMigrationController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -119,6 +125,20 @@ router.get(
     "leaveSelfService",
   ]),
   getMyPerformanceReviews
+);
+
+/*
+ * H8 controlled performance reviews.
+ *
+ * The static migration route must remain
+ * above the generic /:employeeId route.
+ */
+
+router.get(
+  "/performance/legacy-migration-preview",
+  protect,
+  requirePermission("hr"),
+  previewLegacyPerformanceReviewMigration
 );
 
 /*
