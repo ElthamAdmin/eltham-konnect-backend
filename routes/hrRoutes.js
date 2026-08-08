@@ -70,6 +70,14 @@ const {
 );
 
 const {
+  updatePerformanceReviewDraft,
+  startPerformanceGoalSetting,
+  submitPerformanceGoals,
+} = require(
+  "../controllers/performanceReviewWorkflowController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -175,6 +183,30 @@ router.post(
   protect,
   requirePermission("hr"),
   createPerformanceReviewDraft
+);
+
+router.patch(
+  "/performance/:reviewNumber/draft",
+  protect,
+  requirePermission("hr"),
+  updatePerformanceReviewDraft
+);
+
+router.post(
+  "/performance/:reviewNumber/goal-setting",
+  protect,
+  requirePermission("hr"),
+  startPerformanceGoalSetting
+);
+
+router.post(
+  "/performance/:reviewNumber/goals/submit",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  submitPerformanceGoals
 );
 
 router.get(
