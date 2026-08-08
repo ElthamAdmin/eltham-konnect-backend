@@ -60,6 +60,16 @@ const {
 );
 
 const {
+  getPerformanceReviews,
+  getMyPerformanceReviews:
+    getMyControlledPerformanceReviews,
+  getPerformanceReviewByNumber,
+  createPerformanceReviewDraft,
+} = require(
+  "../controllers/performanceReviewController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -128,10 +138,12 @@ router.get(
 );
 
 /*
+ /*
  * H8 controlled performance reviews.
  *
- * The static migration route must remain
- * above the generic /:employeeId route.
+ * Static and collection routes must remain
+ * above /performance/:reviewNumber and the
+ * generic /:employeeId route.
  */
 
 router.get(
@@ -139,6 +151,40 @@ router.get(
   protect,
   requirePermission("hr"),
   previewLegacyPerformanceReviewMigration
+);
+
+router.get(
+  "/performance/me",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  getMyControlledPerformanceReviews
+);
+
+router.get(
+  "/performance",
+  protect,
+  requirePermission("hr"),
+  getPerformanceReviews
+);
+
+router.post(
+  "/performance",
+  protect,
+  requirePermission("hr"),
+  createPerformanceReviewDraft
+);
+
+router.get(
+  "/performance/:reviewNumber",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  getPerformanceReviewByNumber
 );
 
 /*
