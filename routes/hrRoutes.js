@@ -91,6 +91,13 @@ const {
 );
 
 const {
+  returnSelfAssessmentToEmployee,
+  submitPerformanceManagerAssessment,
+} = require(
+  "../controllers/performanceReviewManagerAssessmentController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -230,6 +237,26 @@ router.post(
     "hrSelfService",
   ]),
   submitPerformanceSelfAssessment
+);
+
+router.post(
+  "/performance/:reviewNumber/self-assessment/return",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  returnSelfAssessmentToEmployee
+);
+
+router.post(
+  "/performance/:reviewNumber/manager-assessment",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  submitPerformanceManagerAssessment
 );
 
 router.post(
