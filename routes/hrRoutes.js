@@ -98,6 +98,14 @@ const {
 );
 
 const {
+  acknowledgePerformanceReview,
+  activatePerformanceImprovementPlan,
+  completePerformanceImprovementPlan,
+} = require(
+  "../controllers/performanceReviewCompletionController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -270,6 +278,30 @@ router.post(
   protect,
   requirePermission("hr"),
   approvePerformanceReviewByHr
+);
+
+router.post(
+  "/performance/:reviewNumber/acknowledge",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  acknowledgePerformanceReview
+);
+
+router.post(
+  "/performance/:reviewNumber/improvement-plan/activate",
+  protect,
+  requirePermission("hr"),
+  activatePerformanceImprovementPlan
+);
+
+router.post(
+  "/performance/:reviewNumber/improvement-plan/complete",
+  protect,
+  requirePermission("hr"),
+  completePerformanceImprovementPlan
 );
 
 router.get(
