@@ -106,6 +106,13 @@ const {
 );
 
 const {
+  getPerformanceReviewMonitor,
+  cancelPerformanceReview,
+} = require(
+  "../controllers/performanceReviewGovernanceController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -186,6 +193,13 @@ router.get(
   protect,
   requirePermission("hr"),
   previewLegacyPerformanceReviewMigration
+);
+
+router.get(
+  "/performance/monitor",
+  protect,
+  requirePermission("hr"),
+  getPerformanceReviewMonitor
 );
 
 router.get(
@@ -302,6 +316,13 @@ router.post(
   protect,
   requirePermission("hr"),
   completePerformanceImprovementPlan
+);
+
+router.post(
+  "/performance/:reviewNumber/cancel",
+  protect,
+  requirePermission("hr"),
+  cancelPerformanceReview
 );
 
 router.get(
