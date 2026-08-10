@@ -91,10 +91,10 @@ const {
 );
 
 const {
-  returnSelfAssessmentToEmployee,
-  submitPerformanceManagerAssessment,
+  returnManagerAssessment,
+  approvePerformanceReviewByHr,
 } = require(
-  "../controllers/performanceReviewManagerAssessmentController"
+  "../controllers/performanceReviewHrReviewController"
 );
 
 const {
@@ -166,7 +166,6 @@ router.get(
 );
 
 /*
- /*
  * H8 controlled performance reviews.
  *
  * Static and collection routes must remain
@@ -260,23 +259,17 @@ router.post(
 );
 
 router.post(
-  "/performance/:reviewNumber/self-assessment/return",
+  "/performance/:reviewNumber/hr-review/return",
   protect,
-  requireAnyPermission([
-    "hr",
-    "hrSelfService",
-  ]),
-  returnSelfAssessmentToEmployee
+  requirePermission("hr"),
+  returnManagerAssessment
 );
 
 router.post(
-  "/performance/:reviewNumber/manager-assessment",
+  "/performance/:reviewNumber/hr-review/approve",
   protect,
-  requireAnyPermission([
-    "hr",
-    "hrSelfService",
-  ]),
-  submitPerformanceManagerAssessment
+  requirePermission("hr"),
+  approvePerformanceReviewByHr
 );
 
 router.get(
