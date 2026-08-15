@@ -10,6 +10,14 @@ const {
 );
 
 const {
+  submitEmployeeLifecycleCase,
+  decideEmployeeLifecycleCaseByManager,
+  decideEmployeeLifecycleCaseByHr,
+} = require(
+  "../controllers/employeeLifecycleWorkflowController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -20,7 +28,7 @@ const {
  * H9 controlled onboarding and offboarding.
  *
  * Collection routes must remain above the
- * generic /:lifecycleCaseNumber route.
+ * parameterized lifecycle-case routes.
  */
 
 router.get(
@@ -35,6 +43,34 @@ router.post(
   protect,
   requirePermission("hr"),
   createEmployeeLifecycleCaseDraft
+);
+
+/*
+ * H9 Stage 2A controlled approval workflow.
+ *
+ * Action routes must remain above the generic
+ * GET /:lifecycleCaseNumber route.
+ */
+
+router.post(
+  "/:lifecycleCaseNumber/submit",
+  protect,
+  requirePermission("hr"),
+  submitEmployeeLifecycleCase
+);
+
+router.post(
+  "/:lifecycleCaseNumber/manager-decision",
+  protect,
+  requirePermission("hr"),
+  decideEmployeeLifecycleCaseByManager
+);
+
+router.post(
+  "/:lifecycleCaseNumber/hr-decision",
+  protect,
+  requirePermission("hr"),
+  decideEmployeeLifecycleCaseByHr
 );
 
 /*
