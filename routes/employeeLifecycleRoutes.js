@@ -25,6 +25,13 @@ const {
 );
 
 const {
+  requestEmployeeLifecycleAccessAction,
+  completeEmployeeLifecycleAccessAction,
+} = require(
+  "../controllers/employeeLifecycleAccessController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -78,10 +85,7 @@ router.post(
 );
 
 /*
- * H9 Stage 2B controlled checklist workflow.
- *
- * The checklist-item route must remain above
- * the generic GET /:lifecycleCaseNumber route.
+ * H9 controlled checklist workflow.
  */
 
 router.post(
@@ -96,6 +100,27 @@ router.patch(
   protect,
   requirePermission("hr"),
   updateEmployeeLifecycleChecklistItem
+);
+
+/*
+ * H9 Stage 3A controlled system-access coordination.
+ *
+ * These routes record requests and evidence.
+ * They do not directly change SystemUser.
+ */
+
+router.post(
+  "/:lifecycleCaseNumber/access/:accessItemNumber/request",
+  protect,
+  requirePermission("hr"),
+  requestEmployeeLifecycleAccessAction
+);
+
+router.post(
+  "/:lifecycleCaseNumber/access/:accessItemNumber/outcome",
+  protect,
+  requirePermission("hr"),
+  completeEmployeeLifecycleAccessAction
 );
 
 /*
