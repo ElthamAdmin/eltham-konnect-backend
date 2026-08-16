@@ -45,6 +45,7 @@ const canApprovePayroll = requireAnyPermission([
 ]);
 
 const canViewOwnPayslips = requireAnyPermission([
+  "hrSelfService",
   "payslipSelfService",
   "payroll",
   "payrollManage",
