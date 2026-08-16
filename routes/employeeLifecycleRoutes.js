@@ -38,6 +38,13 @@ const {
 );
 
 const {
+  updateProbationCoordination,
+  recordProbationOutcome,
+} = require(
+  "../controllers/employeeLifecycleProbationController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -142,6 +149,29 @@ router.post(
   protect,
   requirePermission("hr"),
   recordPropertyOutcome
+);
+
+/*
+ * H9 Stage 3C controlled probation coordination.
+ *
+ * These routes coordinate onboarding probation,
+ * review dates, H8 review references, extensions
+ * and final outcomes. They do not directly modify
+ * the linked H8 performance-review record.
+ */
+
+router.patch(
+  "/:lifecycleCaseNumber/probation",
+  protect,
+  requirePermission("hr"),
+  updateProbationCoordination
+);
+
+router.post(
+  "/:lifecycleCaseNumber/probation/outcome",
+  protect,
+  requirePermission("hr"),
+  recordProbationOutcome
 );
 
 /*
