@@ -483,9 +483,10 @@ const linkFinalPayrollRecord =
           req.body?.payrollNumber
         ).toUpperCase();
 
-      const linkNotes =
+            const linkNotes =
         normalizeString(
-          req.body?.linkNotes
+          req.body?.linkageNotes ||
+            req.body?.linkNotes
         );
 
       const leaveSettlementNotes =
