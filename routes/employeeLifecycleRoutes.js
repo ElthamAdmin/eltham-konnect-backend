@@ -45,6 +45,13 @@ const {
 );
 
 const {
+  updateFinalPayrollCoordination,
+  linkFinalPayrollRecord,
+} = require(
+  "../controllers/employeeLifecycleFinalPayrollController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -172,6 +179,28 @@ router.post(
   protect,
   requirePermission("hr"),
   recordProbationOutcome
+);
+
+/*
+ * H9 Stage 3D controlled final-payroll coordination.
+ *
+ * These routes coordinate and link an existing
+ * payroll record. They do not calculate, approve,
+ * pay, cancel or reverse payroll.
+ */
+
+router.patch(
+  "/:lifecycleCaseNumber/final-payroll",
+  protect,
+  requirePermission("hr"),
+  updateFinalPayrollCoordination
+);
+
+router.post(
+  "/:lifecycleCaseNumber/final-payroll/link",
+  protect,
+  requirePermission("hr"),
+  linkFinalPayrollRecord
 );
 
 /*
