@@ -140,23 +140,74 @@ const runDailyAttendanceMaintenance = async () => {
     linkedUserId: { $ne: "" },
   });
 
+  const activeLeaveUserIds = [
+    ...new Set(
+      approvedLeaves
+        .map((leave) => String(leave.linkedUserId || "").trim())
+        .filter(Boolean)
+    ),
+  ];
+
+  /*
+   * Clear leave-derived duty statuses when the employee
+   * no longer has an approved leave covering today.
+   *
+   * Historical leave requests remain unchanged.
+   */
+  await SystemUser.updateMany(
+    {
+      dutyStatus: {
+        $in: [
+          "Vacation Leave",
+          "Sick Leave",
+          "Out of Office",
+        ],
+      },
+      userId: {
+        $nin: activeLeaveUserIds,
+      },
+    },
+    {
+      $set: {
+        dutyStatus: "Off Duty",
+      },
+    }
+  );
+
+  /*
+   * Apply the correct leave status only to employees
+   * whose approved leave includes today's Jamaica date.
+   */
   for (const leave of approvedLeaves) {
-    const user = await SystemUser.findOne({ userId: leave.linkedUserId });
+    const user = await SystemUser.findOne({
+      userId: leave.linkedUserId,
+    });
 
     if (user) {
-      user.dutyStatus = getLeaveDutyStatus(leave.leaveType);
-      await user.save();
+      const correctLeaveStatus =
+        getLeaveDutyStatus(leave.leaveType);
+
+      if (user.dutyStatus !== correctLeaveStatus) {
+        user.dutyStatus = correctLeaveStatus;
+        await user.save();
+      }
     }
   }
 
   if (now >= forceClockOutTime) {
     const openLogs = await AttendanceLog.find({
       workDate,
-      sessionStatus: { $in: ["On Duty", "At Lunch"] },
+      sessionStatus: {
+        $in: ["On Duty", "At Lunch"],
+      },
     });
 
     for (const attendance of openLogs) {
-      if (attendance.sessionStatus === "At Lunch" && attendance.lunchOutTime && !attendance.lunchInTime) {
+      if (
+        attendance.sessionStatus === "At Lunch" &&
+        attendance.lunchOutTime &&
+        !attendance.lunchInTime
+      ) {
         attendance.lunchInTime = forceClockOutTime;
       }
 
@@ -167,12 +218,15 @@ const runDailyAttendanceMaintenance = async () => {
         attendance.lunchMinutes
       );
       attendance.sessionStatus = "Completed";
-      attendance.notes = `${attendance.notes || ""} Auto clock-out applied at 6:00 PM.`.trim();
+      attendance.notes =
+        `${attendance.notes || ""} Auto clock-out applied at 6:00 PM.`.trim();
 
       await attendance.save();
 
       await SystemUser.findOneAndUpdate(
-        { userId: attendance.userId },
+        {
+          userId: attendance.userId,
+        },
         {
           dutyStatus: "Off Duty",
           lastLogoutAt: forceClockOutTime,
