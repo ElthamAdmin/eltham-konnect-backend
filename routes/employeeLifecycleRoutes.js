@@ -32,6 +32,12 @@ const {
 );
 
 const {
+  recordPropertyOutcome,
+} = require(
+  "../controllers/employeeLifecyclePropertyController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -121,6 +127,21 @@ router.post(
   protect,
   requirePermission("hr"),
   completeEmployeeLifecycleAccessAction
+);
+
+/*
+ * H9 Stage 3B controlled property custody.
+ *
+ * This route records issuance, return, transfer,
+ * loss, damage and custody evidence. It does not
+ * directly change inventory or fixed assets.
+ */
+
+router.post(
+  "/:lifecycleCaseNumber/property/:propertyNumber/outcome",
+  protect,
+  requirePermission("hr"),
+  recordPropertyOutcome
 );
 
 /*
