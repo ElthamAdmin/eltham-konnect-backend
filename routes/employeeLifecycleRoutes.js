@@ -52,6 +52,13 @@ const {
 );
 
 const {
+  previewEmployeeLifecycleCompletion,
+  completeEmployeeLifecycleCase,
+} = require(
+  "../controllers/employeeLifecycleCompletionController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -201,6 +208,29 @@ router.post(
   protect,
   requirePermission("hr"),
   linkFinalPayrollRecord
+);
+
+/*
+ * H9 Stage 4 controlled lifecycle completion.
+ *
+ * The preview is read-only. Completion is allowed
+ * only after every required approval, checklist,
+ * access, property, probation and final-payroll
+ * obligation has passed validation.
+ */
+
+router.get(
+  "/:lifecycleCaseNumber/completion-preview",
+  protect,
+  requirePermission("hr"),
+  previewEmployeeLifecycleCompletion
+);
+
+router.post(
+  "/:lifecycleCaseNumber/complete",
+  protect,
+  requirePermission("hr"),
+  completeEmployeeLifecycleCase
 );
 
 /*
