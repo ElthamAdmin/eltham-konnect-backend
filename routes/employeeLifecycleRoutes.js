@@ -18,6 +18,13 @@ const {
 );
 
 const {
+  startEmployeeLifecycleCase,
+  updateEmployeeLifecycleChecklistItem,
+} = require(
+  "../controllers/employeeLifecycleChecklistController"
+);
+
+const {
   protect,
   requirePermission,
 } = require(
@@ -27,7 +34,7 @@ const {
 /*
  * H9 controlled onboarding and offboarding.
  *
- * Collection routes must remain above the
+ * Collection routes must remain above all
  * parameterized lifecycle-case routes.
  */
 
@@ -46,10 +53,7 @@ router.post(
 );
 
 /*
- * H9 Stage 2A controlled approval workflow.
- *
- * Action routes must remain above the generic
- * GET /:lifecycleCaseNumber route.
+ * H9 controlled approval workflow.
  */
 
 router.post(
@@ -71,6 +75,27 @@ router.post(
   protect,
   requirePermission("hr"),
   decideEmployeeLifecycleCaseByHr
+);
+
+/*
+ * H9 Stage 2B controlled checklist workflow.
+ *
+ * The checklist-item route must remain above
+ * the generic GET /:lifecycleCaseNumber route.
+ */
+
+router.post(
+  "/:lifecycleCaseNumber/start",
+  protect,
+  requirePermission("hr"),
+  startEmployeeLifecycleCase
+);
+
+router.patch(
+  "/:lifecycleCaseNumber/checklist/:itemNumber",
+  protect,
+  requirePermission("hr"),
+  updateEmployeeLifecycleChecklistItem
 );
 
 /*
