@@ -37,6 +37,9 @@ const {
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
+const escapeRegularExpression = (value = "") =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const STATUTORY_TREATMENTS = [
   "Standard",
   "Employer-Assisted Net Pay",
@@ -1294,41 +1297,142 @@ const getPayroll = async (req, res) => {
 
 const getMyPayroll = async (req, res) => {
   try {
-    const linkedEmployeeId = req.user?.linkedEmployeeId || "";
-    const userId = req.user?.userId || "";
+    const linkedEmployeeId = String(
+      req.user?.linkedEmployeeId || ""
+    ).trim();
+
+    const userId = String(
+      req.user?.userId ||
+        req.user?._id ||
+        req.user?.id ||
+        ""
+    ).trim();
+
     let employee = null;
 
     if (linkedEmployeeId) {
-      employee = await HREmployee.findOne({ employeeId: linkedEmployeeId });
+      employee = await HREmployee.findOne({
+        employeeId: linkedEmployeeId,
+      });
     }
 
     if (!employee && userId) {
-      employee = await HREmployee.findOne({ linkedUserId: userId });
+      employee = await HREmployee.findOne({
+        linkedUserId: userId,
+      });
     }
 
     if (!employee) {
       return res.status(404).json({
         success: false,
-        message: "No HR employee profile is linked to this user",
+        message:
+          "No HR employee profile is linked to this user.",
       });
     }
 
-    const payroll = await Payroll.find({ employeeId: employee.employeeId }).sort({
-      payDate: -1,
-      createdAt: -1,
-      _id: -1,
+    const employeeId = String(
+      employee.employeeId || ""
+    ).trim();
+
+    const employeeName = String(
+      employee.fullName || ""
+    ).trim();
+
+    if (!employeeId) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The linked HR employee profile does not have a valid employee ID.",
+      });
+    }
+
+    const ownershipConditions = [
+      {
+        employeeId,
+      },
+    ];
+
+    /*
+     * H10 controlled legacy-payslip recovery.
+     *
+     * Earlier payroll records may have been created
+     * before employeeId became mandatory. A legacy
+     * record may be matched by employeeName only when
+     * that name belongs to exactly one HR employee.
+     */
+    if (employeeName) {
+      const exactEmployeeNameExpression = new RegExp(
+        `^${escapeRegularExpression(employeeName)}$`,
+        "i"
+      );
+
+      const matchingEmployeeCount =
+        await HREmployee.countDocuments({
+          fullName: exactEmployeeNameExpression,
+        });
+
+      if (matchingEmployeeCount === 1) {
+        ownershipConditions.push({
+          employeeId: {
+            $in: ["", null],
+          },
+          employeeName: exactEmployeeNameExpression,
+        });
+      }
+    }
+
+    const payroll = await Payroll.find({
+      $and: [
+        {
+          $or: ownershipConditions,
+        },
+        {
+          status: {
+            $in: ["Approved", "Paid"],
+          },
+        },
+      ],
+    })
+      .sort({
+        payDate: -1,
+        createdAt: -1,
+        _id: -1,
+      })
+      .lean();
+
+    await writeAuditLog({
+      req,
+      action: "Payslips Viewed",
+      module: "Payroll",
+      description:
+        `${employeeName || employeeId} accessed their own employee-restricted payslips.`,
+      targetType: "HREmployee",
+      targetId: employeeId,
+      metadata: {
+        employeeId,
+        recordCount: payroll.length,
+        accessScope: "Employee Self Service",
+        legacyRecordsIncluded: payroll.filter(
+          (record) =>
+            !String(record.employeeId || "").trim()
+        ).length,
+      },
     });
 
     return res.json({
       success: true,
-      message: "My payroll records retrieved successfully",
+      message:
+        "Your employee-restricted payslips were retrieved successfully.",
+      totalRecords: payroll.length,
       data: payroll,
     });
   } catch (error) {
     console.error("Error getting my payroll:", error);
+
     return res.status(500).json({
       success: false,
-      message: "Failed to retrieve my payroll records",
+      message:
+        "Failed to retrieve your employee-restricted payslips.",
       error: error.message,
     });
   }
