@@ -394,6 +394,7 @@ router.get(
     "hr",
     "payroll",
     "payrollManage",
+    "hrSelfService",
   ]),
   getAttendancePeriods
 );
@@ -426,7 +427,10 @@ router.post(
 router.post(
   "/attendance-periods/:periodNumber/adjustments",
   protect,
-  requirePermission("hr"),
+    requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
   requestAttendanceAdjustment
 );
 

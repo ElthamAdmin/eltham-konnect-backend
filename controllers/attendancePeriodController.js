@@ -42,6 +42,33 @@ const getUserId = (user) =>
 const normalizeString = (value) =>
   String(value || "").trim();
 
+const canManageAllAttendance = (user) => {
+  if (user?.role === "Admin") {
+    return true;
+  }
+
+  const permissions = Array.isArray(
+    user?.permissions
+  )
+    ? user.permissions
+    : [];
+
+  return [
+    "hr",
+    "payroll",
+    "payrollManage",
+  ].some((permission) =>
+    permissions.includes(permission)
+  );
+};
+
+const getAuthenticatedUserId = (user) =>
+  normalizeString(
+    user?.userId ||
+      user?._id ||
+      user?.id
+  );
+
 const synchronizeAttendanceLeaveEvidence =
   async ({
     attendancePeriod,
@@ -1033,11 +1060,34 @@ await writeAuditLog({
           req.query.periodNumber
         );
 
-      const filter = {};
+            const filter = {};
 
-      if (employeeId) {
-        filter.employeeId =
-          employeeId;
+      if (
+        canManageAllAttendance(
+          req.user
+        )
+      ) {
+        if (employeeId) {
+          filter.employeeId =
+            employeeId;
+        }
+      } else {
+        const linkedUserId =
+          getAuthenticatedUserId(
+            req.user
+          );
+
+        if (!linkedUserId) {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Your authenticated user account could not be linked to attendance records.",
+          });
+        }
+
+        filter[
+          "employeeSnapshot.linkedUserId"
+        ] = linkedUserId;
       }
 
       if (periodKey) {
@@ -1424,6 +1474,37 @@ await writeAuditLog({
           message:
             "Attendance period was not found.",
         });
+      }
+
+            if (
+        !canManageAllAttendance(
+          req.user
+        )
+      ) {
+        const linkedUserId =
+          getAuthenticatedUserId(
+            req.user
+          );
+
+        const attendanceOwnerUserId =
+          normalizeString(
+            attendancePeriod
+              .employeeSnapshot
+              ?.linkedUserId
+          );
+
+        if (
+          !linkedUserId ||
+          !attendanceOwnerUserId ||
+          linkedUserId !==
+            attendanceOwnerUserId
+        ) {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Employees may request adjustments only for attendance assigned to their own linked employee profile.",
+          });
+        }
       }
 
       if (
