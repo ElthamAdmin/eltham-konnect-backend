@@ -1820,6 +1820,179 @@ if (
   }
 };
 
+const acknowledgeLeaveRequest = async (
+  req,
+  res
+) => {
+  try {
+    const leaveRequest =
+      await LeaveRequest.findOne({
+        leaveRequestId:
+          req.params.leaveRequestId,
+      });
+
+    if (!leaveRequest) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Leave request was not found.",
+      });
+    }
+
+    if (
+      !canAccessRequest(
+        req,
+        leaveRequest
+      )
+    ) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "You may acknowledge only a leave request assigned to your linked employee profile.",
+      });
+    }
+
+    /*
+     * HR must not acknowledge an
+     * employee's leave decision.
+     */
+    if (isHrUser(req)) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "The employee must acknowledge their own leave decision.",
+      });
+    }
+
+    if (
+      !["Approved", "Completed"].includes(
+        leaveRequest.status
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${leaveRequest.leaveRequestId} cannot be acknowledged while its status is ${leaveRequest.status}.`,
+      });
+    }
+
+    if (
+      !leaveRequest
+        .employeeAcknowledgement
+        ?.required
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${leaveRequest.leaveRequestId} does not require employee acknowledgement.`,
+      });
+    }
+
+    if (
+      leaveRequest
+        .employeeAcknowledgement
+        ?.acknowledged
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `${leaveRequest.leaveRequestId} has already been acknowledged.`,
+        data: {
+          leaveRequestId:
+            leaveRequest.leaveRequestId,
+          employeeAcknowledgement:
+            leaveRequest
+              .employeeAcknowledgement,
+        },
+      });
+    }
+
+    if (req.body.confirmed !== true) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Acknowledgement confirmation is required.",
+      });
+    }
+
+    const beforeValues =
+      leaveRequest.toObject();
+
+    leaveRequest.employeeAcknowledgement = {
+      required: true,
+      acknowledged: true,
+      acknowledgedBy:
+        getUserName(req.user),
+      acknowledgedByUserId:
+        getUserId(req.user),
+      acknowledgedAt: new Date(),
+      comments: normalizeString(
+        req.body.comments
+      ),
+    };
+
+    leaveRequest.updatedBy =
+      getUserName(req.user);
+
+    appendWorkflow({
+      leaveRequest,
+      action:
+        "Employee Acknowledged",
+      fromStatus:
+        leaveRequest.status,
+      toStatus:
+        leaveRequest.status,
+      notes:
+        normalizeString(
+          req.body.comments
+        ) ||
+        "The employee acknowledged the approved leave decision.",
+      user: req.user,
+    });
+
+    await leaveRequest.save();
+
+    await writeAuditLog({
+      req,
+      action:
+        "ACKNOWLEDGE_LEAVE_REQUEST",
+      module: "HR",
+      description:
+        `Leave request ${leaveRequest.leaveRequestId} acknowledged by the employee.`,
+      targetType: "LeaveRequest",
+      targetId:
+        leaveRequest.leaveRequestId,
+      beforeValues,
+      afterValues:
+        leaveRequest.toObject(),
+      metadata: {
+        employeeId:
+          leaveRequest.employeeId,
+        linkedUserId:
+          leaveRequest.linkedUserId,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message:
+        `${leaveRequest.leaveRequestId} acknowledged successfully.`,
+      data: leaveRequest,
+    });
+  } catch (error) {
+    console.error(
+      "Acknowledge leave request error:",
+      error
+    );
+
+    return sendControllerError(
+      res,
+      error,
+      "Could not acknowledge the leave request."
+    );
+  }
+};
+
 const rejectLeaveRequest = async (
   req,
   res
@@ -1963,6 +2136,7 @@ module.exports = {
   upgradeLegacyLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
+  acknowledgeLeaveRequest,
   cancelLeaveRequest,
   rejectLeaveRequest,
 };

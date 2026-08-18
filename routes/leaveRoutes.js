@@ -10,6 +10,7 @@ const {
   upgradeLegacyLeaveRequest,
   approveLeaveRequestByManager,
   approveLeaveRequestByHr,
+  acknowledgeLeaveRequest,
   cancelLeaveRequest,
   rejectLeaveRequest,
 } = require(
@@ -184,6 +185,13 @@ router.post(
   protect,
   requirePermission("hr"),
   approveLeaveRequestByHr
+);
+
+router.post(
+  "/:leaveRequestId/acknowledge",
+  protect,
+  canAccessLeaveSelfService,
+  acknowledgeLeaveRequest
 );
 
 router.post(
