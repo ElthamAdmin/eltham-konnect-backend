@@ -1,6 +1,8 @@
 const crypto = require("crypto");
 
 const HREmployee = require("../models/HREmployee");
+const SystemUser = require("../models/SystemUser");
+
 const EmployeeProfileUpdateRequest = require(
   "../models/EmployeeProfileUpdateRequest"
 );
@@ -30,6 +32,37 @@ const getUserName = (user) =>
   ) || "System User";
 
 const ALLOWED_PROFILE_FIELDS = {
+  fullName: {
+    label: "Legal Full Name",
+    maximumLength: 160,
+    normalize: normalizeString,
+  },
+
+  gender: {
+    label: "Gender",
+    maximumLength: 20,
+    normalize: normalizeString,
+  },
+
+  dateOfBirth: {
+    label: "Date of Birth",
+    maximumLength: 10,
+    normalize: normalizeString,
+  },
+
+  trn: {
+    label: "TRN",
+    maximumLength: 9,
+    normalize: (value) =>
+      normalizeString(value).replace(/\D/g, ""),
+  },
+
+  nisNumber: {
+    label: "NIS Number",
+    maximumLength: 30,
+    normalize: normalizeString,
+  },
+
   email: {
     label: "HR Contact Email",
     maximumLength: 160,
@@ -73,6 +106,28 @@ const ALLOWED_PROFILE_FIELDS = {
   },
 };
 
+const PROFILE_GENDERS = [
+  "",
+  "Male",
+  "Female",
+  "Other",
+];
+
+const isValidDateOnly = (value) => {
+  if (!value) return true;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const date = new Date(`${value}T12:00:00.000Z`);
+
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value
+  );
+};
+
 const createRequestNumber = (employeeId) =>
   [
     "PROFILE",
@@ -88,7 +143,12 @@ const buildEmployeeSnapshot = (employee) => ({
   branch: normalizeString(employee?.branch),
 });
 
-const buildContactSnapshot = (employee) => ({
+const buildProfileSnapshot = (employee) => ({
+  fullName: normalizeString(employee?.fullName),
+  gender: normalizeString(employee?.gender),
+  dateOfBirth: normalizeString(employee?.dateOfBirth),
+  trn: normalizeString(employee?.trn),
+  nisNumber: normalizeString(employee?.nisNumber),
   email: normalizeString(employee?.email),
   phone: normalizeString(employee?.phone),
   alternatePhone: normalizeString(
@@ -189,6 +249,66 @@ const buildRequestedChanges = ({
       return {
         error:
           "A valid HR contact email address is required.",
+        changes: [],
+      };
+    }
+
+        if (
+      field === "fullName" &&
+      !requestedValue
+    ) {
+      return {
+        error:
+          "The employee's legal full name cannot be blank.",
+        changes: [],
+      };
+    }
+
+    if (
+      field === "gender" &&
+      !PROFILE_GENDERS.includes(
+        requestedValue
+      )
+    ) {
+      return {
+        error:
+          "Gender must be Male, Female, Other or blank.",
+        changes: [],
+      };
+    }
+
+    if (
+      field === "dateOfBirth" &&
+      !isValidDateOnly(requestedValue)
+    ) {
+      return {
+        error:
+          "Date of birth must be a valid date in YYYY-MM-DD format.",
+        changes: [],
+      };
+    }
+
+    if (
+      field === "dateOfBirth" &&
+      requestedValue &&
+      requestedValue >
+        new Date().toISOString().slice(0, 10)
+    ) {
+      return {
+        error:
+          "Date of birth cannot be in the future.",
+        changes: [],
+      };
+    }
+
+    if (
+      field === "trn" &&
+      requestedValue &&
+      requestedValue.length !== 9
+    ) {
+      return {
+        error:
+          "TRN must contain exactly 9 digits.",
         changes: [],
       };
     }
@@ -546,7 +666,7 @@ const reviewProfileUpdateRequest = async (
     }
 
     const beforeValues =
-      buildContactSnapshot(employee);
+      buildProfileSnapshot(employee);
 
     if (decision === "Approved") {
       const emailChange =
@@ -576,6 +696,34 @@ const reviewProfileUpdateRequest = async (
         }
       }
 
+            const linkedUserId =
+        normalizeString(
+          employee.linkedUserId
+        );
+
+      if (
+        linkedUserId &&
+        emailChange?.requestedValue
+      ) {
+        const existingSystemUser =
+          await SystemUser.findOne({
+            userId: {
+              $ne: linkedUserId,
+            },
+            email: normalizeEmail(
+              emailChange.requestedValue
+            ),
+          }).select("userId");
+
+        if (existingSystemUser) {
+          return res.status(409).json({
+            success: false,
+            message:
+              "That email address is already assigned to another system user.",
+          });
+        }
+      }
+
       for (const change of request.changes) {
         if (
           Object.prototype.hasOwnProperty.call(
@@ -589,6 +737,29 @@ const reviewProfileUpdateRequest = async (
       }
 
       await employee.save();
+            if (employee.linkedUserId) {
+        await SystemUser.findOneAndUpdate(
+          {
+            userId: employee.linkedUserId,
+          },
+          {
+            fullName: employee.fullName,
+            email: employee.email || undefined,
+            phone: employee.phone || undefined,
+            linkedEmployeeId:
+              employee.employeeId,
+            employeeSnapshot: {
+              jobTitle:
+                employee.jobTitle || "",
+              department:
+                employee.department || "",
+            },
+          },
+          {
+            runValidators: true,
+          }
+        );
+      }
     }
 
     const reviewedByUserId = getUserId(
@@ -624,7 +795,7 @@ const reviewProfileUpdateRequest = async (
     await request.save();
 
     const afterValues =
-      buildContactSnapshot(employee);
+      buildProfileSnapshot(employee);
 
     await writeAuditLog({
       req,

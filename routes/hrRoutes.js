@@ -541,7 +541,7 @@ router.post(
 // HR-management access only.
 
 /*
- * H10 Stage 4 controlled profile-update requests.
+ * H10 Stage 5 controlled profile-update requests.
  *
  * These static routes must remain above the
  * generic /:employeeId employee route.
