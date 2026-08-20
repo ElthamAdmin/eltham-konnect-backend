@@ -14,8 +14,8 @@ const getUserName = (user) =>
 
 const getUserId = (user) =>
   String(
-    user?._id ||
-      user?.userId ||
+    user?.userId ||
+      user?._id ||
       user?.id ||
       ""
   ).trim();
