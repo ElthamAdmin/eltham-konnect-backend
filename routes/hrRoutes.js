@@ -113,6 +113,16 @@ const {
 );
 
 const {
+  getMyProfileUpdateRequests,
+  getProfileUpdateRequests,
+  createMyProfileUpdateRequest,
+  reviewProfileUpdateRequest,
+  cancelMyProfileUpdateRequest,
+} = require(
+  "../controllers/employeeProfileUpdateRequestController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
@@ -529,6 +539,57 @@ router.post(
 );
 
 // HR-management access only.
+
+/*
+ * H10 Stage 4 controlled profile-update requests.
+ *
+ * These static routes must remain above the
+ * generic /:employeeId employee route.
+ */
+
+router.get(
+  "/profile-update-requests/me",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  getMyProfileUpdateRequests
+);
+
+router.get(
+  "/profile-update-requests",
+  protect,
+  requirePermission("hr"),
+  getProfileUpdateRequests
+);
+
+router.post(
+  "/profile-update-requests",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  createMyProfileUpdateRequest
+);
+
+router.post(
+  "/profile-update-requests/:requestNumber/review",
+  protect,
+  requirePermission("hr"),
+  reviewProfileUpdateRequest
+);
+
+router.post(
+  "/profile-update-requests/:requestNumber/cancel",
+  protect,
+  requireAnyPermission([
+    "hr",
+    "hrSelfService",
+  ]),
+  cancelMyProfileUpdateRequest
+);
 // Employees must use /me for their own profile.
 router.get(
   "/",
