@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const AuditLog = require("../models/AuditLog");
 
 const getIpAddress = (req) => {
@@ -66,7 +67,8 @@ const writeAuditLog = async ({
     const userAgent = getUserAgent(req);
 
     await AuditLog.create({
-      auditNumber: `AUD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      auditNumber:
+  `AUD-${Date.now()}-${crypto.randomUUID().toUpperCase()}`,
       action,
       module,
       description,

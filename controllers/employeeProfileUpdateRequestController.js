@@ -884,11 +884,15 @@ const cancelMyProfileUpdateRequest = async (
       });
     }
 
-    const request =
-      await EmployeeProfileUpdateRequest.findOne({
-        requestNumber,
-        employeeId: employee.employeeId,
-      });
+    const authenticatedUserId =
+  getUserId(req.user);
+
+const request =
+  await EmployeeProfileUpdateRequest.findOne({
+    requestNumber,
+    employeeId: employee.employeeId,
+    linkedUserId: authenticatedUserId,
+  });
 
     if (!request) {
       return res.status(404).json({

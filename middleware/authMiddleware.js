@@ -1,9 +1,26 @@
 const jwt = require("jsonwebtoken");
 
+const getJwtSecret = () => {
+  const secret = String(
+    process.env.JWT_SECRET || ""
+  ).trim();
+
+  if (!secret) {
+    throw new Error(
+      "JWT_SECRET is not configured."
+    );
+  }
+
+  return secret;
+};
+
 const verifyToken = (token) => {
   return jwt.verify(
     token,
-    process.env.JWT_SECRET || "eltham-konnect-secret"
+    getJwtSecret(),
+    {
+      algorithms: ["HS256"],
+    }
   );
 };
 
