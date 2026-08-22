@@ -14,6 +14,12 @@ const {
   "../controllers/hrLeaveUtilizationReportingController"
 );
 
+const {
+  getTurnoverAndLifecycleReport,
+} = require(
+  "../controllers/hrTurnoverReportingController"
+);
+
 const { protect, requirePermission } = require("../middleware/authMiddleware");
 
 router.get(
@@ -35,6 +41,13 @@ router.get(
   protect,
   requirePermission("hr"),
   getLeaveUtilizationReport
+);
+
+router.get(
+  "/turnover",
+  protect,
+  requirePermission("hr"),
+  getTurnoverAndLifecycleReport
 );
 
 module.exports = router;
