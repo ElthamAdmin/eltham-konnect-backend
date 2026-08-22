@@ -1,4 +1,6 @@
 const express = require("express");
+const multer = require("multer");
+
 const router = express.Router();
 
 const {
@@ -123,10 +125,79 @@ const {
 );
 
 const {
+  uploadEmployeeProfilePhoto,
+  removeEmployeeProfilePhoto,
+} = require(
+  "../controllers/employeePhotoController"
+);
+
+const {
   protect,
   requirePermission,
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
+
+const employeePhotoAllowedTypes = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+];
+
+const employeePhotoUpload = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+  },
+
+  fileFilter: (
+    req,
+    file,
+    callback
+  ) => {
+    if (
+      employeePhotoAllowedTypes.includes(
+        file.mimetype
+      )
+    ) {
+      callback(null, true);
+      return;
+    }
+
+    callback(
+      new Error(
+        "Only JPG, JPEG, PNG and WEBP employee photos are allowed."
+      )
+    );
+  },
+});
+
+const employeePhotoUploadSingle =
+  (req, res, next) => {
+    employeePhotoUpload.single(
+      "photo"
+    )(
+      req,
+      res,
+      (error) => {
+        if (!error) {
+          next();
+          return;
+        }
+
+        return res.status(400).json({
+          success: false,
+          message:
+            error.code ===
+            "LIMIT_FILE_SIZE"
+              ? "Employee photos cannot exceed 5 MB."
+              : error.message ||
+                "The employee photo could not be processed.",
+        });
+      }
+    );
+  };
 
 // Admin only
 router.get("/summary", protect, requirePermission("hr"), getEmployeeSummary);
@@ -136,6 +207,20 @@ router.put("/:employeeId/status", protect, requirePermission("hr"), updateEmploy
 router.post("/:employeeId/discipline", protect, requirePermission("hr"), addDisciplineRecord);
 router.post("/:employeeId/performance", protect, requirePermission("hr"), addPerformanceReview);
 router.get("/organization-chart", protect, requirePermission("hr"), getOrganizationChart);
+router.post(
+  "/:employeeId/profile-photo",
+  protect,
+  requirePermission("hr"),
+  employeePhotoUploadSingle,
+  uploadEmployeeProfilePhoto
+);
+
+router.delete(
+  "/:employeeId/profile-photo",
+  protect,
+  requirePermission("hr"),
+  removeEmployeeProfilePhoto
+);
 
 // Self-service profile route
 router.get(

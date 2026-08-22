@@ -303,26 +303,75 @@ const buildOrgChart = (employees) => {
 
   employees.forEach((employee) => {
     map[employee.employeeId] = {
-      employeeId: employee.employeeId,
-      fullName: employee.fullName,
-      jobTitle: employee.jobTitle,
-      department: employee.department,
-      branch: employee.branch,
-      jobLevel: Number(employee.jobLevel || 1),
-      isDepartmentHead: Boolean(employee.isDepartmentHead),
-      reportsToEmployeeId: employee.reportsToEmployeeId || "",
-      reportsToName: employee.reportsToName || "",
-      employmentStatus: employee.employmentStatus || "",
+      employeeId:
+        employee.employeeId,
+      fullName:
+        employee.fullName,
+      jobTitle:
+        employee.jobTitle,
+      department:
+        employee.department,
+      branch:
+        employee.branch,
+      jobLevel:
+        Number(employee.jobLevel || 1),
+      isDepartmentHead:
+        Boolean(
+          employee.isDepartmentHead
+        ),
+      reportsToEmployeeId:
+        employee.reportsToEmployeeId ||
+        "",
+      reportsToName:
+        employee.reportsToName ||
+        "",
+      employmentStatus:
+        employee.employmentStatus ||
+        "",
+      employmentType:
+        employee.employmentType ||
+        "",
+      profilePhoto: {
+        url:
+          employee.profilePhoto?.url ||
+          "",
+        storageKey:
+          employee.profilePhoto
+            ?.storageKey || "",
+        storageProvider:
+          employee.profilePhoto
+            ?.storageProvider || "",
+        width:
+          Number(
+            employee.profilePhoto
+              ?.width || 0
+          ),
+        height:
+          Number(
+            employee.profilePhoto
+              ?.height || 0
+          ),
+      },
       children: [],
     };
   });
 
   employees.forEach((employee) => {
-    const currentNode = map[employee.employeeId];
-    const parentId = employee.reportsToEmployeeId || "";
+    const currentNode =
+      map[employee.employeeId];
 
-    if (parentId && map[parentId]) {
-      map[parentId].children.push(currentNode);
+    const parentId =
+      employee.reportsToEmployeeId ||
+      "";
+
+    if (
+      parentId &&
+      map[parentId] &&
+      parentId !== employee.employeeId
+    ) {
+      map[parentId].children.push(
+        currentNode
+      );
     } else {
       roots.push(currentNode);
     }
@@ -333,13 +382,30 @@ const buildOrgChart = (employees) => {
       if (a.jobLevel !== b.jobLevel) {
         return b.jobLevel - a.jobLevel;
       }
-      return String(a.fullName || "").localeCompare(String(b.fullName || ""));
+
+      if (
+        a.isDepartmentHead !==
+        b.isDepartmentHead
+      ) {
+        return a.isDepartmentHead
+          ? -1
+          : 1;
+      }
+
+      return String(
+        a.fullName || ""
+      ).localeCompare(
+        String(b.fullName || "")
+      );
     });
 
-    nodes.forEach((node) => sortTree(node.children));
+    nodes.forEach((node) =>
+      sortTree(node.children)
+    );
   };
 
   sortTree(roots);
+
   return roots;
 };
 
@@ -1785,10 +1851,55 @@ const getOrganizationChart = async (req, res) => {
 
     const orgChart = buildOrgChart(employees);
 
+        const activeEmployees =
+      employees.filter(
+        (employee) =>
+          employee.employmentStatus ===
+          "Active"
+      ).length;
+
+    const departmentCount =
+      new Set(
+        employees
+          .map(
+            (employee) =>
+              employee.department
+          )
+          .filter(Boolean)
+      ).size;
+
+    const branchCount =
+      new Set(
+        employees
+          .map(
+            (employee) =>
+              employee.branch
+          )
+          .filter(Boolean)
+      ).size;
+
+    const employeesWithPhotos =
+      employees.filter(
+        (employee) =>
+          Boolean(
+            employee.profilePhoto?.url
+          )
+      ).length;
+
     res.json({
       success: true,
-      message: "Organization chart retrieved successfully",
-      totalEmployees: employees.length,
+      message:
+        "Organization chart retrieved successfully",
+      totalEmployees:
+        employees.length,
+      summary: {
+        totalEmployees:
+          employees.length,
+        activeEmployees,
+        departmentCount,
+        branchCount,
+        employeesWithPhotos,
+      },
       data: orgChart,
     });
   } catch (error) {
