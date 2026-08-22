@@ -7,6 +7,13 @@ const {
 } = require(
   "../controllers/hrAttendanceReportingController"
 );
+
+const {
+  getLeaveUtilizationReport,
+} = require(
+  "../controllers/hrLeaveUtilizationReportingController"
+);
+
 const { protect, requirePermission } = require("../middleware/authMiddleware");
 
 router.get(
@@ -21,6 +28,13 @@ router.get(
   protect,
   requirePermission("hr"),
   getAttendanceAndLatenessReport
+);
+
+router.get(
+  "/leave-utilization",
+  protect,
+  requirePermission("hr"),
+  getLeaveUtilizationReport
 );
 
 module.exports = router;
