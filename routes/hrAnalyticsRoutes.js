@@ -20,6 +20,12 @@ const {
   "../controllers/hrTurnoverReportingController"
 );
 
+const {
+  getPayrollEligibilityComplianceReport,
+} = require(
+  "../controllers/hrPayrollComplianceReportingController"
+);
+
 const { protect, requirePermission } = require("../middleware/authMiddleware");
 
 router.get(
@@ -48,6 +54,13 @@ router.get(
   protect,
   requirePermission("hr"),
   getTurnoverAndLifecycleReport
+);
+
+router.get(
+  "/payroll-compliance",
+  protect,
+  requirePermission("hr"),
+  getPayrollEligibilityComplianceReport
 );
 
 module.exports = router;
