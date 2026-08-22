@@ -2,8 +2,23 @@ const express = require("express");
 const router = express.Router();
 
 const { getAuditLogs } = require("../controllers/auditLogController");
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
-router.get("/", protect, getAuditLogs);
+const canViewAuditLogs = requireAnyPermission([
+  "hr",
+  "finance",
+  "accounting",
+  "audit",
+]);
+
+router.get(
+  "/",
+  protect,
+  canViewAuditLogs,
+  getAuditLogs
+);
 
 module.exports = router;

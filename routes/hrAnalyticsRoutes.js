@@ -26,7 +26,33 @@ const {
   "../controllers/hrPayrollComplianceReportingController"
 );
 
+const {
+  getHRReportingAudit,
+} = require(
+  "../controllers/hrReportingAuditController"
+);
+
+const {
+  auditHRReportAccess,
+} = require(
+  "../middleware/hrReportingAuditMiddleware"
+);
+
 const { protect, requirePermission } = require("../middleware/authMiddleware");
+
+/*
+ * H11 reporting security and audit controls.
+ *
+ * Existing route-level permission checks may remain.
+ * These router-level controls guarantee that every H11
+ * report request is authenticated, HR-restricted and audited.
+ */
+
+router.use(
+  protect,
+  requirePermission("hr"),
+  auditHRReportAccess
+);
 
 router.get(
   "/dashboard",
@@ -61,6 +87,15 @@ router.get(
   protect,
   requirePermission("hr"),
   getPayrollEligibilityComplianceReport
+);
+
+/*
+ * H11 Stage 8 reporting audit and CSV export.
+ */
+
+router.get(
+  "/reporting-audit",
+  getHRReportingAudit
 );
 
 module.exports = router;
