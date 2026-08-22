@@ -100,6 +100,32 @@ lastPresencePingAt: {
   default: null,
 },
 
+securityVersion: {
+  type: Number,
+  default: 0,
+  min: 0,
+},
+
+requirePasswordChange: {
+  type: Boolean,
+  default: false,
+},
+
+passwordChangedAt: {
+  type: Date,
+  default: null,
+},
+
+permissionsChangedAt: {
+  type: Date,
+  default: null,
+},
+
+lastSecurityChangeAt: {
+  type: Date,
+  default: null,
+},
+
     lastLoginAt: {
       type: Date,
       default: null,

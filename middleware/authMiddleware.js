@@ -1,120 +1,113 @@
 const jwt = require("jsonwebtoken");
+const SystemUser = require("../models/SystemUser");
 
 const getJwtSecret = () => {
-  const secret = String(
-    process.env.JWT_SECRET || ""
-  ).trim();
-
-  if (!secret) {
-    throw new Error(
-      "JWT_SECRET is not configured."
-    );
-  }
-
+  const secret = String(process.env.JWT_SECRET || "").trim();
+  if (!secret) throw new Error("JWT_SECRET is not configured.");
   return secret;
 };
 
-const verifyToken = (token) => {
-  return jwt.verify(
-    token,
-    getJwtSecret(),
-    {
-      algorithms: ["HS256"],
-    }
-  );
+const verifyToken = (token) => jwt.verify(token, getJwtSecret());
+
+const loadCurrentUser = async (decoded) => {
+  const user = await SystemUser.findOne({ userId: decoded.userId }).lean();
+
+  if (!user || user.status !== "Active") {
+    const error = new Error("This user session is no longer active.");
+    error.code = "SESSION_INACTIVE";
+    throw error;
+  }
+
+  if (Number(decoded.securityVersion || 0) !== Number(user.securityVersion || 0)) {
+    const error = new Error("Your security access changed. Please sign in again.");
+    error.code = "SESSION_REVOKED";
+    throw error;
+  }
+
+  return {
+    ...decoded,
+    role: user.role,
+    fullName: user.fullName,
+    email: user.email,
+    branch: user.branch,
+    status: user.status,
+    dutyStatus: user.dutyStatus,
+    permissions: Array.isArray(user.permissions) ? user.permissions : [],
+    linkedEmployeeId: user.linkedEmployeeId || "",
+    securityVersion: Number(user.securityVersion || 0),
+    requirePasswordChange: Boolean(user.requirePasswordChange),
+  };
 };
 
-const protect = (req, res, next) => {
+const protect = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || "";
 
     if (!authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        success: false,
-        message: "No token provided",
-      });
+      return res.status(401).json({ success: false, message: "No token provided" });
     }
 
-    const token = authHeader.split(" ")[1];
-    const decoded = verifyToken(token);
-
-    req.user = decoded;
-    next();
+    const decoded = verifyToken(authHeader.split(" ")[1]);
+    req.user = await loadCurrentUser(decoded);
+    return next();
   } catch (error) {
-    console.error("Auth middleware error:", error);
+    console.error("Auth middleware error:", error.message);
     return res.status(401).json({
       success: false,
-      message: "Invalid or expired token",
+      code: error.code || "INVALID_TOKEN",
+      message: error.message || "Invalid or expired token",
     });
   }
 };
 
-const attachUserIfPresent = (req, res, next) => {
+const attachUserIfPresent = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || "";
-
     if (authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split(" ")[1];
-      const decoded = verifyToken(token);
-      req.user = decoded;
+      const decoded = verifyToken(authHeader.split(" ")[1]);
+      req.user = await loadCurrentUser(decoded);
     }
-
-    next();
   } catch (error) {
-    next();
+    req.user = undefined;
   }
+
+  return next();
 };
 
 const hasPermission = (user, permission) => {
   if (!user) return false;
   if (user.role === "Admin") return true;
-
-  const permissions = Array.isArray(user.permissions) ? user.permissions : [];
-  return permissions.includes(permission);
+  return Array.isArray(user.permissions) && user.permissions.includes(permission);
 };
 
-const requirePermission = (permission) => {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required",
-      });
-    }
+const requirePermission = (permission) => (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "Authentication required" });
+  }
 
-    if (!hasPermission(req.user, permission)) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have permission to access this resource",
-      });
-    }
+  if (!hasPermission(req.user, permission)) {
+    return res.status(403).json({
+      success: false,
+      message: "You do not have permission to access this resource",
+    });
+  }
 
-    next();
-  };
+  return next();
 };
 
-const requireAnyPermission = (permissions = []) => {
-  return (req, res, next) => {
-    if (!req.user) {
-      return res.status(401).json({
-        success: false,
-        message: "Authentication required",
-      });
-    }
+const requireAnyPermission = (permissions = []) => (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, message: "Authentication required" });
+  }
 
-    const allowed = permissions.some((permission) =>
-      hasPermission(req.user, permission)
-    );
+  if (!permissions.some((permission) => hasPermission(req.user, permission))) {
+    return res.status(403).json({
+      success: false,
+      message: "You do not have permission to access this resource",
+    });
+  }
 
-    if (!allowed) {
-      return res.status(403).json({
-        success: false,
-        message: "You do not have permission to access this resource",
-      });
-    }
-
-    next();
-  };
+  return next();
 };
 
 module.exports = {

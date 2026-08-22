@@ -4,6 +4,16 @@ const SystemUser = require("../models/SystemUser");
 const AttendanceLog = require("../models/AttendanceLog");
 const LeaveRequest = require("../models/LeaveRequest");
 
+const getJwtSecret = () => {
+  const secret = String(process.env.JWT_SECRET || "").trim();
+
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured.");
+  }
+
+  return secret;
+};
+
 const getJamaicaNow = () => {
   const now = new Date();
   const jamaicaString = now.toLocaleString("en-US", {
@@ -286,11 +296,13 @@ await user.save();
       dutyStatus: user.dutyStatus,
       permissions: Array.isArray(user.permissions) ? user.permissions : [],
       linkedEmployeeId: user.linkedEmployeeId || "",
+      securityVersion: Number(user.securityVersion || 0),
+      requirePasswordChange: Boolean(user.requirePasswordChange),
     };
 
     const token = jwt.sign(
   tokenPayload,
-  process.env.JWT_SECRET || "eltham-konnect-secret",
+  getJwtSecret(),
   { expiresIn: "10h" }
 );
 

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const {
+  getSystemPermissionCatalog,
   getSystemUsers,
   createSystemUser,
   updateSystemUserStatus,
@@ -14,7 +15,12 @@ const {
   protect,
   requirePermission,
 } = require("../middleware/authMiddleware");
-
+router.get(
+  "/permission-catalog",
+  protect,
+  requirePermission("users"),
+  getSystemPermissionCatalog
+);
 router.get("/", protect, requirePermission("users"), getSystemUsers);
 router.post("/", protect, requirePermission("users"), createSystemUser);
 router.put("/:userId/status", protect, requirePermission("users"), updateSystemUserStatus);
