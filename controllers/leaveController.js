@@ -547,6 +547,67 @@ const getLeaveRequests = async (
         _id: -1,
       });
 
+      await writeAuditLog({
+  req,
+
+  action:
+    isHrUser(req)
+      ? "VIEW_LEAVE_REQUEST_REGISTER"
+      : "VIEW_OWN_LEAVE_REQUESTS",
+
+  module: "HR",
+
+  description:
+    isHrUser(req)
+      ? "Viewed the controlled leave-request register."
+      : "Employee viewed their own leave requests.",
+
+  targetType:
+    isHrUser(req)
+      ? "LeaveRequestRegister"
+      : "HREmployee",
+
+  targetId:
+    isHrUser(req)
+      ? ""
+      : String(
+          req.user?.linkedEmployeeId ||
+          req.user?.userId ||
+          ""
+        ).trim(),
+
+  metadata: {
+    accessScope:
+      isHrUser(req)
+        ? "HR Controlled Access"
+        : "Employee Self Service",
+
+    resultCount:
+      leaveRequests.length,
+
+    employeeIdFilter:
+      isHrUser(req)
+        ? normalizeString(
+            req.query.employeeId
+          )
+        : "",
+
+    statusFilter:
+      isHrUser(req)
+        ? normalizeString(
+            req.query.status
+          )
+        : "",
+
+    leaveTypeFilter:
+      isHrUser(req)
+        ? normalizeString(
+            req.query.leaveType
+          )
+        : "",
+  },
+});
+
     return res.json({
       success: true,
       message:
@@ -589,16 +650,92 @@ const getLeaveRequestById = async (
     }
 
     if (
-      !canAccessRequest(
-        req,
-        leaveRequest
-      )
-    ) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied.",
-      });
-    }
+  !canAccessRequest(
+    req,
+    leaveRequest
+  )
+) {
+  await writeAuditLog({
+    req,
+
+    action:
+      "DENIED_CROSS_EMPLOYEE_LEAVE_ACCESS",
+
+    module: "HR",
+
+    description:
+      `Denied access to leave request ${leaveRequest.leaveRequestId} because it does not belong to the authenticated employee.`,
+
+    targetType:
+      "LeaveRequest",
+
+    targetId:
+      leaveRequest.leaveRequestId,
+
+    metadata: {
+      requestedEmployeeId:
+        leaveRequest.employeeId,
+
+      authenticatedEmployeeId:
+        String(
+          req.user?.linkedEmployeeId ||
+          ""
+        ).trim(),
+
+      authenticatedUserId:
+        getUserId(req.user),
+
+      accessScope:
+        "Employee Self Service",
+    },
+
+    status: "Failed",
+  });
+
+  return res.status(403).json({
+    success: false,
+    message:
+      "You may access only leave requests belonging to your linked employee profile.",
+  });
+}
+
+await writeAuditLog({
+  req,
+
+  action:
+    isHrUser(req)
+      ? "VIEW_LEAVE_REQUEST"
+      : "VIEW_OWN_LEAVE_REQUEST",
+
+  module: "HR",
+
+  description:
+    isHrUser(req)
+      ? `Viewed controlled leave request ${leaveRequest.leaveRequestId}.`
+      : `Employee viewed their own leave request ${leaveRequest.leaveRequestId}.`,
+
+  targetType:
+    "LeaveRequest",
+
+  targetId:
+    leaveRequest.leaveRequestId,
+
+  metadata: {
+    employeeId:
+      leaveRequest.employeeId,
+
+    accessScope:
+      isHrUser(req)
+        ? "HR Controlled Access"
+        : "Employee Self Service",
+
+    status:
+      leaveRequest.status,
+
+    leaveType:
+      leaveRequest.leaveType,
+  },
+});
 
     return res.json({
       success: true,
