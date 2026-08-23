@@ -15,9 +15,25 @@ const {
 
 
 const roundMoney = (value) =>
-  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+  Math.round(
+    (
+      Number(value || 0) +
+      Number.EPSILON
+    ) * 100
+  ) / 100;
 
-const getUserId = (req) => req.user?.userId || req.user?._id || "";
+const moneyLabel = (value) =>
+  `JMD ${Number(
+    value || 0
+  ).toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+const getUserId = (req) =>
+  req.user?.userId ||
+  req.user?._id ||
+  "";
 
 const getUserName = (req) =>
   req.user?.fullName || req.user?.name || req.user?.email || "System User";
@@ -464,6 +480,234 @@ const cashOutInvoice = async (req, res) => {
   }
 };
 
+const applyPOSDiscount = async (
+  req,
+  res
+) => {
+  try {
+    const invoiceType =
+      String(
+        req.body.invoiceType || ""
+      ).trim();
+
+    const invoiceNumber =
+      String(
+        req.body.invoiceNumber || ""
+      ).trim();
+
+    const discountAmount =
+      roundMoney(
+        req.body.discountAmount
+      );
+
+    const reason =
+      String(
+        req.body.reason || ""
+      ).trim();
+
+    if (
+      ![
+        "Shipping",
+        "Marketplace",
+      ].includes(invoiceType)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invoice type must be Shipping or Marketplace.",
+      });
+    }
+
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Load an invoice before applying a discount.",
+      });
+    }
+
+    if (discountAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Discount amount must be greater than zero.",
+      });
+    }
+
+    if (reason.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "A discount reason is required.",
+      });
+    }
+
+    const Model =
+      invoiceType === "Marketplace"
+        ? MarketplaceInvoice
+        : Invoice;
+
+    const invoice =
+      await Model.findOne({
+        invoiceNumber,
+      });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        message:
+          `${invoiceType} invoice was not found.`,
+      });
+    }
+
+    if (
+      invoice.status === "Paid" ||
+      invoice.status === "Cancelled"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          `A ${invoice.status.toLowerCase()} invoice cannot be discounted.`,
+      });
+    }
+
+    if (
+      Number(invoice.amountPaid || 0) >
+        0 ||
+      invoice.status ===
+        "Partially Paid"
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "A discount cannot be applied after payment has started.",
+      });
+    }
+
+    const existingPosDiscount =
+      roundMoney(
+        invoice.posDiscountAmount
+      );
+
+    const currentTotal =
+      roundMoney(
+        invoice.finalTotal
+      );
+
+    const preDiscountTotal =
+      roundMoney(
+        Number(
+          invoice.prePosDiscountTotal ||
+            0
+        ) > 0
+          ? invoice.prePosDiscountTotal
+          : currentTotal +
+              existingPosDiscount
+      );
+
+    if (
+      discountAmount >=
+      preDiscountTotal
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Discount must be less than the invoice total.",
+      });
+    }
+
+    const discountedTotal =
+      roundMoney(
+        preDiscountTotal -
+          discountAmount
+      );
+
+    invoice.prePosDiscountTotal =
+      preDiscountTotal;
+
+    invoice.posDiscountAmount =
+      discountAmount;
+
+    invoice.posDiscountReason =
+      reason;
+
+    invoice.posDiscountApprovedBy =
+      getUserName(req);
+
+    invoice.posDiscountApprovedByUserId =
+      String(getUserId(req));
+
+    invoice.posDiscountAppliedAt =
+      new Date();
+
+    invoice.finalTotal =
+      discountedTotal;
+
+    invoice.balanceDue =
+      discountedTotal;
+
+    await invoice.save();
+
+    await POSActionLog.create({
+      actionType:
+        "Discount Authorization",
+
+      invoiceNumber:
+        invoice.invoiceNumber,
+
+      invoiceType,
+
+      reason,
+
+      amount: discountAmount,
+
+      branch:
+        getUserBranch(req),
+
+      cashierUserId:
+        getUserId(req),
+
+      cashierName:
+        getUserName(req),
+
+      approvedByUserId:
+        getUserId(req),
+
+      approvedByName:
+        getUserName(req),
+    });
+
+    return res.json({
+      success: true,
+
+      message:
+        `${moneyLabel(
+          discountAmount
+        )} discount applied successfully.`,
+
+      data: {
+        invoiceType,
+        invoice,
+        preDiscountTotal,
+        discountAmount,
+        discountedTotal,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Apply POS discount error:",
+      error
+    );
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.message ||
+        "The POS discount could not be applied.",
+    });
+  }
+};
+
 const closeDrawer = async (req, res) => {
   try {
     const closingCashCount = roundMoney(req.body.closingCashCount);
@@ -690,6 +934,7 @@ module.exports = {
   recordDrawerSale,
   findInvoiceForPOS,
   cashOutInvoice,
+  applyPOSDiscount,
   closeDrawer,
   getDrawerHistory,
   getPOSTransactions,

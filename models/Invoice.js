@@ -400,6 +400,41 @@ deliveryType: {
     default: 0,
   },
 
+    prePosDiscountTotal: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  posDiscountAmount: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  posDiscountReason: {
+    type: String,
+    default: "",
+    trim: true,
+  },
+
+  posDiscountApprovedBy: {
+    type: String,
+    default: "",
+    trim: true,
+  },
+
+  posDiscountApprovedByUserId: {
+    type: String,
+    default: "",
+    trim: true,
+  },
+
+  posDiscountAppliedAt: {
+    type: Date,
+    default: null,
+  },
+
   finalTotal: {
     type: Number,
     default: 0,

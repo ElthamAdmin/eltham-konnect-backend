@@ -53,6 +53,52 @@ const MarketplaceInvoiceSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+        prePosDiscountTotal: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    posDiscountAmount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    posDiscountReason: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    posDiscountApprovedBy: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    posDiscountApprovedByUserId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    posDiscountAppliedAt: {
+      type: Date,
+      default: null,
+    },
+
+    amountPaid: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    balanceDue: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     finalTotal: {
       type: Number,
       default: 0,
@@ -64,7 +110,12 @@ const MarketplaceInvoiceSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Unpaid", "Paid", "Cancelled"],
+            enum: [
+        "Unpaid",
+        "Partially Paid",
+        "Paid",
+        "Cancelled",
+      ],
       default: "Unpaid",
     },
     paidAt: {

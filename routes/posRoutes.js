@@ -9,6 +9,7 @@ const {
   recordDrawerSale,
   findInvoiceForPOS,
   cashOutInvoice,
+  applyPOSDiscount,
   closeDrawer,
   getDrawerHistory,
   getPOSTransactions,
@@ -25,6 +26,14 @@ router.put("/drawer/close", protect, requirePermission("pos"), closeDrawer);
 router.get("/drawer/history", protect, requirePermission("pos"), getDrawerHistory);
 
 router.get("/invoice/:invoiceNumber", protect, requirePermission("pos"), findInvoiceForPOS);
+router.post(
+  "/discount",
+  protect,
+  requirePermission(
+    "pos_discount"
+  ),
+  applyPOSDiscount
+);
 router.post("/cashout", protect, requirePermission("pos"), cashOutInvoice);
 router.get("/transactions", protect, requirePermission("pos"), getPOSTransactions);
 
