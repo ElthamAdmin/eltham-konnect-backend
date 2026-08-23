@@ -1295,6 +1295,143 @@ const getPayroll = async (req, res) => {
   }
 };
 
+/*
+ * H12 employee-visible payslip serializer.
+ *
+ * Only information legitimately required for an employee
+ * payslip is returned through self-service. Employer-side
+ * contributions, internal compliance assessments, payment
+ * accounts, statutory snapshots and internal workflow
+ * evidence remain restricted to Payroll and Finance users.
+ */
+
+const serializeEmployeePayslip = (payroll = {}) => ({
+  payrollNumber:
+    payroll.payrollNumber || "",
+
+  employeeId:
+    payroll.employeeId || "",
+
+  employeeName:
+    payroll.employeeName || "",
+
+  role:
+    payroll.role || "",
+
+  payPeriod:
+    payroll.payPeriod || "",
+
+  payDate:
+    payroll.payDate || null,
+
+  payFrequency:
+    payroll.payFrequency || "",
+
+  compensationType:
+    payroll.compensationType || "",
+
+  compensationCategory:
+    payroll.compensationCategory || "",
+
+  compensationComponentName:
+    payroll.compensationComponentName || "",
+
+  compensationAmount:
+    Number(
+      payroll.compensationAmount || 0
+    ),
+
+  compensationCurrency:
+    payroll.compensationCurrency ||
+    "JMD",
+
+  compensationRateUnit:
+    payroll.compensationRateUnit || "",
+
+  grossPay:
+    Number(payroll.grossPay || 0),
+
+  deductions:
+    Number(
+      payroll.deductions ||
+      payroll.totalDeductions ||
+      0
+    ),
+
+  nisEmployee:
+    Number(
+      payroll.nisEmployee || 0
+    ),
+
+  nhtEmployee:
+    Number(
+      payroll.nhtEmployee || 0
+    ),
+
+  educationTax:
+    Number(
+      payroll.educationTax || 0
+    ),
+
+  incomeTax:
+    Number(
+      payroll.incomeTax || 0
+    ),
+
+  pensionEmployee:
+    Number(
+      payroll.pensionEmployee || 0
+    ),
+
+  totalDeductions:
+    Number(
+      payroll.totalDeductions || 0
+    ),
+
+  netPayBeforeAdvance:
+    Number(
+      payroll.netPayBeforeAdvance ||
+      payroll.netPay ||
+      0
+    ),
+
+  advanceRecovery:
+    Number(
+      payroll.advanceRecovery || 0
+    ),
+
+  advanceRecoveries:
+    Array.isArray(
+      payroll.advanceRecoveries
+    )
+      ? payroll.advanceRecoveries.map(
+          (recovery) => ({
+            advanceNumber:
+              recovery.advanceNumber || "",
+
+            amount:
+              Number(
+                recovery.amount ||
+                recovery.recoveryAmount ||
+                0
+              ),
+          })
+        )
+      : [],
+
+  netPay:
+    Number(payroll.netPay || 0),
+
+  status:
+    payroll.status || "",
+
+  approvedAt:
+    payroll.approvedAt || null,
+
+  paidAt:
+    payroll.paidAt || null,
+});
+
 const getMyPayroll = async (req, res) => {
   try {
     const linkedEmployeeId = String(
@@ -1419,12 +1556,20 @@ const getMyPayroll = async (req, res) => {
       },
     });
 
+    const employeeVisiblePayslips =
+  payroll.map(
+    serializeEmployeePayslip
+  );
+
     return res.json({
       success: true,
       message:
         "Your employee-restricted payslips were retrieved successfully.",
-      totalRecords: payroll.length,
-      data: payroll,
+      totalRecords:
+  employeeVisiblePayslips.length,
+
+data:
+  employeeVisiblePayslips,
     });
   } catch (error) {
     console.error("Error getting my payroll:", error);
