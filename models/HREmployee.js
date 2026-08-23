@@ -616,6 +616,73 @@ profilePhoto: {
       trim: true,
     },
 
+        profilePhoto: {
+      url: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      storageKey: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      storageProvider: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      resourceType: {
+        type: String,
+        default: "image",
+        trim: true,
+      },
+
+      deliveryType: {
+        type: String,
+        default: "upload",
+        trim: true,
+      },
+
+      format: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      width: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      height: {
+        type: Number,
+        default: 0,
+        min: 0,
+      },
+
+      uploadedAt: {
+        type: Date,
+        default: null,
+      },
+
+      uploadedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      uploadedByUserId: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+    },
+
     attendanceRequired: {
       type: Boolean,
       default: true,
