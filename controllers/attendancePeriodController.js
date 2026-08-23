@@ -1124,6 +1124,28 @@ await writeAuditLog({
           createdAt: -1,
         });
 
+              await writeAuditLog({
+        req,
+        action: canManageAllAttendance(req.user)
+          ? "VIEW_ATTENDANCE_PERIODS"
+          : "VIEW_OWN_ATTENDANCE_PERIODS",
+        module: "HR",
+        description: canManageAllAttendance(req.user)
+          ? "Authorized user viewed controlled attendance periods."
+          : "Employee viewed attendance periods assigned to their own linked profile.",
+        targetType: "AttendancePeriod",
+        targetId: periodNumber || periodKey || "Attendance Register",
+        metadata: {
+          accessScope: canManageAllAttendance(req.user)
+            ? "Authorized Workforce Access"
+            : "Employee Self-Service",
+          periodKey,
+          periodNumber,
+          requestedEmployeeId: employeeId,
+          returnedRecords: attendancePeriods.length,
+        },
+      });
+
       const summary = {
         totalRecords:
           attendancePeriods.length,
@@ -1493,12 +1515,36 @@ await writeAuditLog({
               ?.linkedUserId
           );
 
-        if (
+                if (
           !linkedUserId ||
           !attendanceOwnerUserId ||
           linkedUserId !==
             attendanceOwnerUserId
         ) {
+          await writeAuditLog({
+            req,
+            action:
+              "DENY_CROSS_EMPLOYEE_ATTENDANCE_ADJUSTMENT",
+            module: "HR",
+            description:
+              "An employee was denied access to request an adjustment against another employee's attendance period.",
+            targetType:
+              "AttendancePeriod",
+            targetId:
+              attendancePeriod.periodNumber,
+            status: "Failed",
+            metadata: {
+              accessScope:
+                "Employee Self-Service",
+              employeeId:
+                attendancePeriod.employeeId,
+              periodKey:
+                attendancePeriod.periodKey,
+              denialReason:
+                "Attendance ownership mismatch",
+            },
+          });
+
           return res.status(403).json({
             success: false,
             message:
