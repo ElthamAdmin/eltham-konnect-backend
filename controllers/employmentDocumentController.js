@@ -20,6 +20,12 @@ const {
   "../services/employmentDocumentStorageService"
 );
 
+const EMPLOYEE_INACCESSIBLE_DOCUMENT_STATUSES = [
+  "Archived",
+  "Cancelled",
+  "Superseded",
+];
+
 const normalizeString = (value) =>
   String(value || "").trim();
 
@@ -246,6 +252,147 @@ const serializeDocument = (
   return value;
 };
 
+const serializeEmployeeDocument = (
+  document
+) => {
+  const value =
+    serializeDocument(document);
+
+  return {
+    documentNumber:
+      value.documentNumber,
+
+    employeeId:
+      value.employeeId,
+
+    employeeSnapshot:
+      value.employeeSnapshot || {},
+
+    documentName:
+      value.documentName,
+
+    documentType:
+      value.documentType,
+
+    description:
+      value.description || "",
+
+    employeeCanDownload:
+      Boolean(
+        value.employeeCanDownload
+      ),
+
+    issueDate:
+      value.issueDate || "",
+
+    effectiveDate:
+      value.effectiveDate || "",
+
+    expiryDate:
+      value.expiryDate || "",
+
+    expiryTrackingRequired:
+      Boolean(
+        value.expiryTrackingRequired
+      ),
+
+    expiryState:
+      value.expiryState,
+
+    acknowledgementRequired:
+      Boolean(
+        value.acknowledgementRequired
+      ),
+
+    acknowledgementDueDate:
+      value.acknowledgementDueDate ||
+      "",
+
+    acknowledgement: {
+      status:
+        value.acknowledgement
+          ?.status ||
+        "Not Required",
+
+      acknowledgedAt:
+        value.acknowledgement
+          ?.acknowledgedAt ||
+        null,
+
+      comments:
+        value.acknowledgement
+          ?.comments ||
+        "",
+    },
+
+    status:
+      value.status,
+
+    verification: {
+      status:
+        value.verification
+          ?.status ||
+        "Pending",
+
+      rejectionReason:
+        value.verification
+          ?.rejectionReason ||
+        "",
+    },
+
+    currentVersionNumber:
+      value.currentVersionNumber,
+
+    versions: (
+      value.versions || []
+    ).map((version) => ({
+      _id: version._id,
+
+      versionNumber:
+        version.versionNumber,
+
+      uploadedAt:
+        version.uploadedAt,
+
+      active:
+        Boolean(version.active),
+
+      file: {
+        originalFileName:
+          version.file
+            ?.originalFileName ||
+          "",
+
+        mimeType:
+          version.file
+            ?.mimeType ||
+          "",
+
+        sizeBytes:
+          version.file
+            ?.sizeBytes ||
+          0,
+      },
+    })),
+
+    createdAt:
+      value.createdAt,
+
+    updatedAt:
+      value.updatedAt,
+  };
+};
+
+const serializeDocumentForRequest = (
+  req,
+  document
+) =>
+  isHrUser(req)
+    ? serializeDocument(document)
+    : serializeEmployeeDocument(
+        document
+      );
+
 const getEmployeeForAccess =
   async ({
     req,
@@ -291,26 +438,36 @@ const canReadDocument = (
   }
 
   return (
-    document.linkedUserId ===
-      getUserId(req.user) &&
+    normalizeString(
+      document.linkedUserId
+    ) === getUserId(req.user) &&
     document.confidentialityLevel ===
-      "Employee Visible"
+      "Employee Visible" &&
+    document.archived !== true &&
+    !EMPLOYEE_INACCESSIBLE_DOCUMENT_STATUSES.includes(
+      document.status
+    )
   );
 };
 
 const canDownloadDocument = (
   req,
   document
-) =>
-  isHrUser(req) ||
-  (
+) => {
+  if (isHrUser(req)) {
+    return document.archived !== true;
+  }
+
+  return (
     canReadDocument(
       req,
       document
     ) &&
     document.employeeCanDownload ===
-      true
+      true &&
+    document.status !== "Rejected"
   );
+};
 
 const sendControllerError = (
   res,
@@ -635,9 +792,10 @@ const uploadControlledDocument =
             "Controlled employment document uploaded successfully",
 
           data:
-            serializeDocument(
-              document
-            ),
+  serializeDocumentForRequest(
+    req,
+    document
+  ),
         });
     } catch (error) {
       /*
@@ -696,7 +854,31 @@ const getControlledEmployeeDocuments =
             req.params.employeeId,
         });
 
-      if (!employee) {
+            if (!employee) {
+        if (!isHrUser(req)) {
+          await writeAuditLog({
+            req,
+            action:
+              "DENY_CROSS_EMPLOYEE_DOCUMENT_ACCESS",
+            module: "HR",
+            description:
+              "An employee was denied access to another employee's controlled document register.",
+            targetType:
+              "HREmployee",
+            targetId:
+              normalizeString(
+                req.params.employeeId
+              ),
+            status: "Failed",
+            metadata: {
+              accessScope:
+                "Employee Self-Service",
+              denialReason:
+                "Employee ownership mismatch",
+            },
+          });
+        }
+
         return res
           .status(
             isHrUser(req)
@@ -756,6 +938,30 @@ const getControlledEmployeeDocuments =
           _id: -1,
         });
 
+              await writeAuditLog({
+        req,
+        action: isHrUser(req)
+          ? "VIEW_EMPLOYMENT_DOCUMENTS"
+          : "VIEW_OWN_EMPLOYMENT_DOCUMENTS",
+        module: "HR",
+        description: isHrUser(req)
+          ? "Authorized HR user viewed a controlled employment-document register."
+          : "Employee viewed documents assigned to their own linked employee profile.",
+        targetType:
+          "HREmployee",
+        targetId:
+          employee.employeeId,
+        metadata: {
+          accessScope: isHrUser(req)
+            ? "HR Administration"
+            : "Employee Self-Service",
+          status,
+          documentType,
+          returnedRecords:
+            documents.length,
+        },
+      });
+
       return res.json({
         success: true,
 
@@ -766,9 +972,13 @@ const getControlledEmployeeDocuments =
           documents.length,
 
         data:
-          documents.map(
-            serializeDocument
-          ),
+  documents.map(
+    (document) =>
+      serializeDocumentForRequest(
+        req,
+        document
+      )
+  ),
       });
     } catch (error) {
       console.error(
@@ -809,12 +1019,32 @@ const getControlledDocumentByNumber =
           });
       }
 
-      if (
+            if (
         !canReadDocument(
           req,
           document
         )
       ) {
+        await writeAuditLog({
+          req,
+          action:
+            "DENY_EMPLOYMENT_DOCUMENT_ACCESS",
+          module: "HR",
+          description:
+            "Access to a controlled employment document was denied.",
+          targetType:
+            "EmploymentDocument",
+          targetId:
+            document.documentNumber,
+          status: "Failed",
+          metadata: {
+            accessScope:
+              "Employee Self-Service",
+            denialReason:
+              "Ownership, visibility or lifecycle restriction",
+          },
+        });
+
         return res
           .status(403)
           .json({
@@ -824,6 +1054,30 @@ const getControlledDocumentByNumber =
           });
       }
 
+      await writeAuditLog({
+        req,
+        action: isHrUser(req)
+          ? "VIEW_EMPLOYMENT_DOCUMENT"
+          : "VIEW_OWN_EMPLOYMENT_DOCUMENT",
+        module: "HR",
+        description: isHrUser(req)
+          ? `Authorized HR user viewed ${document.documentNumber}.`
+          : `Employee viewed assigned document ${document.documentNumber}.`,
+        targetType:
+          "EmploymentDocument",
+        targetId:
+          document.documentNumber,
+        metadata: {
+          accessScope: isHrUser(req)
+            ? "HR Administration"
+            : "Employee Self-Service",
+          employeeId:
+            document.employeeId,
+          documentType:
+            document.documentType,
+        },
+      });
+
       return res.json({
         success: true,
 
@@ -831,9 +1085,10 @@ const getControlledDocumentByNumber =
           "Controlled employment document retrieved successfully",
 
         data:
-          serializeDocument(
-            document
-          ),
+  serializeDocumentForRequest(
+    req,
+    document
+  ),
       });
     } catch (error) {
       console.error(
@@ -876,12 +1131,33 @@ const createControlledDownload =
           });
       }
 
-      if (
+            if (
         !canDownloadDocument(
           req,
           document
         )
       ) {
+        await writeAuditLog({
+          req,
+          action:
+            "DENY_EMPLOYMENT_DOCUMENT_DOWNLOAD",
+          module: "HR",
+          description:
+            "A controlled employment-document download was denied.",
+          targetType:
+            "EmploymentDocument",
+          targetId:
+            document.documentNumber,
+          status: "Failed",
+          metadata: {
+            accessScope: isHrUser(req)
+              ? "HR Administration"
+              : "Employee Self-Service",
+            denialReason:
+              "Ownership, visibility, download or lifecycle restriction",
+          },
+        });
+
         return res
           .status(403)
           .json({
