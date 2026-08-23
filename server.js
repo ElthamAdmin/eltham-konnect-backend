@@ -152,6 +152,24 @@ app.use(
 
 app.use(express.json());
 app.use(attachUserIfPresent);
+/*
+ * H12 security control:
+ * Legacy HR documents must never be served from
+ * the public static uploads directory.
+ *
+ * Controlled employment-document downloads must
+ * use the authenticated signed-download endpoint.
+ */
+app.use(
+  "/uploads/hr-documents",
+  (req, res) => {
+    return res.status(403).json({
+      success: false,
+      message:
+        "Direct access to HR documents is not permitted.",
+    });
+  }
+);
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
@@ -160,8 +178,6 @@ app.use(
     extensions: ["jpg", "jpeg", "png", "webp", "pdf"],
 
     setHeaders: (res, filePath) => {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-
       if (filePath.endsWith(".pdf")) {
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader("Content-Disposition", "inline");
