@@ -166,27 +166,139 @@ const buildProfileSnapshot = (employee) => ({
   ),
 });
 
+const serializeEmployeeProfileRequest = (
+  request
+) => {
+  const value =
+    typeof request?.toObject ===
+    "function"
+      ? request.toObject()
+      : {
+          ...request,
+        };
+
+  return {
+    requestNumber:
+      value.requestNumber,
+
+    employeeId:
+      value.employeeId,
+
+    employeeSnapshot:
+      value.employeeSnapshot || {},
+
+    changes: (
+      value.changes || []
+    ).map((change) => ({
+      field:
+        change.field,
+
+      label:
+        change.label,
+
+      currentValue:
+        change.currentValue || "",
+
+      requestedValue:
+        change.requestedValue || "",
+    })),
+
+    reason:
+      value.reason || "",
+
+    status:
+      value.status,
+
+    requestedBy:
+      value.requestedBy || "",
+
+    requestedAt:
+      value.requestedAt,
+
+    reviewedBy:
+      value.reviewedBy || "",
+
+    reviewedAt:
+      value.reviewedAt || null,
+
+    reviewNotes:
+      value.reviewNotes || "",
+
+    cancelledAt:
+      value.cancelledAt || null,
+
+    cancellationReason:
+      value.cancellationReason || "",
+
+    history: (
+      value.history || []
+    ).map((entry) => ({
+      _id:
+        entry._id,
+
+      action:
+        entry.action,
+
+      fromStatus:
+        entry.fromStatus || "",
+
+      toStatus:
+        entry.toStatus || "",
+
+      performedBy:
+        entry.performedBy || "",
+
+      performedAt:
+        entry.performedAt,
+
+      notes:
+        entry.notes || "",
+    })),
+
+    createdAt:
+      value.createdAt,
+
+    updatedAt:
+      value.updatedAt,
+  };
+};
+
 const findLinkedEmployee = async (user) => {
   const linkedEmployeeId =
-    normalizeString(user?.linkedEmployeeId);
+    normalizeString(
+      user?.linkedEmployeeId
+    );
 
-  const userId = getUserId(user);
+  const userId =
+    getUserId(user);
 
-  let employee = null;
+  if (!userId) {
+    return null;
+  }
 
+  /*
+   * Both sides of the employee/user link must agree.
+   * A linkedEmployeeId from authentication data alone
+   * must never grant access to another employee profile.
+   */
   if (linkedEmployeeId) {
-    employee = await HREmployee.findOne({
-      employeeId: linkedEmployeeId,
-    });
+    const employee =
+      await HREmployee.findOne({
+        employeeId:
+          linkedEmployeeId,
+        linkedUserId:
+          userId,
+      });
+
+    if (employee) {
+      return employee;
+    }
   }
 
-  if (!employee && userId) {
-    employee = await HREmployee.findOne({
-      linkedUserId: userId,
-    });
-  }
-
-  return employee;
+  return HREmployee.findOne({
+    linkedUserId:
+      userId,
+  });
 };
 
 const buildRequestedChanges = ({
@@ -353,19 +465,48 @@ const getMyProfileUpdateRequests = async (
       });
     }
 
+        const authenticatedUserId =
+      getUserId(req.user);
+
     const requests =
       await EmployeeProfileUpdateRequest.find({
-        employeeId: employee.employeeId,
+        employeeId:
+          employee.employeeId,
+
+        linkedUserId:
+          authenticatedUserId,
       }).sort({
         createdAt: -1,
       });
+
+    await writeAuditLog({
+      req,
+      action:
+        "VIEW_OWN_PROFILE_UPDATE_REQUESTS",
+      module: "HR",
+      description:
+        "Employee viewed profile-update requests assigned to their own linked employee profile.",
+      targetType:
+        "HREmployee",
+      targetId:
+        employee.employeeId,
+      metadata: {
+        accessScope:
+          "Employee Self-Service",
+        returnedRecords:
+          requests.length,
+      },
+    });
 
     return res.json({
       success: true,
       message:
         "Your profile-update requests were retrieved successfully.",
       totalRecords: requests.length,
-      data: requests,
+      data:
+  requests.map(
+    serializeEmployeeProfileRequest
+  ),
     });
   } catch (error) {
     console.error(
@@ -410,6 +551,29 @@ const getProfileUpdateRequests = async (
       ).sort({
         createdAt: -1,
       });
+
+          await writeAuditLog({
+      req,
+      action:
+        "VIEW_PROFILE_UPDATE_REQUEST_REGISTER",
+      module: "HR",
+      description:
+        "Authorized HR user viewed the controlled profile-update request register.",
+      targetType:
+        "EmployeeProfileUpdateRequest",
+      targetId:
+        employeeId ||
+        status ||
+        "Profile Update Register",
+      metadata: {
+        accessScope:
+          "HR Administration",
+        status,
+        employeeId,
+        returnedRecords:
+          requests.length,
+      },
+    });
 
     return res.json({
       success: true,
@@ -467,12 +631,15 @@ const createMyProfileUpdateRequest = async (
         status: "Pending",
       });
 
-    if (pendingRequest) {
+        if (pendingRequest) {
       return res.status(409).json({
         success: false,
         message:
-          `${pendingRequest.requestNumber} is already awaiting HR review.`,
-        data: pendingRequest,
+          `${pendingRequest.requestNumber} is already awaiting HR review. Only one pending request is allowed.`,
+        data:
+          serializeEmployeeProfileRequest(
+            pendingRequest
+          ),
       });
     }
 
@@ -574,11 +741,14 @@ const createMyProfileUpdateRequest = async (
       },
     });
 
-    return res.status(201).json({
+        return res.status(201).json({
       success: true,
       message:
         "Profile-update request submitted successfully.",
-      data: request,
+      data:
+        serializeEmployeeProfileRequest(
+          request
+        ),
     });
   } catch (error) {
     console.error(
@@ -894,7 +1064,29 @@ const request =
     linkedUserId: authenticatedUserId,
   });
 
-    if (!request) {
+        if (!request) {
+      await writeAuditLog({
+        req,
+        action:
+          "DENY_PROFILE_UPDATE_REQUEST_CANCELLATION",
+        module: "HR",
+        description:
+          "An employee was denied access to cancel a profile-update request that was not assigned to their linked profile.",
+        targetType:
+          "EmployeeProfileUpdateRequest",
+        targetId:
+          requestNumber,
+        status: "Failed",
+        metadata: {
+          accessScope:
+            "Employee Self-Service",
+          employeeId:
+            employee.employeeId,
+          denialReason:
+            "Request ownership mismatch or request not found",
+        },
+      });
+
       return res.status(404).json({
         success: false,
         message:
@@ -960,7 +1152,10 @@ const request =
       success: true,
       message:
         `${request.requestNumber} cancelled successfully.`,
-      data: request,
+      data:
+  serializeEmployeeProfileRequest(
+    request
+  ),
     });
   } catch (error) {
     console.error(
