@@ -9,7 +9,9 @@ const {
   setupCustomerPassword, // ✅ ADD THIS
 } = require("../controllers/customerAuthController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
 
 // ==========================
 // AUTH ROUTES
@@ -25,7 +27,16 @@ router.post("/setup-password", setupCustomerPassword);
 // ==========================
 // PROTECTED ROUTES
 // ==========================
-router.get("/me", protect, getCustomerMe);
-router.post("/accept-policies", protect, acceptPolicies);
+router.get(
+  "/me",
+  protectCustomer,
+  getCustomerMe
+);
+
+router.post(
+  "/accept-policies",
+  protectCustomer,
+  acceptPolicies
+);
 
 module.exports = router;
