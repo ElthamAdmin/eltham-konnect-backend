@@ -8,11 +8,36 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
+
 const router = express.Router();
 
-router.post("/submit", protect, submitMarketplaceOrder);
-router.get("/my-orders", protect, getMyMarketplaceOrders);
-router.get("/", protect, getAllMarketplaceOrders);
-router.put("/:orderNumber/status", protect, updateMarketplaceOrderStatus);
+// Customer portal routes
+router.post(
+  "/submit",
+  protectCustomer,
+  submitMarketplaceOrder
+);
+
+router.get(
+  "/my-orders",
+  protectCustomer,
+  getMyMarketplaceOrders
+);
+
+// Staff-only EKOS routes
+router.get(
+  "/",
+  protect,
+  getAllMarketplaceOrders
+);
+
+router.put(
+  "/:orderNumber/status",
+  protect,
+  updateMarketplaceOrderStatus
+);
 
 module.exports = router;

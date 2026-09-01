@@ -256,17 +256,44 @@ const getMyMarketplaceOrders = async (req, res) => {
   try {
     const customerKey = getCustomerKey(req);
 
-    const orders = await MarketplaceOrder.find({ customerKey }).sort({
-      createdAt: -1,
-    });
+    if (!customerKey) {
+      return res.status(401).json({
+        success: false,
+        message: "Customer authentication is required.",
+      });
+    }
 
-    res.json({
+    const orders = await MarketplaceOrder.find({
+      customerKey,
+    })
+      .select(
+        [
+          "orderNumber",
+          "customerName",
+          "customerEkonId",
+          "items",
+          "subtotal",
+          "status",
+          "statusHistory.status",
+          "statusHistory.note",
+          "statusHistory.updatedAt",
+          "customerNote",
+          "createdAt",
+          "updatedAt",
+        ].join(" ")
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
       success: true,
+      totalOrders: orders.length,
       data: orders,
     });
   } catch (error) {
     console.error("Get my marketplace orders error:", error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       message: "Could not load marketplace orders",
     });
