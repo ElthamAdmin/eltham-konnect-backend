@@ -779,6 +779,82 @@ const getInvoices = async (req, res) => {
   }
 };
 
+const getMyInvoices = async (req, res) => {
+  try {
+    const customerEkonId = String(req.user?.ekonId || "")
+      .trim()
+      .toUpperCase();
+
+    if (!customerEkonId) {
+      return res.status(401).json({
+        success: false,
+        message: "Customer authentication is required.",
+      });
+    }
+
+    const invoices = await Invoice.find({
+      customerEkonId,
+    })
+      .select(
+        [
+          "invoiceNumber",
+          "customerEkonId",
+          "customerName",
+          "packageCount",
+          "packages",
+          "invoiceSource",
+          "customerPurchaseCount",
+          "customerPurchases",
+          "customerPurchaseRecoveryAmount",
+          "shoppingAssistanceFee",
+          "customerPurchaseWeightCharge",
+          "customerPurchaseShippingCharge",
+          "customerPurchaseCustomsDuty",
+          "customerPurchaseDeliveryFee",
+          "customerPurchaseOtherCharges",
+          "customerPurchaseTotal",
+          "subtotal",
+          "customsDuty",
+          "gct",
+          "processingFee",
+          "deliveryFee",
+          "deliveryType",
+          "otherAdjustment",
+          "adjustmentNote",
+          "pointsRedeemed",
+          "finalTotal",
+          "amountPaid",
+          "balanceDue",
+          "dueDate",
+          "paymentTerms",
+          "status",
+          "paymentLink",
+          "paidDate",
+          "paidAt",
+          "paymentMethod",
+          "createdAt",
+        ].join(" ")
+      )
+      .sort({ _id: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      message: "Customer invoices retrieved successfully",
+      totalInvoices: invoices.length,
+      data: invoices,
+    });
+  } catch (error) {
+    console.error("Error retrieving customer invoices:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not retrieve your invoices",
+      error: error.message,
+    });
+  }
+};
+
 const updateInvoicePaymentLink = async (req, res) => {
   try {
     const { invoiceNumber } = req.params;
@@ -1321,6 +1397,7 @@ module.exports = {
   generateMultipleInvoice,
   generateCustomerPurchaseInvoice,
   getInvoices,
+  getMyInvoices,
   updateInvoicePaymentLink,
   updateInvoiceChargesAdjustment,
   applyInvoicePointsAdjustment,

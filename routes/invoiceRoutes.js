@@ -6,6 +6,7 @@ const {
   generateMultipleInvoice,
   generateCustomerPurchaseInvoice,
   getInvoices,
+  getMyInvoices,
   updateInvoicePaymentLink,
   markInvoicePaid,
   updateInvoiceChargesAdjustment,
@@ -15,8 +16,12 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
+
+router.get("/my", protectCustomer, getMyInvoices);
 router.get("/", protect, getInvoices);
-router.post("/", protect, createInvoice);
 router.post(
   "/generate-multiple",
   protect,
