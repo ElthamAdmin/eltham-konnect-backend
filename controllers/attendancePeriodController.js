@@ -2,6 +2,10 @@ const AttendancePeriod = require(
   "../models/AttendancePeriod"
 );
 
+const HREmployee = require(
+  "../models/HREmployee"
+);
+
 const LeaveRequest = require(
   "../models/LeaveRequest"
 );
@@ -2949,22 +2953,80 @@ const lockAttendancePeriod =
         });
       }
 
+            /*
+       * Payroll eligibility must be validated
+       * against the current HR Employee Master.
+       * The attendance snapshot may have been
+       * created before eligibility was updated.
+       */
+      const currentEmployee =
+        await HREmployee.findOne({
+          employeeId:
+            attendancePeriod.employeeId,
+        }).select(
+          [
+            "employeeId",
+            "fullName",
+            "employmentStatus",
+            "payrollEnabled",
+            "payrollEligibilityStatus",
+            "payrollEligibilityEffectiveFrom",
+            "payrollEligibilityEffectiveTo",
+          ].join(" ")
+        );
+
+      if (!currentEmployee) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "The HR employee linked to this attendance period was not found.",
+          data: {
+            employeeId:
+              attendancePeriod.employeeId,
+          },
+        });
+      }
+
       if (
-        attendancePeriod
-          .employeeSnapshot
-          ?.payrollEnabled !== true
+        currentEmployee
+          .employmentStatus !== "Active"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "Only an Active employee can become Payroll Ready.",
+          data: {
+            employeeId:
+              currentEmployee.employeeId,
+            employmentStatus:
+              currentEmployee
+                .employmentStatus,
+            requiredStatus: "Active",
+          },
+        });
+      }
+
+      if (
+        currentEmployee
+          .payrollEnabled !== true
       ) {
         return res.status(409).json({
           success: false,
           message:
             "Payroll is not enabled for this employee.",
+          data: {
+            employeeId:
+              currentEmployee.employeeId,
+            payrollEnabled:
+              currentEmployee
+                .payrollEnabled,
+          },
         });
       }
 
       if (
-        attendancePeriod
-          .employeeSnapshot
-          ?.payrollEligibilityStatus !==
+        currentEmployee
+          .payrollEligibilityStatus !==
         "Eligible"
       ) {
         return res.status(409).json({
@@ -2973,17 +3035,90 @@ const lockAttendancePeriod =
             "The employee must have Eligible payroll status before attendance can become Payroll Ready.",
           data: {
             employeeId:
-              attendancePeriod.employeeId,
+              currentEmployee.employeeId,
             payrollEligibilityStatus:
-              attendancePeriod
-                .employeeSnapshot
-                ?.payrollEligibilityStatus ||
+              currentEmployee
+                .payrollEligibilityStatus ||
               "",
-            requiredStatus:
-              "Eligible",
+            requiredStatus: "Eligible",
           },
         });
       }
+
+      const eligibilityEffectiveFrom =
+        normalizeString(
+          currentEmployee
+            .payrollEligibilityEffectiveFrom
+        );
+
+      const eligibilityEffectiveTo =
+        normalizeString(
+          currentEmployee
+            .payrollEligibilityEffectiveTo
+        );
+
+      if (
+        eligibilityEffectiveFrom &&
+        attendancePeriod.periodStart <
+          eligibilityEffectiveFrom
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "The attendance period begins before the employee's payroll eligibility effective date.",
+          data: {
+            employeeId:
+              currentEmployee.employeeId,
+            periodStart:
+              attendancePeriod.periodStart,
+            eligibilityEffectiveFrom,
+          },
+        });
+      }
+
+      if (
+        eligibilityEffectiveTo &&
+        attendancePeriod.periodEnd >
+          eligibilityEffectiveTo
+      ) {
+        return res.status(409).json({
+          success: false,
+          message:
+            "The attendance period ends after the employee's payroll eligibility end date.",
+          data: {
+            employeeId:
+              currentEmployee.employeeId,
+            periodEnd:
+              attendancePeriod.periodEnd,
+            eligibilityEffectiveTo,
+          },
+        });
+      }
+
+      /*
+       * Synchronize the controlled snapshot after
+       * the current Employee Master passes every
+       * payroll-eligibility check.
+       */
+      attendancePeriod
+        .employeeSnapshot
+        .employmentStatus =
+        currentEmployee.employmentStatus;
+
+      attendancePeriod
+        .employeeSnapshot
+        .payrollEnabled =
+        currentEmployee.payrollEnabled;
+
+      attendancePeriod
+        .employeeSnapshot
+        .payrollEligibilityStatus =
+        currentEmployee
+          .payrollEligibilityStatus;
+
+      attendancePeriod.markModified(
+        "employeeSnapshot"
+      );
 
       const readinessNotes =
         normalizeString(
