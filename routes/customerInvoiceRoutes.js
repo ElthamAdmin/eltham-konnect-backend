@@ -8,7 +8,7 @@ const {
   uploadCustomerInvoice,
 } = require("../controllers/customerInvoiceController");
 
-const { protect } = require("../middleware/authMiddleware");
+const { protectCustomer } = require("../middleware/authMiddleware");
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -41,7 +41,12 @@ const upload = multer({
   },
 });
 
-router.get("/", protect, getMyInvoiceUploads);
-router.post("/", protect, upload.single("invoiceFile"), uploadCustomerInvoice);
+router.get("/", protectCustomer, getMyInvoiceUploads);
+router.post(
+  "/",
+  protectCustomer,
+  upload.single("invoiceFile"),
+  uploadCustomerInvoice
+);
 
 module.exports = router;
