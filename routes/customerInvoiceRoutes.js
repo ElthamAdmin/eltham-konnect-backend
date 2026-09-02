@@ -8,7 +8,9 @@ const {
   uploadCustomerInvoice,
 } = require("../controllers/customerInvoiceController");
 
-const { protectCustomer } = require("../middleware/authMiddleware");
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {

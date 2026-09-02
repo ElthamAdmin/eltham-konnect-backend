@@ -1,6 +1,5 @@
 const jwt = require("jsonwebtoken");
 const SystemUser = require("../models/SystemUser");
-const Customer = require("../models/Customer");
 
 const getJwtSecret = () => {
   const secret = String(process.env.JWT_SECRET || "").trim();
@@ -61,64 +60,6 @@ const protect = async (req, res, next) => {
   }
 };
 
-const protectCustomer = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization || "";
-
-    if (!authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        success: false,
-        message: "No customer token provided",
-      });
-    }
-
-    const decoded = verifyToken(authHeader.split(" ")[1]);
-
-    if (decoded.userType !== "customer" || !decoded.ekonId) {
-      return res.status(403).json({
-        success: false,
-        message: "Customer access only",
-      });
-    }
-
-    const customer = await Customer.findOne({
-      ekonId: decoded.ekonId,
-      status: "Active",
-    })
-      .select("ekonId name email phone branch status")
-      .lean();
-
-    if (!customer) {
-      return res.status(401).json({
-        success: false,
-        message: "This customer session is no longer active.",
-      });
-    }
-
-    req.user = {
-      ...decoded,
-      customerId: customer._id.toString(),
-      ekonId: customer.ekonId,
-      name: customer.name,
-      email: customer.email,
-      phone: customer.phone,
-      branch: customer.branch,
-      status: customer.status,
-      userType: "customer",
-    };
-
-    return next();
-  } catch (error) {
-    console.error("Customer auth middleware error:", error.message);
-
-    return res.status(401).json({
-      success: false,
-      code: error.code || "INVALID_CUSTOMER_TOKEN",
-      message: error.message || "Invalid or expired customer token",
-    });
-  }
-};
-
 const attachUserIfPresent = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || "";
@@ -171,7 +112,6 @@ const requireAnyPermission = (permissions = []) => (req, res, next) => {
 
 module.exports = {
   protect,
-  protectCustomer,
   attachUserIfPresent,
   hasPermission,
   requirePermission,
