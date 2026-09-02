@@ -40,6 +40,53 @@ const getCommunicationLogs = async (req, res) => {
   }
 };
 
+const getMyCommunicationLogs = async (req, res) => {
+  try {
+    const customerEkonId = String(req.user?.ekonId || "")
+      .trim()
+      .toUpperCase();
+
+    if (!customerEkonId) {
+      return res.status(401).json({
+        success: false,
+        message: "Customer authentication is required.",
+      });
+    }
+
+    const logs = await CommunicationLog.find({
+      customerEkonId,
+    })
+      .select(
+        [
+          "logNumber",
+          "channel",
+          "subject",
+          "message",
+          "status",
+          "date",
+          "createdAt",
+        ].join(" ")
+      )
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      message: "Customer communications retrieved successfully",
+      totalLogs: logs.length,
+      data: logs,
+    });
+  } catch (error) {
+    console.error("Error getting customer communications:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve customer communications",
+      error: error.message,
+    });
+  }
+};
+
 const createCommunicationLog = async (req, res) => {
   try {
     const {
@@ -174,5 +221,6 @@ const createCommunicationLog = async (req, res) => {
 
 module.exports = {
   getCommunicationLogs,
+  getMyCommunicationLogs,
   createCommunicationLog,
 };

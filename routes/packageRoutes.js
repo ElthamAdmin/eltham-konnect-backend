@@ -3,6 +3,7 @@ const router = express.Router();
 
 const {
   getPackages,
+  getMyPackages,
   getPackageWeightAnalysis,
   createPackage,
   updatePackageStatus,
@@ -10,7 +11,16 @@ const {
   deletePackage,
 } = require("../controllers/packageController");
 
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
+
 router.get("/", getPackages);
+router.get(
+  "/my",
+  protectCustomer,
+  getMyPackages
+);
 router.get("/weight-analysis", getPackageWeightAnalysis);
 router.post("/", createPackage);
 router.put("/bulk-status", bulkUpdatePackageStatus);

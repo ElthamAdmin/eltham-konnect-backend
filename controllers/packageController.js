@@ -319,6 +319,68 @@ const packages = await Package.find({
   }
 };
 
+const getMyPackages = async (req, res) => {
+  try {
+    const customerEkonId = String(req.user?.ekonId || "")
+      .trim()
+      .toUpperCase();
+
+    if (!customerEkonId) {
+      return res.status(401).json({
+        success: false,
+        message: "Customer authentication is required.",
+      });
+    }
+
+    const packages = await Package.find({
+      customerEkonId,
+      status: { $ne: "Deleted" },
+    })
+      .select(
+        [
+          "trackingNumber",
+          "customerEkonId",
+          "customerName",
+          "courier",
+          "weight",
+          "status",
+          "warehouseLocation",
+          "invoiceStatus",
+          "readyForPickup",
+          "readyForPickupDate",
+          "statusUpdatedAt",
+          "dateReceived",
+          "customerInvoiceUploaded",
+          "customerInvoiceUploadNumber",
+          "customerInvoiceNumber",
+          "customerInvoiceFileName",
+          "customerInvoiceFilePath",
+          "customerInvoiceNotes",
+          "customerInvoiceUploadedAt",
+          "createdAt",
+          "updatedAt",
+        ].join(" ")
+      )
+      .sort({ dateReceived: -1, createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      message: "Customer packages retrieved successfully",
+      totalPackages: packages.length,
+      data: packages,
+    });
+  } catch (error) {
+    console.error("Error getting customer packages:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve your packages",
+      error: error.message,
+    });
+  }
+};
+
 const createPackage = async (req, res) => {
   try {
     const {
@@ -801,6 +863,7 @@ const deletePackage = async (req, res) => {
 
 module.exports = {
   getPackages,
+  getMyPackages,
   getPackageWeightAnalysis,
   createPackage,
   updatePackageStatus,
