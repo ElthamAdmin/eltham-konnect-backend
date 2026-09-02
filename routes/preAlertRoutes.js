@@ -12,6 +12,10 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
+
 const preAlertsUploadDir = path.join(__dirname, "..", "uploads", "prealerts");
 
 if (!fs.existsSync(preAlertsUploadDir)) {
@@ -56,7 +60,26 @@ const upload = multer({
   },
 });
 
-router.get("/", protect, getPreAlerts);
-router.post("/", protect, upload.single("invoiceFile"), createPreAlert);
+// Customer portal: retrieve only the authenticated customer's pre-alerts
+router.get(
+  "/my",
+  protectCustomer,
+  getPreAlerts
+);
+
+// Customer portal: submit a new pre-alert
+router.post(
+  "/",
+  protectCustomer,
+  upload.single("invoiceFile"),
+  createPreAlert
+);
+
+// EKOS staff: retrieve all customer pre-alerts
+router.get(
+  "/",
+  protect,
+  getPreAlerts
+);
 
 module.exports = router;
