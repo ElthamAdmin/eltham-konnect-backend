@@ -7,10 +7,26 @@ const {
   markAllNotificationsRead,
 } = require("../controllers/customerNotificationController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
 
-router.get("/mine", protect, getMyNotifications);
-router.put("/read-all", protect, markAllNotificationsRead);
-router.put("/:notificationNumber/read", protect, markNotificationRead);
+router.get(
+  "/mine",
+  protectCustomer,
+  getMyNotifications
+);
+
+router.put(
+  "/read-all",
+  protectCustomer,
+  markAllNotificationsRead
+);
+
+router.put(
+  "/:notificationNumber/read",
+  protectCustomer,
+  markNotificationRead
+);
 
 module.exports = router;
