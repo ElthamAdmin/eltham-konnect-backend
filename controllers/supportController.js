@@ -1,27 +1,75 @@
 const SupportTicket = require("../models/SupportTicket");
 const CustomerNotification = require("../models/CustomerNotification");
 const SystemUser = require("../models/SystemUser");
+const serializeCustomerTicket = (ticket) => {
+  const value =
+    typeof ticket?.toObject === "function"
+      ? ticket.toObject()
+      : ticket || {};
+
+  return {
+    _id: value._id,
+    ticketNumber: value.ticketNumber,
+    customerEkonId: value.customerEkonId,
+    customerName: value.customerName,
+    subject: value.subject,
+    message: value.message,
+    attachmentFileName: value.attachmentFileName,
+    attachmentFilePath: value.attachmentFilePath,
+
+    replies: Array.isArray(value.replies)
+      ? value.replies.map((reply) => ({
+          _id: reply._id,
+          senderType: reply.senderType,
+          senderName: reply.senderName,
+          message: reply.message,
+          attachmentFileName: reply.attachmentFileName,
+          attachmentFilePath: reply.attachmentFilePath,
+          createdAt: reply.createdAt,
+        }))
+      : [],
+
+    status: value.status,
+    priority: value.priority,
+    category: value.category,
+    assignedTo: value.assignedTo,
+    lastCustomerReplyAt: value.lastCustomerReplyAt,
+    lastStaffReplyAt: value.lastStaffReplyAt,
+    satisfactionComment: value.satisfactionComment,
+    resolvedAt: value.resolvedAt,
+    reopenedCount: value.reopenedCount,
+    customerSatisfaction: value.customerSatisfaction,
+    createdAt: value.createdAt,
+  };
+};
 
 const getTickets = async (req, res) => {
   try {
     const user = req.user || {};
-    const query = {};
+    const isCustomer = user.userType === "customer";
 
-    if (user.userType === "customer") {
-      query.customerEkonId = user.ekonId;
-    }
+    const query = isCustomer
+      ? { customerEkonId: user.ekonId }
+      : {};
 
-    const tickets = await SupportTicket.find(query).sort({ createdAt: -1 });
+    const tickets = await SupportTicket.find(query).sort({
+      createdAt: -1,
+    });
 
-    res.json({
+    const responseTickets = isCustomer
+      ? tickets.map(serializeCustomerTicket)
+      : tickets;
+
+    return res.json({
       success: true,
       message: "Support tickets retrieved successfully",
-      totalTickets: tickets.length,
-      data: tickets,
+      totalTickets: responseTickets.length,
+      data: responseTickets,
     });
   } catch (error) {
     console.error("Error getting support tickets:", error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       message: "Failed to retrieve support tickets",
       error: error.message,
@@ -80,7 +128,10 @@ const createTicket = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Support ticket created successfully",
-      data: newTicket,
+      data:
+  user.userType === "customer"
+    ? serializeCustomerTicket(newTicket)
+    : newTicket,
     });
   } catch (error) {
     console.error("Error creating support ticket:", error);
@@ -175,7 +226,9 @@ const addReplyToTicket = async (req, res) => {
     res.json({
       success: true,
       message: "Reply added successfully",
-      data: ticket,
+      data: isCustomer
+  ? serializeCustomerTicket(ticket)
+  : ticket,
     });
   } catch (error) {
     console.error("Error adding reply to support ticket:", error);

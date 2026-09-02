@@ -18,6 +18,10 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
+
 const uploadDir = path.join(__dirname, "../uploads/support-attachments");
 
 if (!fs.existsSync(uploadDir)) {
@@ -53,6 +57,28 @@ const upload = multer({
   },
 });
 
+// Customer portal routes
+router.get(
+  "/my",
+  protectCustomer,
+  getTickets
+);
+
+router.post(
+  "/my",
+  protectCustomer,
+  upload.single("attachmentFile"),
+  createTicket
+);
+
+router.post(
+  "/my/:ticketNumber/reply",
+  protectCustomer,
+  upload.single("attachmentFile"),
+  addReplyToTicket
+);
+
+// Staff-only routes remain below
 router.get("/", protect, getTickets);
 router.get("/staff", protect, getSupportStaff);
 router.post("/", protect, upload.single("attachmentFile"), createTicket);
