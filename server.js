@@ -17,6 +17,7 @@ const manifestRoutes = require("./routes/manifestRoutes");
 const invoiceRoutes = require("./routes/invoiceRoutes");
 const supportRoutes = require("./routes/supportRoutes");
 const communicationRoutes = require("./routes/communicationRoutes");
+const portalBannerRoutes = require("./routes/portalBannerRoutes");
 const financeRoutes = require("./routes/financeRoutes");
 const payrollRoutes = require("./routes/payrollRoutes");
 const systemUserRoutes = require("./routes/systemUserRoutes");
@@ -224,6 +225,7 @@ app.use("/api/manifests", manifestRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/support-tickets", supportRoutes);
 app.use("/api/communication", communicationRoutes);
+app.use("/api/portal-banners", portalBannerRoutes);
 app.use("/api/finance", financeRoutes);
 
 // Standalone Payroll API
