@@ -247,6 +247,237 @@ const getCustomerMe = async (req, res) => {
   }
 };
 
+const updateCustomerMe = async (req, res) => {
+  try {
+    const { ekonId, userType } = req.user || {};
+
+    if (userType !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Customer access only",
+      });
+    }
+
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim();
+    const phone = String(req.body.phone || "").trim();
+    const marketingOptIn =
+      req.body.marketingOptIn !== false;
+
+    if (!name || !email || !phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, email, and phone are required",
+      });
+    }
+
+    const customer = await Customer.findOne({
+      ekonId,
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const duplicateCustomer =
+      await Customer.findOne({
+        _id: { $ne: customer._id },
+        $or: [{ email }, { phone }],
+      }).select("_id");
+
+    if (duplicateCustomer) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Another customer already uses that email or phone number",
+      });
+    }
+
+    const previouslyOptedIn =
+      customer.marketingOptIn !== false;
+
+    customer.name = name;
+    customer.email = email;
+    customer.phone = phone;
+    customer.marketingOptIn = marketingOptIn;
+    customer.lastActivityDate = new Date()
+      .toISOString()
+      .split("T")[0];
+
+    if (
+      previouslyOptedIn &&
+      !marketingOptIn
+    ) {
+      customer.marketingOptOutDate =
+        new Date().toISOString();
+    }
+
+    if (marketingOptIn) {
+      customer.marketingOptOutDate = "";
+    }
+
+    await customer.save();
+
+    return res.json({
+      success: true,
+      message: "Profile updated successfully",
+      data: {
+        ekonId: customer.ekonId,
+        name: customer.name,
+        email: customer.email,
+        phone: customer.phone,
+        branch: customer.branch,
+        address: customer.address,
+        pointsBalance: customer.pointsBalance,
+        signUpDate: customer.signUpDate,
+        lastActivityDate:
+          customer.lastActivityDate,
+        status: customer.status,
+        termsAccepted:
+          customer.termsAccepted,
+        termsAcceptedAt:
+          customer.termsAcceptedAt,
+        privacyAccepted:
+          customer.privacyAccepted,
+        privacyAcceptedAt:
+          customer.privacyAcceptedAt,
+        marketingOptIn:
+          customer.marketingOptIn,
+        marketingOptOutDate:
+          customer.marketingOptOutDate,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Update customer profile error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not update customer profile",
+      error: error.message,
+    });
+  }
+};
+
+const changeCustomerPassword = async (
+  req,
+  res
+) => {
+  try {
+    const { ekonId, userType } = req.user || {};
+
+    if (userType !== "customer") {
+      return res.status(403).json({
+        success: false,
+        message: "Customer access only",
+      });
+    }
+
+    const currentPassword = String(
+      req.body.currentPassword || ""
+    );
+
+    const newPassword = String(
+      req.body.newPassword || ""
+    );
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Current password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "New password must be at least 6 characters",
+      });
+    }
+
+    const customer = await Customer.findOne({
+      ekonId,
+    });
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    if (!customer.passwordHash) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This customer account does not have a portal password",
+      });
+    }
+
+    const passwordMatches =
+      await bcrypt.compare(
+        currentPassword,
+        customer.passwordHash
+      );
+
+    if (!passwordMatches) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The current password is incorrect",
+      });
+    }
+
+    const samePassword =
+      await bcrypt.compare(
+        newPassword,
+        customer.passwordHash
+      );
+
+    if (samePassword) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "The new password must be different from the current password",
+      });
+    }
+
+    customer.passwordHash = await bcrypt.hash(
+      newPassword,
+      10
+    );
+
+    customer.lastActivityDate = new Date()
+      .toISOString()
+      .split("T")[0];
+
+    await customer.save();
+
+    return res.json({
+      success: true,
+      message: "Password updated successfully",
+    });
+  } catch (error) {
+    console.error(
+      "Change customer password error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not update password",
+      error: error.message,
+    });
+  }
+};
+
 const acceptPolicies = async (req, res) => {
   try {
     const { ekonId, userType } = req.user || {};
@@ -366,6 +597,8 @@ module.exports = {
   signupCustomer,
   loginCustomer,
   getCustomerMe,
+  updateCustomerMe,
+  changeCustomerPassword,
   acceptPolicies,
-  setupCustomerPassword, // ADD THIS
+  setupCustomerPassword,
 };

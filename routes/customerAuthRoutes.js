@@ -5,8 +5,10 @@ const {
   signupCustomer,
   loginCustomer,
   getCustomerMe,
+  updateCustomerMe,
+  changeCustomerPassword,
   acceptPolicies,
-  setupCustomerPassword, // ✅ ADD THIS
+  setupCustomerPassword,
 } = require("../controllers/customerAuthController");
 
 const {
@@ -31,6 +33,18 @@ router.get(
   "/me",
   protectCustomer,
   getCustomerMe
+);
+
+router.put(
+  "/me",
+  protectCustomer,
+  updateCustomerMe
+);
+
+router.put(
+  "/change-password",
+  protectCustomer,
+  changeCustomerPassword
 );
 
 router.post(
