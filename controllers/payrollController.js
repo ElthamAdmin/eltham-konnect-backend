@@ -1,7 +1,14 @@
 const mongoose = require("mongoose");
 
 const Payroll = require("../models/Payroll");
-const HREmployee = require("../models/HREmployee");
+
+const AttendancePeriod = require(
+  "../models/AttendancePeriod"
+);
+
+const HREmployee = require(
+  "../models/HREmployee"
+);
 const EmployeeCompensation = require("../models/EmployeeCompensation");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
@@ -3469,10 +3476,10 @@ const approvePayroll = async (
           return;
         }
 
-        const expectedGrossPay =
+                const expectedGrossPay =
           latestLeaveAssessment
             .assessmentStatus ===
-            "Ready"
+          "Ready"
             ? roundMoney(
                 latestLeaveAssessment
                   .adjustedGrossPay
@@ -3480,7 +3487,9 @@ const approvePayroll = async (
             : baseGrossPay;
 
         const assessmentChanged =
-          storedLeaveAssessment &&
+          Boolean(
+            storedLeaveAssessment
+          ) &&
           buildLeaveAssessmentFingerprint(
             storedLeaveAssessment
           ) !==
@@ -3489,14 +3498,32 @@ const approvePayroll = async (
             );
 
         /*
-         * Payroll calculations cannot be silently changed
-         * during approval. Changed evidence requires a new
-         * payroll calculation and statutory assessment.
+         * Standard payroll gross must equal the
+         * leave-adjusted controlled compensation.
+         *
+         * Employer-Assisted Net Pay intentionally
+         * grosses up the controlled compensation so
+         * the employee receives the requested net
+         * amount after deductions. Its final gross
+         * must therefore not be compared directly
+         * with the underlying base compensation.
+         */
+        const grossPayMismatch =
+          payroll.statutoryTreatment ===
+          "Employer-Assisted Net Pay"
+            ? false
+            : roundMoney(
+                payroll.grossPay
+              ) !== expectedGrossPay;
+
+        /*
+         * A genuine attendance or leave change still
+         * blocks every statutory treatment. Only the
+         * invalid base-gross comparison is skipped
+         * for Employer-Assisted Net Pay.
          */
         if (
-          roundMoney(
-            payroll.grossPay
-          ) !== expectedGrossPay ||
+          grossPayMismatch ||
           assessmentChanged
         ) {
           approvalBlock = {
@@ -3507,12 +3534,20 @@ const approvePayroll = async (
               payrollNumber:
                 payroll.payrollNumber,
 
+              statutoryTreatment:
+                payroll
+                  .statutoryTreatment,
+
               storedGrossPay:
                 roundMoney(
                   payroll.grossPay
                 ),
 
               expectedGrossPay,
+
+              grossPayMismatch,
+
+              assessmentChanged,
 
               latestLeaveAssessment,
             },
@@ -4139,11 +4174,82 @@ const cancelPayroll = async (req, res) => {
           };
         }
 
+                /*
+         * A cancelled Payroll must release any
+         * attendance period locked specifically to
+         * that Payroll. Otherwise the employee is
+         * permanently blocked from recreating the
+         * payroll for the same period.
+         */
+        const linkedAttendancePeriod =
+          await AttendancePeriod.findOne({
+            employeeId:
+              payroll.employeeId,
+
+            periodKey:
+              payroll.payPeriod,
+
+            payrollNumber:
+              payroll.payrollNumber,
+
+            status: "Locked",
+          }).session(session);
+
+        if (linkedAttendancePeriod) {
+          const attendancePreviousStatus =
+            linkedAttendancePeriod.status;
+
+          linkedAttendancePeriod.status =
+            "Payroll Ready";
+
+          linkedAttendancePeriod.payrollNumber =
+            "";
+
+          linkedAttendancePeriod.lockedBy =
+            "";
+
+          linkedAttendancePeriod.lockedAt =
+            null;
+
+          linkedAttendancePeriod.updatedBy =
+            getUserName(req.user);
+
+          linkedAttendancePeriod
+            .workflowHistory.push({
+              fromStatus:
+                attendancePreviousStatus,
+
+              toStatus:
+                "Payroll Ready",
+
+              action:
+                "Attendance released from cancelled payroll",
+
+              notes:
+                `Payroll ${payroll.payrollNumber} was cancelled. ` +
+                `Attendance was returned to Payroll Ready. ` +
+                `Reason: ${cancellationReason}`,
+
+              performedBy:
+                getUserName(req.user),
+
+              performedAt:
+                new Date(),
+            });
+
+          await linkedAttendancePeriod.save({
+            session,
+          });
+        }
+
         payroll.status = "Cancelled";
+
         payroll.cancelledBy =
           getUserName(req.user);
+
         payroll.cancelledAt =
           new Date();
+
         payroll.cancellationReason =
           cancellationReason;
 
