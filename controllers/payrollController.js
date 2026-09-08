@@ -3354,8 +3354,9 @@ const approvePayroll = async (
   const session =
     await mongoose.startSession();
 
-  let approvedPayroll = null;
+    let approvedPayroll = null;
   let approvalBlock = null;
+  let historicalApprovalUsed = false;
 
   let leaveEffectConfirmation = {
     confirmedLeaveRequestIds: [],
@@ -3369,9 +3370,12 @@ const approvePayroll = async (
         const { payrollNumber } =
           req.params;
 
-        const approvalNotes = String(
+                const approvalNotes = String(
           req.body.approvalNotes || ""
         ).trim();
+
+        const historicalPaymentRequest =
+          req.body?.historicalPayment || {};
 
         const payroll =
           await Payroll.findOne({
@@ -3615,56 +3619,180 @@ const approvePayroll = async (
             .minimumWageAssessment ||
           {};
 
-        if (
-          wageAssessment.applicable !==
-            false &&
+                const minimumWageNotCompliant =
+          wageAssessment.applicable !== false &&
           (
-            wageAssessment
-              .assessmentStatus !==
+            wageAssessment.assessmentStatus !==
               "Compliant" ||
-            wageAssessment.compliant !==
-              true ||
+            wageAssessment.compliant !== true ||
             Number(
-              wageAssessment.shortfall ||
-                0
+              wageAssessment.shortfall || 0
             ) > 0
-          )
-        ) {
-          approvalBlock = {
-            message:
-              wageAssessment.warning ||
-              "Payroll cannot be approved until minimum-wage compliance is confirmed.",
+          );
 
-            data: {
-              payrollNumber:
-                payroll.payrollNumber,
-
-              employeeId:
-                payroll.employeeId,
-
-              employeeName:
-                payroll.employeeName,
-
-              payPeriod:
-                payroll.payPeriod,
-
-              minimumWageAssessment:
-                wageAssessment,
-
-              leavePayrollAssessment:
-                latestLeaveAssessment,
-            },
-          };
+        if (minimumWageNotCompliant) {
+          const historicalApprovalRequested =
+            historicalPaymentRequest
+              .isHistorical === true;
 
           /*
-           * Preserve both current assessments even though
-           * approval remains blocked.
+           * Normal payroll approval remains blocked.
+           * Only an administrator may acknowledge a
+           * past, already-paid payroll record.
            */
-          await payroll.save({
-            session,
-          });
+          if (!historicalApprovalRequested) {
+            approvalBlock = {
+              message:
+                wageAssessment.warning ||
+                "Payroll cannot be approved until minimum-wage compliance is confirmed.",
 
-          return;
+              data: {
+                payrollNumber:
+                  payroll.payrollNumber,
+
+                employeeId:
+                  payroll.employeeId,
+
+                employeeName:
+                  payroll.employeeName,
+
+                payPeriod:
+                  payroll.payPeriod,
+
+                minimumWageAssessment:
+                  wageAssessment,
+
+                leavePayrollAssessment:
+                  latestLeaveAssessment,
+              },
+            };
+
+            /*
+             * Preserve both current assessments even though
+             * normal approval remains blocked.
+             */
+            await payroll.save({
+              session,
+            });
+
+            return;
+          }
+
+          const isAdministrator =
+            String(
+              req.user?.role || ""
+            )
+              .trim()
+              .toLowerCase() === "admin";
+
+          if (!isAdministrator) {
+            const error = new Error(
+              "Only an Admin may approve a historical payroll with an unresolved compliance shortfall."
+            );
+
+            error.statusCode = 403;
+            throw error;
+          }
+
+          const scheduledPaymentDate =
+            formatDateForComparison(
+              payroll.payDate
+            );
+
+          const jamaicaToday =
+            getJamaicaToday();
+
+          if (
+            !scheduledPaymentDate ||
+            scheduledPaymentDate >=
+              jamaicaToday
+          ) {
+            const error = new Error(
+              "Historical payroll approval is allowed only for a payment date before today in Jamaica."
+            );
+
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const actualPaymentDate =
+            formatDateForComparison(
+              historicalPaymentRequest
+                .actualPaymentDate
+            );
+
+          if (
+            !actualPaymentDate ||
+            actualPaymentDate >
+              jamaicaToday
+          ) {
+            const error = new Error(
+              "Enter a valid historical payment date that is not later than today in Jamaica."
+            );
+
+            error.statusCode = 400;
+            throw error;
+          }
+
+          const historicalReason =
+            String(
+              historicalPaymentRequest
+                .reason || ""
+            ).trim();
+
+          if (
+            historicalReason.length < 20
+          ) {
+            const error = new Error(
+              "A historical payroll reason of at least 20 characters is required."
+            );
+
+            error.statusCode = 400;
+            throw error;
+          }
+
+          if (
+            historicalPaymentRequest
+              .unresolvedComplianceAcknowledged !==
+            true
+          ) {
+            const error = new Error(
+              "The unresolved minimum-wage compliance shortfall must be explicitly acknowledged."
+            );
+
+            error.statusCode = 400;
+            throw error;
+          }
+
+          payroll.historicalPayment = {
+            isHistorical: true,
+
+            actualPaymentDate:
+              new Date(
+                `${actualPaymentDate}T12:00:00.000Z`
+              ),
+
+            reason:
+              historicalReason,
+
+            unresolvedComplianceAcknowledged:
+              true,
+
+            complianceDisposition:
+              "Unresolved Shortfall Acknowledged",
+
+            acknowledgedBy:
+              getUserName(req.user),
+
+            acknowledgedAt:
+              new Date(),
+          };
+
+          payroll.markModified(
+            "historicalPayment"
+          );
+
+          historicalApprovalUsed = true;
         }
 
         /*
@@ -3741,8 +3869,10 @@ const approvePayroll = async (
     try {
       await writeAuditLog({
         req,
-        action:
-          "APPROVE_PAYROLL",
+                action:
+          historicalApprovalUsed
+            ? "APPROVE_HISTORICAL_PAYROLL_WITH_SHORTFALL"
+            : "APPROVE_PAYROLL",
         module: "Payroll",
 
         description:
@@ -3787,8 +3917,12 @@ const approvePayroll = async (
           approvedBy:
             approvedPayroll.approvedBy,
 
-          approvedAt:
+                    approvedAt:
             approvedPayroll.approvedAt,
+
+          historicalPayment:
+            approvedPayroll
+              .historicalPayment,
         },
       });
     } catch (auditError) {
@@ -3800,8 +3934,10 @@ const approvePayroll = async (
 
     return res.json({
       success: true,
-      message:
-        "Payroll approved successfully",
+            message:
+        historicalApprovalUsed
+          ? "Historical payroll approved with the unresolved compliance shortfall recorded and acknowledged."
+          : "Payroll approved successfully",
       data:
         approvedPayroll,
     });

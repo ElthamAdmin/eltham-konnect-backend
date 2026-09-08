@@ -571,10 +571,61 @@ const PayrollSchema = new mongoose.Schema(
       default: null,
     },
 
-    approvalNotes: {
+        approvalNotes: {
       type: String,
       default: "",
       trim: true,
+    },
+
+    /*
+     * Historical payroll recording
+     *
+     * This does not declare a minimum-wage shortfall compliant.
+     * It records that an administrator approved entry of a
+     * payroll payment that occurred before it was entered in EKOS.
+     */
+    historicalPayment: {
+      isHistorical: {
+        type: Boolean,
+        default: false,
+        index: true,
+      },
+
+      actualPaymentDate: {
+        type: Date,
+        default: null,
+      },
+
+      reason: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      unresolvedComplianceAcknowledged: {
+        type: Boolean,
+        default: false,
+      },
+
+      complianceDisposition: {
+        type: String,
+        enum: [
+          "",
+          "Unresolved Shortfall Acknowledged",
+        ],
+        default: "",
+      },
+
+      acknowledgedBy: {
+        type: String,
+        default: "",
+        trim: true,
+      },
+
+      acknowledgedAt: {
+        type: Date,
+        default: null,
+      },
     },
 
     paidBy: {
