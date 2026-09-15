@@ -684,6 +684,33 @@ const buildIncomeTaxAssessmentLines = ({
   ];
 };
 
+const buildBadDebtWriteOffLines = ({
+  amount,
+  invoiceNumber = "",
+  customerName = "",
+}) => {
+  const value = requirePositiveAmount(amount, "Write-off amount");
+
+  const description =
+    `Bad debt write-off${invoiceNumber ? ` for ${invoiceNumber}` : ""}` +
+    `${customerName ? ` - ${customerName}` : ""}`;
+
+  return [
+    {
+      accountCode: SYSTEM_ACCOUNTS.BAD_DEBT_EXPENSE,
+      debit: value,
+      credit: 0,
+      description,
+    },
+    {
+      accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+      debit: 0,
+      credit: value,
+      description,
+    },
+  ];
+};
+
 
 module.exports = {
   requirePositiveAmount,
@@ -704,4 +731,5 @@ module.exports = {
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,
   buildCustomerPurchaseRecoveryInvoiceLines,
+  buildBadDebtWriteOffLines,
 };

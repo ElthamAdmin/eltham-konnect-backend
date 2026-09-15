@@ -100,6 +100,13 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   "Debit",
   "Income Tax Expense",
 ],
+[
+  "6700",
+  "Bad Debt Expense",
+  "Expense",
+  "Debit",
+  "Bad Debt Expense",
+],
 ].map(([accountCode, accountName, accountCategory, normalBalance, accountType]) => ({
   accountCode,
   accountName,

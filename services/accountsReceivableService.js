@@ -1,8 +1,11 @@
 const Invoice = require("../models/Invoice");
 const Customer = require("../models/Customer");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
+const { postBadDebtWriteOff } = require("./accountingEngine/workflowService");
+const { ensureSystemAccounts } = require("../utils/generalLedgerPoster");
 
 const AR_ACCOUNT_CODE = "1100";
+const SYSTEM_AR_ACCOUNT_CODE = "1100";
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -1462,7 +1465,7 @@ const requestInvoiceWriteOff = async ({
   return invoice;
 };
 
-const approveInvoiceWriteOff = async ({ invoiceNumber, journalEntryNumber, user }) => {
+const approveInvoiceWriteOff = async ({ invoiceNumber, user }) => {
   const invoice = await Invoice.findOne({ invoiceNumber });
 
   if (!invoice) {
@@ -1473,24 +1476,73 @@ const approveInvoiceWriteOff = async ({ invoiceNumber, journalEntryNumber, user 
     throw new Error("Only pending write-offs can be approved.");
   }
 
-  const approvedBy = user?.fullName || user?.name || user?.email || "System User";
+  const writeOffAmount = roundMoney(invoice.writeOffAmount);
+  const balanceDue = getInvoiceReportBalance(invoice);
+
+  if (writeOffAmount <= 0) {
+    throw new Error("Write-off amount must be greater than zero.");
+  }
+
+  if (writeOffAmount > balanceDue) {
+    throw new Error("Write-off amount cannot exceed invoice balance due.");
+  }
+
+  const approvedBy =
+    user?.fullName || user?.name || user?.email || "System User";
+
+  await ensureSystemAccounts();
+
+  /*
+   * Protect against duplicate journal posting if a previous request posted
+   * the journal but failed before updating the invoice.
+   */
+  const existingLedgerLine = await GeneralLedgerTransaction.findOne({
+    reference: invoiceNumber,
+    sourceModule: "Accounts Receivable",
+    accountCode: SYSTEM_AR_ACCOUNT_CODE,
+  }).sort({ createdAt: -1 });
+
+  let postedJournalEntryNumber = existingLedgerLine?.entryNumber || "";
+
+  if (!postedJournalEntryNumber) {
+    const journalEntry = await postBadDebtWriteOff({
+      invoice,
+      amount: writeOffAmount,
+      postingDate: new Date(),
+      user,
+    });
+
+    postedJournalEntryNumber = journalEntry.entryNumber;
+  }
+
+  const remainingBalance = roundMoney(balanceDue - writeOffAmount);
+  const isFullyWrittenOff = remainingBalance === 0;
 
   invoice.writeOffStatus = "Written Off";
   invoice.writeOffApprovedBy = approvedBy;
   invoice.writeOffApprovedAt = new Date();
-  invoice.writeOffJournalEntryNumber = journalEntryNumber || "";
+  invoice.writeOffJournalEntryNumber = postedJournalEntryNumber;
 
-  invoice.status = "Written Off";
-  invoice.collectionsStatus = "Written Off";
-  invoice.balanceDue = 0;
+  invoice.balanceDue = remainingBalance;
+
+  if (isFullyWrittenOff) {
+    invoice.status = "Written Off";
+    invoice.collectionsStatus = "Written Off";
+  } else {
+    invoice.status = "Partially Paid";
+    invoice.collectionsStatus = "Collections";
+  }
 
   invoice.collectionNotes = invoice.collectionNotes || [];
   invoice.collectionNotes.push({
-    note: `Write-off approved for JMD ${roundMoney(invoice.writeOffAmount).toLocaleString()}. Journal Entry: ${journalEntryNumber || "Pending"}.`,
+    note:
+      `Write-off approved for JMD ${writeOffAmount.toLocaleString()}. ` +
+      `Journal Entry: ${postedJournalEntryNumber}.`,
     createdBy: approvedBy,
   });
 
   await invoice.save();
+
   return invoice;
 };
 

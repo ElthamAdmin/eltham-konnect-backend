@@ -530,6 +530,33 @@ createdBy: getUserName(user),
   });
 };
 
+const postBadDebtWriteOff = async ({
+  invoice,
+  amount,
+  postingDate,
+  user,
+}) => {
+  if (!invoice) {
+    throw new Error("An invoice is required for a bad-debt write-off.");
+  }
+
+  const writeOffAmount = roundMoney(
+    amount || invoice.writeOffAmount || invoice.balanceDue || 0
+  );
+
+  return postJournalEntry({
+    entryDate: normalizePostingDate(postingDate || new Date()),
+    memo: `Bad debt write-off for ${invoice.customerName}`,
+    reference: invoice.invoiceNumber,
+    sourceModule: "Accounts Receivable",
+    createdBy: getUserName(user),
+    lines: templates.buildBadDebtWriteOffLines({
+      amount: writeOffAmount,
+      invoiceNumber: invoice.invoiceNumber,
+      customerName: invoice.customerName,
+    }),
+  });
+};
 
 
 module.exports = {
@@ -549,4 +576,5 @@ module.exports = {
   postCustomerPurchase,
   refundCustomerPurchase,
   postCustomerPurchaseRecoveryInvoice,
+   postBadDebtWriteOff,
 };
