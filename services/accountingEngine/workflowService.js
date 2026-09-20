@@ -8,10 +8,55 @@ const {
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
-const todayYMD = () => new Date().toISOString().slice(0, 10);
+const formatDateInJamaica = (date) => {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  const parts = formatter.formatToParts(date);
+
+  const year = parts.find(
+    (part) => part.type === "year"
+  )?.value;
+
+  const month = parts.find(
+    (part) => part.type === "month"
+  )?.value;
+
+  const day = parts.find(
+    (part) => part.type === "day"
+  )?.value;
+
+  return `${year}-${month}-${day}`;
+};
+
+const todayYMD = () =>
+  formatDateInJamaica(new Date());
 
 const normalizePostingDate = (dateValue) => {
-  if (!dateValue) return todayYMD();
+  if (!dateValue) {
+    return todayYMD();
+  }
+
+  const normalizedValue =
+    String(dateValue).trim();
+
+  /*
+   * Preserve date-only accounting values exactly.
+   * Parsing YYYY-MM-DD as a JavaScript Date treats
+   * it as UTC and can shift it to the previous day
+   * in Jamaica.
+   */
+  if (
+    /^\d{4}-\d{2}-\d{2}$/.test(
+      normalizedValue
+    )
+  ) {
+    return normalizedValue;
+  }
 
   const date = new Date(dateValue);
 
@@ -19,7 +64,7 @@ const normalizePostingDate = (dateValue) => {
     return todayYMD();
   }
 
-  return date.toISOString().slice(0, 10);
+  return formatDateInJamaica(date);
 };
 
 const postCustomerInvoice = async ({ invoice, user }) => {
