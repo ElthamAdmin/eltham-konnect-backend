@@ -201,7 +201,6 @@ const approveWriteOff = async (req, res) => {
 
     const invoice = await approveInvoiceWriteOff({
       invoiceNumber,
-      journalEntryNumber: req.body.journalEntryNumber,
       user: req.user,
     });
 
@@ -212,13 +211,16 @@ const approveWriteOff = async (req, res) => {
     });
   } catch (error) {
     console.error("Approve write-off error:", error);
+
     res.status(500).json({
       success: false,
-      message: "Could not approve write-off",
-      error: error.message,
+      message:
+        error.message ||
+        "Could not approve write-off",
     });
   }
 };
+
 
 const rejectWriteOff = async (req, res) => {
   try {

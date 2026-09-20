@@ -1374,13 +1374,28 @@ const buildWriteOffDashboard = async () => {
     (invoice) => invoice.writeOffStatus === "Recovered"
   );
 
-  const totalWrittenOff = roundMoney(
-    writeOffInvoices.reduce((sum, invoice) => sum + Number(invoice.writeOffAmount || 0), 0)
-  );
+  const postedWriteOffInvoices = writeOffInvoices.filter(
+  (invoice) =>
+    invoice.writeOffStatus === "Written Off" ||
+    invoice.writeOffStatus === "Recovered"
+);
 
-  const totalRecovered = roundMoney(
-    writeOffInvoices.reduce((sum, invoice) => sum + Number(invoice.writeOffRecoveredAmount || 0), 0)
-  );
+const totalWrittenOff = roundMoney(
+  postedWriteOffInvoices.reduce(
+    (sum, invoice) =>
+      sum + Number(invoice.writeOffAmount || 0),
+    0
+  )
+);
+
+const totalRecovered = roundMoney(
+  postedWriteOffInvoices.reduce(
+    (sum, invoice) =>
+      sum +
+      Number(invoice.writeOffRecoveredAmount || 0),
+    0
+  )
+);
 
   const register = writeOffInvoices.map((invoice) => ({
     invoiceNumber: invoice.invoiceNumber,
