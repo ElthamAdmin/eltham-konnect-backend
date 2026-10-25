@@ -44,12 +44,12 @@ router.use(
 const policyUpload = multer({
   storage: multer.memoryStorage(),
 
-  limits: {
+    limits: {
     fileSize: 10 * 1024 * 1024,
     files: 1,
     fields: 4,
     fieldSize: 16 * 1024,
-    parts: 5,
+    parts: 6,
   },
 
   fileFilter: (req, file, callback) => {
