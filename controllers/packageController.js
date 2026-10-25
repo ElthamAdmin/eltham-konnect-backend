@@ -1,4 +1,5 @@
 const Package = require("../models/Package");
+const ShippingRate = require("../models/ShippingRate");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
@@ -364,12 +365,73 @@ const getMyPackages = async (req, res) => {
       .sort({ dateReceived: -1, createdAt: -1 })
       .lean();
 
+        const billedWeights = [
+      ...new Set(
+        packages
+          .map((pkg) => {
+            const weight = Number(pkg.weight);
+
+            return Number.isFinite(weight) && weight > 0
+              ? Math.ceil(weight)
+              : null;
+          })
+          .filter((weight) => weight !== null)
+      ),
+    ];
+
+    const rates = billedWeights.length
+      ? await ShippingRate.find({
+          weight: { $in: billedWeights },
+        })
+          .select("weight price")
+          .lean()
+      : [];
+
+    const rateMap = new Map();
+
+    for (const rate of rates) {
+      const billedWeight = Number(rate.weight);
+      const price = Number(rate.price);
+
+      if (
+        rate.price !== null &&
+        rate.price !== undefined &&
+        Number.isFinite(billedWeight) &&
+        Number.isFinite(price) &&
+        price >= 0
+      ) {
+        rateMap.set(billedWeight, price);
+      }
+    }
+
+    const packagesWithEstimates = packages.map((pkg) => {
+      const actualWeight = Number(pkg.weight);
+
+      const chargeableWeight =
+        Number.isFinite(actualWeight) && actualWeight > 0
+          ? Math.ceil(actualWeight)
+          : null;
+
+      const estimatedCharge =
+        chargeableWeight !== null &&
+        rateMap.has(chargeableWeight)
+          ? rateMap.get(chargeableWeight)
+          : null;
+
+      return {
+        ...pkg,
+        chargeableWeight,
+        estimatedCharge,
+      };
+    });
+
     return res.json({
       success: true,
       message: "Customer packages retrieved successfully",
-      totalPackages: packages.length,
-      data: packages,
+      totalPackages: packagesWithEstimates.length,
+      data: packagesWithEstimates,
     });
+
   } catch (error) {
     console.error("Error getting customer packages:", error);
 
