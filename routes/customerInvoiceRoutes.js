@@ -1,28 +1,24 @@
 const express = require("express");
 const multer = require("multer");
-const path = require("path");
-const router = express.Router();
 
 const {
   getMyInvoiceUploads,
   uploadCustomerInvoice,
+  openCustomerInvoice,
 } = require("../controllers/customerInvoiceController");
 
 const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, path.join(__dirname, "../uploads/customer-invoices"));
-  },
-  filename: function (req, file, cb) {
-    const uniqueName = `${Date.now()}-${file.originalname.replace(/\s+/g, "-")}`;
-    cb(null, uniqueName);
-  },
-});
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 
-const allowedTypes = [
+const router = express.Router();
+
+const allowedTypes = new Set([
   "application/pdf",
   "image/jpeg",
   "image/jpg",
@@ -30,24 +26,61 @@ const allowedTypes = [
   "image/webp",
   "image/heic",
   "image/heif",
-];
+]);
 
 const upload = multer({
-  storage,
-  fileFilter: function (req, file, cb) {
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only PDF or image invoice files are allowed"));
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+    files: 1,
+    fields: 3,
+  },
+
+  fileFilter: (req, file, cb) => {
+    const mimeType = String(file.mimetype || "").toLowerCase();
+
+    if (!allowedTypes.has(mimeType)) {
+      return cb(new Error("Only PDF or supported image invoices are allowed."));
     }
+
+    return cb(null, true);
   },
 });
 
+const receiveInvoice = (req, res, next) => {
+  upload.single("invoiceFile")(req, res, (error) => {
+    if (!error) return next();
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.code === "LIMIT_FILE_SIZE"
+          ? "The invoice must be 10 MB or smaller."
+          : error.message || "The invoice upload could not be processed.",
+    });
+  });
+};
+
 router.get("/", protectCustomer, getMyInvoiceUploads);
+
+router.get(
+  "/files/:uploadNumber",
+  protectCustomer,
+  openCustomerInvoice
+);
+
+router.get(
+  "/staff/files/:uploadNumber",
+  protect,
+  requirePermission("packages"),
+  openCustomerInvoice
+);
+
 router.post(
   "/",
   protectCustomer,
-  upload.single("invoiceFile"),
+  receiveInvoice,
   uploadCustomerInvoice
 );
 

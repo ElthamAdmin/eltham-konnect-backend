@@ -38,6 +38,37 @@ const CustomerInvoiceUploadSchema = new mongoose.Schema(
       required: true,
     },
 
+        storageProvider: {
+      type: String,
+      enum: ["local", "cloudinary"],
+      default: "local",
+    },
+
+    cloudinaryPublicId: {
+      type: String,
+      default: "",
+    },
+
+    cloudinaryResourceType: {
+      type: String,
+      default: "",
+    },
+
+    cloudinaryDeliveryType: {
+      type: String,
+      default: "",
+    },
+
+    mimeType: {
+      type: String,
+      default: "",
+    },
+
+    fileSize: {
+      type: Number,
+      default: 0,
+    },
+
     notes: {
       type: String,
       default: "",

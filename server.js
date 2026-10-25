@@ -153,6 +153,18 @@ app.use(
 
 app.use(express.json());
 app.use(attachUserIfPresent);
+
+/*
+ * Customer invoices must use authenticated file endpoints.
+ * This block must remain before the general /uploads static handler.
+ */
+app.use("/uploads/customer-invoices", (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: "Please open this invoice through your EKOS account.",
+  });
+});
+
 /*
  * H12 security control:
  * Legacy HR documents must never be served from
