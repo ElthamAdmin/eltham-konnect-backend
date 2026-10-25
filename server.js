@@ -30,6 +30,7 @@ const employeeRelationsRoutes = require(
 );
 const leaveRoutes = require("./routes/leaveRoutes");
 const settingRoutes = require("./routes/settingRoutes");
+const customerPolicyRoutes = require("./routes/customerPolicyRoutes");
 const importRoutes = require("./routes/importRoutes");
 const shippingRateRoutes = require("./routes/shippingRateRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
@@ -264,6 +265,7 @@ app.use(
 );
 app.use("/api/leave-requests", leaveRoutes);
 app.use("/api/settings", settingRoutes);
+app.use("/api/customer-policies", customerPolicyRoutes);
 app.use("/api/import", importRoutes);
 app.use("/api/shipping-rates", shippingRateRoutes);
 app.use("/api/marketing", marketingRoutes);
