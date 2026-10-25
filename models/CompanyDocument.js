@@ -29,6 +29,30 @@ const CompanyDocumentSchema = new mongoose.Schema(
       required: true,
       default: "application/pdf",
     },
+        storageProvider: {
+      type: String,
+      default: "",
+    },
+
+    cloudinaryPublicId: {
+      type: String,
+      default: "",
+    },
+
+    cloudinaryResourceType: {
+      type: String,
+      default: "",
+    },
+
+    cloudinaryDeliveryType: {
+      type: String,
+      default: "",
+    },
+
+    fileSize: {
+      type: Number,
+      default: 0,
+    },
     status: {
       type: String,
       default: "Active",

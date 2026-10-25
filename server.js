@@ -153,6 +153,12 @@ app.use(
 
 app.use(express.json());
 app.use(attachUserIfPresent);
+app.use("/uploads/documents", (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: "Please open internal documents through authorised EKOS Settings.",
+  });
+});
 
 /*
  * Customer invoices must use authenticated file endpoints.
