@@ -1,11 +1,59 @@
 const mongoose = require("mongoose");
 
+const PackageEditHistorySchema = new mongoose.Schema(
+  {
+    editedAt: {
+      type: Date,
+      default: Date.now,
+    },
+
+    editedByUserId: {
+      type: String,
+      default: "",
+    },
+
+    editedByName: {
+      type: String,
+      default: "",
+    },
+
+    editedByRole: {
+      type: String,
+      default: "",
+    },
+
+    reason: {
+      type: String,
+      required: true,
+    },
+
+    beforeValues: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+
+    afterValues: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
+  },
+  {
+    _id: true,
+  }
+);
+
 const PackageSchema = new mongoose.Schema(
   {
     trackingNumber: {
       type: String,
       required: true,
       unique: true,
+    },
+
+    trackingNumberAliases: {
+      type: [String],
+      default: [],
+      index: true,
     },
 
     customerEkonId: {
@@ -24,38 +72,48 @@ const PackageSchema = new mongoose.Schema(
     },
 
     integrationSource: {
-  type: String,
-  default: "",
-},
+      type: String,
+      default: "",
+    },
 
-externalWarehouseId: {
-  type: String,
-  default: "",
-},
+    externalWarehouseId: {
+      type: String,
+      default: "",
+    },
 
-externalPackageId: {
-  type: String,
-  default: "",
-},
+    externalPackageId: {
+      type: String,
+      default: "",
+    },
 
-externalStatus: {
-  type: String,
-  default: "",
-},
+    externalStatus: {
+      type: String,
+      default: "",
+    },
 
-lastExternalSyncAt: {
-  type: Date,
-  default: null,
-},
+    lastExternalSyncAt: {
+      type: Date,
+      default: null,
+    },
 
-syncNotes: {
-  type: String,
-  default: "",
-},
+    syncNotes: {
+      type: String,
+      default: "",
+    },
 
-        weight: {
+    weight: {
       type: Number,
       default: 0,
+    },
+
+    manualWeightOverride: {
+      type: Boolean,
+      default: false,
+    },
+
+    latestExternalWeight: {
+      type: Number,
+      default: null,
     },
 
     customerPurchaseId: {
@@ -176,8 +234,35 @@ syncNotes: {
       type: Date,
       default: null,
     },
+
+    editVersion: {
+      type: Number,
+      default: 0,
+    },
+
+    lastEditedAt: {
+      type: Date,
+      default: null,
+    },
+
+    lastEditedByUserId: {
+      type: String,
+      default: "",
+    },
+
+    lastEditedByName: {
+      type: String,
+      default: "",
+    },
+
+    editHistory: {
+      type: [PackageEditHistorySchema],
+      default: [],
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
 module.exports = mongoose.model("Package", PackageSchema);
