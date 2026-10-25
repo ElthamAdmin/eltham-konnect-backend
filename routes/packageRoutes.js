@@ -12,19 +12,92 @@ const {
 } = require("../controllers/packageController");
 
 const {
+  updatePackageDetails,
+} = require("../controllers/packageEditController");
+
+const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
-router.get("/", getPackages);
+const {
+  protect,
+  requirePermission,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
+
+const canReadPackages = requireAnyPermission([
+  "packages",
+  "warehouse",
+  "dashboard",
+  "invoices",
+  "finance",
+  "manifests",
+  "pos",
+  "analytics",
+]);
+
+const canManagePackageStatus = requireAnyPermission([
+  "packages",
+  "warehouse",
+]);
+
+/*
+ * Customer access uses its own authentication.
+ * Keep this route before the staff routes.
+ */
 router.get(
   "/my",
   protectCustomer,
   getMyPackages
 );
-router.get("/weight-analysis", getPackageWeightAnalysis);
-router.post("/", createPackage);
-router.put("/bulk-status", bulkUpdatePackageStatus);
-router.put("/:trackingNumber/status", updatePackageStatus);
-router.delete("/:trackingNumber", deletePackage);
+
+router.get(
+  "/",
+  protect,
+  canReadPackages,
+  getPackages
+);
+
+router.get(
+  "/weight-analysis",
+  protect,
+  canReadPackages,
+  getPackageWeightAnalysis
+);
+
+router.post(
+  "/",
+  protect,
+  requirePermission("packages"),
+  createPackage
+);
+
+router.put(
+  "/bulk-status",
+  protect,
+  canManagePackageStatus,
+  bulkUpdatePackageStatus
+);
+
+router.put(
+  "/:packageId/details",
+  protect,
+  requirePermission("packages"),
+  updatePackageDetails
+);
+
+router.put(
+  "/:trackingNumber/status",
+  protect,
+  canManagePackageStatus,
+  updatePackageStatus
+);
+
+router.delete(
+  "/:trackingNumber",
+  protect,
+  requirePermission("packages"),
+  deletePackage
+);
 
 module.exports = router;

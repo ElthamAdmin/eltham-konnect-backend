@@ -1320,7 +1320,7 @@ const updateKpPackage = async (req, res) => {
         };
       }
 
-      const updatedPackage = await Package.findOneAndUpdate(
+            const updatedPackage = await Package.findOneAndUpdate(
         { _id: pkg._id },
         [
           {
@@ -1328,7 +1328,8 @@ const updateKpPackage = async (req, res) => {
           },
         ],
         {
-          new: true,
+          updatePipeline: true,
+          returnDocument: "after",
         }
       );
 
