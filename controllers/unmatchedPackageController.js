@@ -4,7 +4,9 @@ const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
 const UnmatchedPackage = require("../models/UnmatchedPackage");
 const { writeAuditLog } = require("../utils/auditLogger");
-
+const {
+  findPackageByTrackingNumber,
+} = require("../services/packageIdentityService");
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Jamaica",
@@ -63,9 +65,9 @@ const resolveUnmatchedPackage = async (req, res) => {
       });
     }
 
-    const existingPackage = await Package.findOne({
-      trackingNumber: unmatched.trackingNumber,
-    });
+        const existingPackage = await findPackageByTrackingNumber(
+      unmatched.trackingNumber
+    );
 
     if (existingPackage) {
       unmatched.status = "Resolved";

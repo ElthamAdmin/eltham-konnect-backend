@@ -8,6 +8,9 @@ const IntegrationLog = require("../models/IntegrationLog");
 const UnmatchedPackage = require("../models/UnmatchedPackage");
 const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
+const {
+  findPackageByTrackingNumber,
+} = require("../services/packageIdentityService");
 
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
@@ -183,7 +186,7 @@ const syncLtwPackages = async (req, res) => {
           continue;
         }
 
-        const existingPackage = await Package.findOne({ trackingNumber });
+        const existingPackage = await findPackageByTrackingNumber(trackingNumber)
 
         if (existingPackage) {
           duplicateCount += 1;
@@ -472,7 +475,7 @@ if (!customerEkonId) {
   });
 }
 
-    const existingPackage = await Package.findOne({ trackingNumber });
+    const existingPackage = await findPackageByTrackingNumber(trackingNumber)
 
     if (existingPackage) {
       await createIntegrationLog({
@@ -978,7 +981,7 @@ if (!isValidEkonId(customerEkonId)) {
           continue;
         }
 
-        const existingPackage = await Package.findOne({ trackingNumber });
+        const existingPackage = await findPackageByTrackingNumber(trackingNumber)
 
         if (existingPackage) {
           duplicateCount += 1;
@@ -1209,6 +1212,14 @@ const updateKpPackage = async (req, res) => {
     const results = [];
 
     for (const item of payload) {
+      if (!item || typeof item !== "object") {
+        results.push({
+          status: "Failed",
+          message: "Invalid package update.",
+        });
+        continue;
+      }
+
       const trackingNumber = String(
         getKpValue(item, [
           "trackingNumber",
@@ -1219,12 +1230,12 @@ const updateKpPackage = async (req, res) => {
       if (!trackingNumber) {
         results.push({
           status: "Failed",
-          message: "Missing tracking number",
+          message: "Missing tracking number.",
         });
         continue;
       }
 
-      const pkg = await Package.findOne({ trackingNumber });
+      const pkg = await findPackageByTrackingNumber(trackingNumber);
 
       if (!pkg) {
         results.push({
@@ -1234,24 +1245,108 @@ const updateKpPackage = async (req, res) => {
         continue;
       }
 
-      pkg.weight = Number(
-        getKpValue(item, ["weight", "Weight"]) || pkg.weight
+      const receivedWeight = getKpValue(item, [
+        "weight",
+        "Weight",
+      ]);
+
+      const hasWeight = receivedWeight !== "";
+      let numericWeight = null;
+
+      if (hasWeight) {
+        if (
+          typeof receivedWeight !== "number" &&
+          typeof receivedWeight !== "string"
+        ) {
+          results.push({
+            trackingNumber,
+            status: "Failed",
+            message: "Weight must be a valid number.",
+          });
+          continue;
+        }
+
+        numericWeight = Number(receivedWeight);
+
+        if (
+          !Number.isFinite(numericWeight) ||
+          numericWeight < 0
+        ) {
+          results.push({
+            trackingNumber,
+            status: "Failed",
+            message: "Weight must be zero or greater.",
+          });
+          continue;
+        }
+      }
+
+      const claimedValue = getKpValue(item, [
+        "claimed",
+        "Claimed",
+      ]);
+
+      const isClaimed =
+        claimedValue === true ||
+        claimedValue === 1 ||
+        ["true", "1", "yes"].includes(
+          String(claimedValue).trim().toLowerCase()
+        );
+
+      const now = new Date();
+
+      const updatedFields = {
+        externalStatus: isClaimed ? "CLAIMED" : "ARRIVED",
+        lastExternalSyncAt: now,
+        syncNotes:
+          `KP update received at ${now.toISOString()}. ` +
+          "Manual weight corrections are retained when enabled.",
+      };
+
+      if (hasWeight) {
+        updatedFields.latestExternalWeight = numericWeight;
+
+        /*
+         * Evaluate the override in MongoDB when writing.
+         * This also protects a correction saved after
+         * the initial package lookup.
+         */
+        updatedFields.weight = {
+          $cond: [
+            { $eq: ["$manualWeightOverride", true] },
+            "$weight",
+            numericWeight,
+          ],
+        };
+      }
+
+      const updatedPackage = await Package.findOneAndUpdate(
+        { _id: pkg._id },
+        [
+          {
+            $set: updatedFields,
+          },
+        ],
+        {
+          new: true,
+        }
       );
 
-      pkg.externalStatus =
-        getKpValue(item, ["claimed", "Claimed"])
-          ? "CLAIMED"
-          : "ARRIVED";
-
-      pkg.lastExternalSyncAt = new Date();
-
-      pkg.syncNotes = `Updated from KP package update API at ${new Date().toISOString()}`;
-
-      await pkg.save();
+      if (!updatedPackage) {
+        results.push({
+          trackingNumber,
+          status: "Not Found",
+        });
+        continue;
+      }
 
       results.push({
-        trackingNumber,
+        trackingNumber: updatedPackage.trackingNumber,
+        receivedTrackingNumber: trackingNumber,
         status: "Updated",
+        manualWeightRetained:
+          hasWeight &&
+          Boolean(updatedPackage.manualWeightOverride),
       });
     }
 
@@ -1295,7 +1390,7 @@ const deleteKpPackage = async (req, res) => {
         continue;
       }
 
-      const pkg = await Package.findOne({ trackingNumber });
+      const pkg = await findPackageByTrackingNumber(trackingNumber)
 
       if (!pkg) {
         results.push({
