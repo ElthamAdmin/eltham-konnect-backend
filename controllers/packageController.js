@@ -586,6 +586,45 @@ if (packageStatus === "At Warehouse") {
   }
 };
 
+const applyPackageStatusDetails = (pkg, status, user = {}) => {
+  const previousStatus = pkg.status;
+  const now = new Date();
+
+  pkg.status = status;
+  pkg.statusUpdatedAt = now;
+
+  if (status === "Ready for Pickup") {
+    pkg.readyForPickup = true;
+    pkg.readyForPickupDate =
+      pkg.pickupNotifiedAt ||
+      pkg.readyForPickupDate ||
+      now;
+  } else {
+    pkg.readyForPickup = false;
+    pkg.readyForPickupDate = null;
+  }
+
+  // Record a new collection, preserving its original date on retries.
+  // Existing Delivered records are not given invented collection dates.
+  if (
+    status === "Delivered" &&
+    previousStatus !== "Delivered" &&
+    !pkg.collectedAt
+  ) {
+    pkg.collectedAt = now;
+
+    pkg.collectedByUserId = String(
+      user.userId || user._id || user.id || ""
+    );
+
+    pkg.collectedByName =
+      user.fullName ||
+      user.name ||
+      user.email ||
+      "System User";
+  }
+};
+
 const updatePackageStatus = async (req, res) => {
   try {
     const { trackingNumber } = req.params;
@@ -617,24 +656,9 @@ const updatePackageStatus = async (req, res) => {
       });
     }
 
-    const previousStatus = pkg.status;
-    const now = new Date();
+        const previousStatus = pkg.status;
 
-    pkg.status = status;
-    pkg.statusUpdatedAt = now;
-
-    if (status === "Ready for Pickup") {
-      pkg.readyForPickup = true;
-      pkg.readyForPickupDate = now;
-    } else {
-      pkg.readyForPickup = false;
-      pkg.readyForPickupDate = null;
-    }
-
-    if (status === "Delivered") {
-      pkg.readyForPickup = false;
-      pkg.readyForPickupDate = null;
-    }
+    applyPackageStatusDetails(pkg, status, req.user);
 
         await pkg.save();
 
@@ -688,6 +712,9 @@ const updatePackageStatus = async (req, res) => {
         newStatus: pkg.status,
         readyForPickup: pkg.readyForPickup,
         readyForPickupDate: pkg.readyForPickupDate,
+                collectedAt: pkg.collectedAt,
+        collectedByUserId: pkg.collectedByUserId,
+        collectedByName: pkg.collectedByName,
         statusUpdatedAt: pkg.statusUpdatedAt,
         pointsAwarded,
                 customerPurchaseNumber:
@@ -757,24 +784,9 @@ const bulkUpdatePackageStatus = async (req, res) => {
     let totalPointsAwarded = 0;
 
     for (const pkg of packages) {
-      const previousStatus = pkg.status;
-      const now = new Date();
+            const previousStatus = pkg.status;
 
-      pkg.status = status;
-      pkg.statusUpdatedAt = now;
-
-      if (status === "Ready for Pickup") {
-        pkg.readyForPickup = true;
-        pkg.readyForPickupDate = now;
-      } else {
-        pkg.readyForPickup = false;
-        pkg.readyForPickupDate = null;
-      }
-
-      if (status === "Delivered") {
-        pkg.readyForPickup = false;
-        pkg.readyForPickupDate = null;
-      }
+      applyPackageStatusDetails(pkg, status, req.user);
 
             await pkg.save();
 
@@ -829,6 +841,9 @@ const bulkUpdatePackageStatus = async (req, res) => {
           newStatus: pkg.status,
           readyForPickup: pkg.readyForPickup,
           readyForPickupDate: pkg.readyForPickupDate,
+                  collectedAt: pkg.collectedAt,
+        collectedByUserId: pkg.collectedByUserId,
+        collectedByName: pkg.collectedByName,
           statusUpdatedAt: pkg.statusUpdatedAt,
           pointsAwarded,
                     customerPurchaseNumber:
