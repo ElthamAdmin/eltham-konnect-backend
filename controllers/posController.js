@@ -358,21 +358,20 @@ const cashOutInvoice = async (req, res) => {
 
     await invoice.save();
 
-    if (invoiceType === "Shipping" && invoice.status === "Paid") {
+        if (invoiceType === "Shipping" && invoice.status === "Paid") {
       const trackingNumbers = (invoice.packages || [])
         .map((pkg) => pkg.trackingNumber)
         .filter(Boolean);
 
       if (trackingNumbers.length > 0) {
         await Package.updateMany(
-          { trackingNumber: { $in: trackingNumbers } },
+          {
+            customerEkonId: invoice.customerEkonId,
+            trackingNumber: { $in: trackingNumbers },
+          },
           {
             $set: {
-              status: "Delivered",
-              readyForPickup: false,
-              readyForPickupDate: null,
               invoiceStatus: "Paid",
-              statusUpdatedAt: new Date(),
             },
           }
         );
