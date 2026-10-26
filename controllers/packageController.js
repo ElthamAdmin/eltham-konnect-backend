@@ -6,6 +6,9 @@ const CustomerNotification = require("../models/CustomerNotification");
 const CustomerPurchase = require("../models/CustomerPurchase");
 const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
+const {
+  ensurePickupNotification,
+} = require("../services/packagePickupNotificationService");
 
 const {
   syncCustomerPurchaseFromPackage,
@@ -533,16 +536,13 @@ if (packageStatus === "At Warehouse") {
       });
     }
 
-    if (packageStatus === "Ready for Pickup") {
-      await createCustomerNotification({
-        customerEkonId: customer.ekonId,
-        customerName: customer.name,
-        title: "Package Ready for Pickup",
-        message: `Your package ${newPackage.trackingNumber} is now ready for pickup.`,
-        type: "Package Update",
-        referenceType: "Package",
-        referenceId: newPackage.trackingNumber,
-      });
+        if (packageStatus === "Ready for Pickup") {
+      const notice = await ensurePickupNotification(newPackage._id);
+
+      if (notice) {
+        newPackage.pickupNotificationNumber = notice.notificationNumber;
+        newPackage.pickupNotifiedAt = notice.notifiedAt;
+      }
     }
 
     await writeAuditLog({
@@ -667,21 +667,12 @@ const updatePackageStatus = async (req, res) => {
       }
     }
 
-    if (previousStatus !== "Ready for Pickup" && status === "Ready for Pickup") {
-      if (!customer) {
-        customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
-      }
+        if (status === "Ready for Pickup") {
+      const notice = await ensurePickupNotification(pkg._id);
 
-      if (customer) {
-        await createCustomerNotification({
-          customerEkonId: customer.ekonId,
-          customerName: customer.name,
-          title: "Package Ready for Pickup",
-          message: `Your package ${pkg.trackingNumber} is now ready for pickup.`,
-          type: "Package Update",
-          referenceType: "Package",
-          referenceId: pkg.trackingNumber,
-        });
+      if (notice) {
+        pkg.pickupNotificationNumber = notice.notificationNumber;
+        pkg.pickupNotifiedAt = notice.notifiedAt;
       }
     }
 
@@ -817,21 +808,12 @@ const bulkUpdatePackageStatus = async (req, res) => {
         }
       }
 
-      if (previousStatus !== "Ready for Pickup" && status === "Ready for Pickup") {
-        if (!customer) {
-          customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
-        }
+            if (status === "Ready for Pickup") {
+        const notice = await ensurePickupNotification(pkg._id);
 
-        if (customer) {
-          await createCustomerNotification({
-            customerEkonId: customer.ekonId,
-            customerName: customer.name,
-            title: "Package Ready for Pickup",
-            message: `Your package ${pkg.trackingNumber} is now ready for pickup.`,
-            type: "Package Update",
-            referenceType: "Package",
-            referenceId: pkg.trackingNumber,
-          });
+        if (notice) {
+          pkg.pickupNotificationNumber = notice.notificationNumber;
+          pkg.pickupNotifiedAt = notice.notifiedAt;
         }
       }
 
