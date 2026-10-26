@@ -303,6 +303,8 @@ await invoice.save();
     invoice.dueDate = getJamaicaDateString();
     invoice.paymentTerms = "Due on Receipt";
 
+        await invoice.save();
+
 
     res.json({
       success: true,
@@ -488,6 +490,8 @@ await invoice.save();
     invoice.balanceDue = finalTotal;
     invoice.dueDate = getJamaicaDateString();
     invoice.paymentTerms = "Due on Receipt";
+
+        await invoice.save();
 
     res.json({
       success: true,
@@ -1142,9 +1146,12 @@ const markInvoicePaid = async (req, res) => {
       });
     }
 
-    const outstandingBeforePayment = roundMoney(
-      Number(invoice.balanceDue || invoice.finalTotal || 0) -
-        Number(invoice.amountPaid || 0)
+        const outstandingBeforePayment = Math.max(
+      0,
+      roundMoney(
+        Number(invoice.finalTotal || 0) -
+          Number(invoice.amountPaid || 0)
+      )
     );
 
     const actualPaymentAmount = roundMoney(
@@ -1267,23 +1274,24 @@ const markInvoicePaid = async (req, res) => {
 
     await syncFinancialAccountFromLedger(account);
 
-    if (invoice.status === "Paid") {
-      const trackingNumbers = (invoice.packages || []).map(
-        (pkg) => pkg.trackingNumber
-      );
+        if (invoice.status === "Paid") {
+      const trackingNumbers = (invoice.packages || [])
+        .map((pkg) => pkg.trackingNumber)
+        .filter(Boolean);
 
-      await Package.updateMany(
-        { trackingNumber: { $in: trackingNumbers } },
-        {
-          $set: {
-            status: "Delivered",
-            readyForPickup: false,
-            readyForPickupDate: null,
-            invoiceStatus: "Paid",
-            statusUpdatedAt: now,
+      if (trackingNumbers.length > 0) {
+        await Package.updateMany(
+          {
+            customerEkonId: invoice.customerEkonId,
+            trackingNumber: { $in: trackingNumbers },
           },
-        }
-      );
+          {
+            $set: {
+              invoiceStatus: "Paid",
+            },
+          }
+        );
+      }
     }
 
     await createCustomerNotification({
@@ -1336,7 +1344,9 @@ const markInvoicePaid = async (req, res) => {
 
 const reconcilePaidInvoicePackages = async (req, res) => {
   try {
-    const paidInvoices = await Invoice.find({ status: "Paid" });
+    const paidInvoices = await Invoice.find({ status: "Paid" })
+      .select("customerEkonId packages.trackingNumber")
+      .lean();
 
     let updatedPackages = 0;
 
@@ -1348,14 +1358,14 @@ const reconcilePaidInvoicePackages = async (req, res) => {
       if (trackingNumbers.length === 0) continue;
 
       const result = await Package.updateMany(
-        { trackingNumber: { $in: trackingNumbers } },
+        {
+          customerEkonId: invoice.customerEkonId,
+          trackingNumber: { $in: trackingNumbers },
+          invoiceStatus: { $ne: "Paid" },
+        },
         {
           $set: {
-            status: "Delivered",
-            readyForPickup: false,
-            readyForPickupDate: null,
             invoiceStatus: "Paid",
-            statusUpdatedAt: new Date(),
           },
         }
       );
@@ -1367,7 +1377,8 @@ const reconcilePaidInvoicePackages = async (req, res) => {
       req,
       action: "RECONCILE_PAID_INVOICE_PACKAGES",
       module: "Invoices",
-      description: `Reconciled paid invoice packages and marked them delivered`,
+      description:
+        "Reconciled package invoice statuses against paid invoices.",
       targetType: "Package",
       targetId: "PAID-INVOICE-RECONCILE",
       metadata: {
@@ -1376,17 +1387,19 @@ const reconcilePaidInvoicePackages = async (req, res) => {
       },
     });
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Paid invoice packages reconciled successfully.",
+      message:
+        "Package payment statuses reconciled. Collection statuses were preserved.",
       paidInvoiceCount: paidInvoices.length,
       updatedPackages,
     });
   } catch (error) {
     console.error("Reconcile paid invoice packages error:", error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
-      message: "Could not reconcile paid invoice packages.",
+      message: "Could not reconcile package payment statuses.",
       error: error.message,
     });
   }
