@@ -170,6 +170,31 @@ const PackageSchema = new mongoose.Schema(
       default: null,
     },
 
+        pickupNotificationNumber: {
+      type: String,
+      default: "",
+    },
+
+    pickupNotifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    collectedAt: {
+      type: Date,
+      default: null,
+    },
+
+    collectedByUserId: {
+      type: String,
+      default: "",
+    },
+
+    collectedByName: {
+      type: String,
+      default: "",
+    },
+
     statusUpdatedAt: {
       type: Date,
       default: Date.now,
