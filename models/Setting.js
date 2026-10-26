@@ -31,6 +31,49 @@ const SettingSchema = new mongoose.Schema(
       default: "JMD",
     },
 
+        storageFees: {
+      enabled: {
+        type: Boolean,
+        default: false,
+      },
+
+      effectiveFrom: {
+        type: String,
+        default: "2027-01-01",
+        enum: ["2027-01-01"],
+      },
+
+      currency: {
+        type: String,
+        default: "JMD",
+        enum: ["JMD"],
+      },
+
+      freeBusinessDays: {
+        type: Number,
+        default: 7,
+        enum: [7],
+      },
+
+      firstDayFee: {
+        type: Number,
+        default: 150,
+        enum: [150],
+      },
+
+      additionalDailyFee: {
+        type: Number,
+        default: 50,
+        enum: [50],
+      },
+
+      timeZone: {
+        type: String,
+        default: "America/Jamaica",
+        enum: ["America/Jamaica"],
+      },
+    },
+
     branches: {
       type: [String],
       default: ["Eltham Park", "Browns Town Square"],
