@@ -195,6 +195,55 @@ const PackageSchema = new mongoose.Schema(
       default: "",
     },
 
+        storagePeriod: {
+      // The customer notice that starts this storage period.
+      noticeNumber: {
+        type: String,
+        default: "",
+      },
+
+      noticeSentAt: {
+        type: Date,
+        default: null,
+      },
+
+      // Distinguishes the fresh launch notice from a later pickup notice.
+      noticeReason: {
+        type: String,
+        enum: ["", "Launch", "Ready for Pickup"],
+        default: "",
+      },
+
+      // Snapshot of the rules applied to this package.
+      policyVersion: {
+        type: String,
+        default: "",
+      },
+
+      freeBusinessDays: {
+        type: Number,
+        default: 7,
+        min: 0,
+      },
+
+      firstDayFee: {
+        type: Number,
+        default: 150,
+        min: 0,
+      },
+
+      additionalDailyFee: {
+        type: Number,
+        default: 50,
+        min: 0,
+      },
+
+      currency: {
+        type: String,
+        default: "JMD",
+      },
+    },
+
     statusUpdatedAt: {
       type: Date,
       default: Date.now,
