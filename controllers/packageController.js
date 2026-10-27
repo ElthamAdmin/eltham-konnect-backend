@@ -10,6 +10,12 @@ const {
   ensurePickupNotification,
 } = require("../services/packagePickupNotificationService");
 
+const Setting = require("../models/Setting");
+
+const {
+  ensureStorageNotice,
+} = require("../services/storageNoticeService");
+
 const {
   syncCustomerPurchaseFromPackage,
 } = require("../services/customerPurchaseIntegrationService");
@@ -136,6 +142,47 @@ const getBilledWeight = (weight) => {
   const numericWeight = Number(weight || 0);
   if (numericWeight <= 0) return 0;
   return Math.ceil(numericWeight);
+};
+
+const createStorageNoticeIfEnabled = async (packageId) => {
+  try {
+    const settings = await Setting.findOne({
+      settingKey: "main",
+    })
+      .select("storageFees")
+      .lean();
+
+    const storageSettings = settings?.storageFees;
+
+    if (!storageSettings?.enabled) {
+      return null;
+    }
+
+    const today = getJamaicaDateString();
+
+    if (
+      !storageSettings.effectiveFrom ||
+      today < storageSettings.effectiveFrom
+    ) {
+      return null;
+    }
+
+    return await ensureStorageNotice({
+      packageId,
+      reason: "Ready for Pickup",
+    });
+  } catch (error) {
+    /*
+     * A storage notice problem must not prevent staff
+     * from updating a package's pickup status.
+     */
+    console.error(
+      "Storage notice could not be created:",
+      error.message
+    );
+
+    return null;
+  }
 };
 
 const createCustomerNotification = async ({
@@ -538,6 +585,7 @@ if (packageStatus === "At Warehouse") {
 
         if (packageStatus === "Ready for Pickup") {
       const notice = await ensurePickupNotification(newPackage._id);
+            await createStorageNoticeIfEnabled(newPackage._id);
 
       if (notice) {
         newPackage.pickupNotificationNumber = notice.notificationNumber;
@@ -693,6 +741,7 @@ const updatePackageStatus = async (req, res) => {
 
         if (status === "Ready for Pickup") {
       const notice = await ensurePickupNotification(pkg._id);
+            await createStorageNoticeIfEnabled(pkg._id);
 
       if (notice) {
         pkg.pickupNotificationNumber = notice.notificationNumber;
@@ -822,6 +871,7 @@ const bulkUpdatePackageStatus = async (req, res) => {
 
             if (status === "Ready for Pickup") {
         const notice = await ensurePickupNotification(pkg._id);
+                await createStorageNoticeIfEnabled(pkg._id);
 
         if (notice) {
           pkg.pickupNotificationNumber = notice.notificationNumber;
