@@ -166,6 +166,49 @@ const InvoiceSchema = new mongoose.Schema({
     index: true,
   },
 
+    storageFeeTotal: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
+
+  storageFeeLines: [
+    {
+      packageId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Package",
+        required: true,
+      },
+
+      trackingNumber: {
+        type: String,
+        required: true,
+      },
+
+      fromDate: {
+        type: String,
+        required: true,
+      },
+
+      throughDate: {
+        type: String,
+        required: true,
+      },
+
+      chargeableDays: {
+        type: Number,
+        required: true,
+        min: 1,
+      },
+
+      amount: {
+        type: Number,
+        required: true,
+        min: 0,
+      },
+    },
+  ],
+
   subtotal: {
     type: Number,
     default: 0,

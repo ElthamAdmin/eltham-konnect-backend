@@ -817,6 +817,8 @@ const getMyInvoices = async (req, res) => {
           "customerPurchaseDeliveryFee",
           "customerPurchaseOtherCharges",
           "customerPurchaseTotal",
+          "storageFeeTotal",
+          "storageFeeLines",
           "subtotal",
           "customsDuty",
           "gct",
