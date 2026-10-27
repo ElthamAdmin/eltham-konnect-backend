@@ -16,6 +16,10 @@ const {
 } = require("../controllers/packageEditController");
 
 const {
+  getPackageStoragePreview,
+} = require("../controllers/storagePreviewController");
+
+const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
@@ -77,6 +81,13 @@ router.put(
   protect,
   canManagePackageStatus,
   bulkUpdatePackageStatus
+);
+
+router.get(
+  "/:packageId/storage-preview",
+  protect,
+  canReadPackages,
+  getPackageStoragePreview
 );
 
 router.put(
