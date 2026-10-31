@@ -77,6 +77,7 @@ const SYSTEM_ACCOUNT_DEFINITIONS = [
   ["4000", "Shipping Revenue", "Revenue", "Credit", "Income"],
   ["4010", "Marketplace Revenue", "Revenue", "Credit", "Income"],
   ["4020", "Delivery Revenue", "Revenue", "Credit", "Income"],
+  ["4040", "Storage Revenue", "Revenue", "Credit", "Service Revenue"],
 
   ["5000", "Cost of Sales", "Cost of Sales", "Debit", "Cost of Sales"],
 
