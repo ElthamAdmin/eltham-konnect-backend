@@ -972,6 +972,14 @@ const applyInvoicePointsAdjustment = async (req, res) => {
   pointsRedeemed: invoice.pointsRedeemed,
 });
 
+    invoice.balanceDue = roundMoney(
+      Math.max(
+        0,
+        Number(invoice.finalTotal || 0) -
+          Number(invoice.amountPaid || 0)
+      )
+    );
+
     customer.pointsBalance = Number(customer.pointsBalance || 0) - redeemAmount;
     customer.lastActivityDate = getJamaicaDateString();
 
@@ -1059,6 +1067,14 @@ const updateInvoiceChargesAdjustment = async (req, res) => {
   otherAdjustment: invoice.otherAdjustment,
   pointsRedeemed: invoice.pointsRedeemed,
 });
+
+    invoice.balanceDue = roundMoney(
+      Math.max(
+        0,
+        Number(invoice.finalTotal || 0) -
+          Number(invoice.amountPaid || 0)
+      )
+    );
 
     await invoice.save();
 
