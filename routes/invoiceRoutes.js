@@ -14,11 +14,26 @@ const {
   reconcilePaidInvoicePackages,
 } = require("../controllers/invoiceController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
+
+const {
+  generateStorageInvoice,
+  blockStorageInvoiceAdjustment,
+} = require("../controllers/storageBillingController");
 
 const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
+
+router.post(
+  "/storage/:packageId",
+  protect,
+  requirePermission("invoices"),
+  generateStorageInvoice
+);
 
 router.get("/my", protectCustomer, getMyInvoices);
 router.get("/", protect, getInvoices);
@@ -39,8 +54,19 @@ router.put(
   protect,
   updateInvoicePaymentLink
 );
-router.put("/:invoiceNumber/apply-points", protect, applyInvoicePointsAdjustment);
-router.put("/:invoiceNumber/charges", protect, updateInvoiceChargesAdjustment);
+router.put(
+  "/:invoiceNumber/apply-points",
+  protect,
+  blockStorageInvoiceAdjustment,
+  applyInvoicePointsAdjustment
+);
+
+router.put(
+  "/:invoiceNumber/charges",
+  protect,
+  blockStorageInvoiceAdjustment,
+  updateInvoiceChargesAdjustment
+);
 router.put("/pay/:invoiceNumber", protect, markInvoicePaid);
 router.put("/reconcile/paid-packages", protect, reconcilePaidInvoicePackages);
 

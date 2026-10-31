@@ -36,7 +36,7 @@ const InvoiceSchema = new mongoose.Schema({
 
   invoiceSource: {
     type: String,
-    enum: ["Packages", "Customer Purchases", "Combined"],
+        enum: ["Packages", "Customer Purchases", "Combined", "Storage"],
     default: "Packages",
     index: true,
   },
@@ -217,6 +217,25 @@ const InvoiceSchema = new mongoose.Schema({
   customsDuty: {
     type: Number,
     default: 0,
+  },
+
+    entityId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "BusinessEntity",
+    default: null,
+    index: true,
+  },
+
+  entityCode: {
+    type: String,
+    default: "",
+    trim: true,
+    index: true,
+  },
+
+  entitySnapshot: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null,
   },
 
     businessEntitySnapshot: {

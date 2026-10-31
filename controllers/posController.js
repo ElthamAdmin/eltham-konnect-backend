@@ -559,6 +559,14 @@ const applyPOSDiscount = async (
       });
     }
 
+        if (invoice.invoiceSource === "Storage") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Storage invoices cannot receive general POS discounts.",
+      });
+    }
+
     if (
       invoice.status === "Paid" ||
       invoice.status === "Cancelled"
