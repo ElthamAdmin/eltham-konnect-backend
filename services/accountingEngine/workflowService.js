@@ -87,16 +87,47 @@ const receiveInvoicePayment = async ({
   paymentDate,
   user,
 }) => {
+  if (!invoice) {
+    throw new Error(
+      "An invoice is required to post a payment."
+    );
+  }
+
   const paymentAmount = roundMoney(
     amount || invoice.balanceDue || invoice.finalTotal || 0
   );
 
+  const hasEntityCode = Boolean(
+    String(invoice.entityCode || "").trim() ||
+      String(
+        invoice.entitySnapshot?.entityCode || ""
+      ).trim()
+  );
+
+  const entityContext =
+    invoice.invoiceSource === "Storage" || hasEntityCode
+      ? await resolveEntityPostingContext({
+          source: invoice,
+          sourceName: `Invoice ${invoice.invoiceNumber}`,
+        })
+      : {};
+
   return postJournalEntry({
-    entryDate: normalizePostingDate(paymentDate || new Date()),
-    memo: `Invoice payment received from ${invoice.customerName}`,
+    entryDate: normalizePostingDate(
+      paymentDate || new Date()
+    ),
+
+    memo:
+      `Invoice payment received from ` +
+      `${invoice.customerName}`,
+
     reference: invoice.invoiceNumber,
     sourceModule: "Invoices",
+
+    ...entityContext,
+
     createdBy: getUserName(user),
+
     lines: templates.buildInvoicePaymentLines({
       receivingAccount,
       amount: paymentAmount,
