@@ -12,6 +12,9 @@ const {
   postJournalEntry,
   SYSTEM_ACCOUNTS,
 } = require("../utils/generalLedgerPoster");
+const {
+  resolveEntityPostingContext,
+} = require("../services/entityPostingContextService");
 
 
 const roundMoney = (value) =>
@@ -306,6 +309,36 @@ const cashOutInvoice = async (req, res) => {
       });
     }
 
+        const hasEntityCode = Boolean(
+      String(invoice.entityCode || "").trim() ||
+        String(
+          invoice.entitySnapshot?.entityCode || ""
+        ).trim()
+    );
+
+    let entityContext = {};
+
+    if (
+      invoice.invoiceSource === "Storage" ||
+      hasEntityCode
+    ) {
+      try {
+        entityContext =
+          await resolveEntityPostingContext({
+            source: invoice,
+            sourceName:
+              `Invoice ${invoice.invoiceNumber}`,
+          });
+      } catch (error) {
+        return res
+          .status(error.statusCode || 409)
+          .json({
+            success: false,
+            message: error.message,
+          });
+      }
+    }
+
     const finalTotal = roundMoney(invoice.finalTotal || 0);
     const existingPaid = roundMoney(invoice.amountPaid || 0);
     const outstandingBeforePayment = roundMoney(finalTotal - existingPaid);
@@ -388,6 +421,7 @@ const cashOutInvoice = async (req, res) => {
       entryDate: getDateString(),
       reference: `${invoiceType} invoice ${invoiceNumber}`,
       sourceModule: "POS",
+      ...entityContext,
       memo: `POS payment received for ${invoiceType} invoice ${invoiceNumber}`,
       createdBy: getUserName(req),
       lines: [
