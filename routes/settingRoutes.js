@@ -21,6 +21,9 @@ const {
 } = require("../middleware/authMiddleware");
 
 const router = express.Router();
+const {
+  setStorageChargingStatus,
+} = require("../controllers/storageSettingsController");
 
 router.use(protect, requirePermission("settings"));
 
@@ -42,6 +45,7 @@ const receiveFile = (uploader, field) => (req, res, next) => {
 
 router.get("/", getSettings);
 router.put("/", updateSettings);
+router.put("/storage/status", setStorageChargingStatus);
 
 router.post(
   "/upload-primary-logo",
