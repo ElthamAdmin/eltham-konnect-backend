@@ -18,7 +18,7 @@ const getPackageStoragePreview = async (req, res) => {
 
     const pkg = await Package.findById(packageId)
       .select(
-        "trackingNumber customerEkonId status collectedAt storagePeriod"
+        "trackingNumber customerEkonId status collectedAt storagePeriod createdAt"
       )
       .lean();
 
