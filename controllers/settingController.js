@@ -217,6 +217,35 @@ const updateSettings = async (req, res) => {
      */
     await getMainSettings();
 
+        const storageDefaults = {
+      enabled: false,
+      effectiveFrom: "2027-01-01",
+      currency: "JMD",
+      freeBusinessDays: 7,
+      firstDayFee: 150,
+      additionalDailyFee: 50,
+      timeZone: "America/Jamaica",
+    };
+
+    for (const [field, value] of Object.entries(storageDefaults)) {
+      const path = `storageFees.${field}`;
+
+      await Setting.updateOne(
+        {
+          settingKey: "main",
+          [path]: { $exists: false },
+        },
+        {
+          $set: {
+            [path]: value,
+          },
+        },
+        {
+          runValidators: true,
+        }
+      );
+    }
+
     const settings = Object.keys(updates).length
       ? await Setting.findOneAndUpdate(
           { settingKey: "main" },
