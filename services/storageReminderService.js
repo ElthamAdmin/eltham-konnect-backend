@@ -5,6 +5,7 @@ const Package = require("../models/Package");
 const Setting = require("../models/Setting");
 const CustomerNotification = require("../models/CustomerNotification");
 const { previewPackageStorage } = require("./storagePreviewService");
+const { ensureStorageNotice } = require("./storageNoticeService");
 
 const CUTOFF = new Date("2027-01-01T00:00:00-05:00");
 
@@ -162,11 +163,10 @@ const runStorageReminders = async () => {
       { unique: true }
     );
 
-    const cursor = Package.find({
+        const cursor = Package.find({
       createdAt: { $gte: CUTOFF },
       status: "Ready for Pickup",
       collectedAt: null,
-      "storagePeriod.noticeNumber": { $exists: true, $ne: "" },
     })
       .select("_id")
       .lean()
@@ -175,6 +175,11 @@ const runStorageReminders = async () => {
     try {
       for await (const pkg of cursor) {
         try {
+                    await ensureStorageNotice({
+            packageId: pkg._id,
+            reason: "Ready for Pickup",
+          });
+
           await processPackageReminder(pkg._id);
         } catch (error) {
           // Another server may have committed the same reminder.
