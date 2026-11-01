@@ -114,6 +114,7 @@ const calculateStorageFee = ({
   // The first chargeable day is the calendar day after the
   // final free business day, even if that day is a closure.
   const firstChargeDate = addCalendarDays(lastFreeDate, 1);
+    const reminderDate = addCalendarDays(firstChargeDate, -3);
 
   let chargeableDays = 0;
   let amount = 0;
@@ -134,6 +135,7 @@ const calculateStorageFee = ({
     asOfDate,
     lastFreeDate: formatDateOnly(lastFreeDate),
     firstChargeDate: formatDateOnly(firstChargeDate),
+    reminderDate: formatDateOnly(reminderDate),
     chargeableDays,
     amount,
     currency: "JMD",
