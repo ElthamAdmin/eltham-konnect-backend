@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+const mongoose = require("mongoose");
 const POSCashDrawer = require("../models/POSCashDrawer");
 const POSTransaction = require("../models/POSTransaction");
 const Invoice = require("../models/Invoice");
@@ -60,8 +62,13 @@ const getDateString = () => {
   return `${year}-${month}-${day}`;
 };
 
-const updateDrawerTotals = async ({ drawer, paymentMethod, amount }) => {
-  const saleAmount = roundMoney(amount);
+const updateDrawerTotals = async ({
+  drawer,
+  paymentMethod,
+  amount,
+  session = null,
+}) => {
+const saleAmount = roundMoney(amount);
 
   if (paymentMethod === "Cash") {
     drawer.totalCashSales += saleAmount;
@@ -80,7 +87,7 @@ const updateDrawerTotals = async ({ drawer, paymentMethod, amount }) => {
     Number(drawer.totalTransferSales || 0) +
     Number(drawer.totalOtherSales || 0);
 
-  await drawer.save();
+  await drawer.save(session ? { session } : {});
 };
 
 const getOpenDrawer = async (req, res) => {
@@ -223,291 +230,387 @@ const findInvoiceForPOS = async (req, res) => {
 };
 
 const cashOutInvoice = async (req, res) => {
+  const fail = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
   try {
-    const {
-      invoiceType,
-      invoiceNumber,
-      paymentMethod,
-      amountTendered,
-      paidIntoAccountNumber,
-      paidIntoAccountName,
-      notes,
-    } = req.body;
+    const data = await mongoose.connection.transaction(
+      async (session) => {
+        const {
+          invoiceType,
+          invoiceNumber,
+          paymentMethod,
+          amountTendered,
+          paidIntoAccountNumber,
+          paidIntoAccountName,
+          notes,
+        } = req.body;
 
-    if (!invoiceType || !invoiceNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Invoice type and invoice number are required.",
-      });
-    }
+        if (
+          !["Shipping", "Marketplace"].includes(invoiceType) ||
+          !invoiceNumber
+        ) {
+          fail(
+            "A Shipping or Marketplace invoice type and invoice number are required."
+          );
+        }
 
-    if (!paidIntoAccountNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Please select the financial account that received this payment.",
-      });
-    }
+        if (!paidIntoAccountNumber) {
+          fail(
+            "Please select the financial account that received this payment."
+          );
+        }
 
-    const receivingAccount = await FinancialAccount.findOne({
-      accountNumber: paidIntoAccountNumber,
-      status: "Active",
-    });
+        const receivingAccount =
+          await FinancialAccount.findOne({
+            accountNumber: paidIntoAccountNumber,
+            status: "Active",
+          }).session(session);
 
-    if (!receivingAccount) {
-      return res.status(404).json({
-        success: false,
-        message: "Selected financial account was not found or is inactive.",
-      });
-    }
+        if (!receivingAccount) {
+          fail(
+            "Selected financial account was not found or is inactive.",
+            404
+          );
+        }
 
-    if (!receivingAccount.linkedChartAccountCode) {
-      return res.status(400).json({
-        success: false,
-        message: "Selected financial account is not linked to the Chart of Accounts.",
-      });
-    }
+        if (!receivingAccount.linkedChartAccountCode) {
+          fail(
+            "Selected financial account is not linked to the Chart of Accounts."
+          );
+        }
 
-    const cashOrBankAccount = await ChartOfAccount.findOne({
-      accountCode: receivingAccount.linkedChartAccountCode,
-      status: "Active",
-    });
+        const cashOrBankAccount =
+          await ChartOfAccount.findOne({
+            accountCode:
+              receivingAccount.linkedChartAccountCode,
+            status: "Active",
+          }).session(session);
 
-    if (!cashOrBankAccount) {
-      return res.status(404).json({
-        success: false,
-        message: "Linked Chart of Accounts account was not found.",
-      });
-    }
+        if (!cashOrBankAccount) {
+          fail(
+            "Linked Chart of Accounts account was not found.",
+            404
+          );
+        }
 
-    const drawer = await POSCashDrawer.findOne({
-      openedByUserId: getUserId(req),
-      branch: getUserBranch(req),
-      status: "Open",
-    });
+        const drawer = await POSCashDrawer.findOne({
+          openedByUserId: getUserId(req),
+          branch: getUserBranch(req),
+          status: "Open",
+        }).session(session);
 
-    if (!drawer) {
-      return res.status(400).json({
-        success: false,
-        message: "Open a POS cash drawer before cashing out an invoice.",
-      });
-    }
+        if (!drawer) {
+          fail(
+            "Open a POS cash drawer before cashing out an invoice."
+          );
+        }
 
-    const Model = invoiceType === "Marketplace" ? MarketplaceInvoice : Invoice;
-    const invoice = await Model.findOne({ invoiceNumber });
+        const Model =
+          invoiceType === "Marketplace"
+            ? MarketplaceInvoice
+            : Invoice;
 
-    if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: `${invoiceType} invoice not found.`,
-      });
-    }
+        const invoice = await Model.findOne({
+          invoiceNumber,
+        }).session(session);
 
-    if (invoice.status === "Paid") {
-      return res.status(400).json({
-        success: false,
-        message: "This invoice is already paid.",
-      });
-    }
+        if (!invoice) {
+          fail(`${invoiceType} invoice not found.`, 404);
+        }
+
+        if (
+          [
+            "Paid",
+            "Cancelled",
+            "Refunded",
+            "Written Off",
+            "Reversed",
+          ].includes(invoice.status)
+        ) {
+          fail(
+            `A ${invoice.status} invoice cannot receive a POS payment.`
+          );
+        }
 
         const hasEntityCode = Boolean(
-      String(invoice.entityCode || "").trim() ||
-        String(
-          invoice.entitySnapshot?.entityCode || ""
-        ).trim()
+          String(invoice.entityCode || "").trim() ||
+            String(
+              invoice.entitySnapshot?.entityCode || ""
+            ).trim()
+        );
+
+        let entityContext = {};
+
+        if (
+          invoice.invoiceSource === "Storage" ||
+          hasEntityCode
+        ) {
+          entityContext =
+            await resolveEntityPostingContext({
+              source: invoice,
+              sourceName:
+                `Invoice ${invoice.invoiceNumber}`,
+            });
+        }
+
+        const finalTotal = roundMoney(
+          invoice.finalTotal || 0
+        );
+
+        const existingPaid = roundMoney(
+          invoice.amountPaid || 0
+        );
+
+        if (
+          !Number.isFinite(finalTotal) ||
+          !Number.isFinite(existingPaid) ||
+          existingPaid < 0
+        ) {
+          fail(
+            "The invoice has invalid payment amounts.",
+            409
+          );
+        }
+
+        const outstandingBeforePayment = roundMoney(
+          finalTotal - existingPaid
+        );
+
+        if (outstandingBeforePayment <= 0) {
+          fail("This invoice has no outstanding balance.");
+        }
+
+        const tendered = roundMoney(
+          amountTendered === undefined ||
+          amountTendered === null ||
+          amountTendered === ""
+            ? outstandingBeforePayment
+            : amountTendered
+        );
+
+        if (
+          !Number.isFinite(tendered) ||
+          tendered <= 0
+        ) {
+          fail("Amount tendered must be greater than zero.");
+        }
+
+        const paymentApplied = roundMoney(
+          Math.min(tendered, outstandingBeforePayment)
+        );
+
+        const changeGiven =
+          paymentMethod === "Cash"
+            ? roundMoney(
+                Math.max(tendered - paymentApplied, 0)
+              )
+            : 0;
+
+        const newAmountPaid = roundMoney(
+          existingPaid + paymentApplied
+        );
+
+        const newBalanceDue = roundMoney(
+          finalTotal - newAmountPaid
+        );
+
+        invoice.amountPaid = newAmountPaid;
+        invoice.balanceDue = newBalanceDue;
+        invoice.status =
+          newBalanceDue <= 0 ? "Paid" : "Partially Paid";
+
+        if (invoice.status === "Paid") {
+          invoice.paidAt = new Date();
+        }
+
+        if (invoiceType === "Shipping") {
+          invoice.paidDate =
+            invoice.status === "Paid"
+              ? getDateString()
+              : null;
+
+          invoice.paymentMethod = paymentMethod;
+          invoice.amountTendered = tendered;
+          invoice.changeGiven = changeGiven;
+          invoice.paidIntoAccountNumber =
+            paidIntoAccountNumber || "";
+          invoice.paidIntoAccountName =
+            paidIntoAccountName ||
+            receivingAccount.accountName;
+          invoice.cashierName = getUserName(req);
+        }
+
+        await invoice.save({ session });
+
+        if (
+          invoiceType === "Shipping" &&
+          invoice.status === "Paid"
+        ) {
+          const trackingNumbers = (invoice.packages || [])
+            .map((pkg) => pkg.trackingNumber)
+            .filter(Boolean);
+
+          if (trackingNumbers.length > 0) {
+            await Package.updateMany(
+              {
+                customerEkonId: invoice.customerEkonId,
+                trackingNumber: {
+                  $in: trackingNumbers,
+                },
+              },
+              {
+                $set: { invoiceStatus: "Paid" },
+              },
+              { session }
+            );
+          }
+        }
+
+        await updateDrawerTotals({
+          drawer,
+          paymentMethod,
+          amount: paymentApplied,
+          session,
+        });
+
+        const journalEntry = await postJournalEntry({
+          session,
+          entryDate: getDateString(),
+          reference:
+            `${invoiceType} invoice ${invoiceNumber}`,
+          sourceModule: "POS",
+          ...entityContext,
+          memo:
+            `POS payment received for ${invoiceType} invoice ${invoiceNumber}`,
+          createdBy: getUserName(req),
+          lines: [
+            {
+              accountCode: cashOrBankAccount.accountCode,
+              accountName: cashOrBankAccount.accountName,
+              debit: paymentApplied,
+              credit: 0,
+              description:
+                `Payment received into ${receivingAccount.accountName}`,
+            },
+            {
+              accountCode:
+                SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
+              debit: 0,
+              credit: paymentApplied,
+              description:
+                `Customer receivable cleared for ${invoiceNumber}`,
+            },
+          ],
+        });
+
+        const [financeTransaction] =
+          await AccountTransaction.create(
+            [
+              {
+                transactionNumber:
+                  `TRN-POS-${crypto.randomUUID()}`,
+                accountNumber:
+                  receivingAccount.accountNumber,
+                accountName:
+                  receivingAccount.accountName,
+                linkedChartAccountCode:
+                  cashOrBankAccount.accountCode,
+                journalEntryNumber:
+                  journalEntry.entryNumber,
+                ledgerReference:
+                  journalEntry.entryNumber,
+                transactionType: "Invoice Payment",
+                amount: paymentApplied,
+                paymentMethod,
+                amountTendered: tendered,
+                changeGiven,
+                reference:
+                  `${invoiceType} invoice ${invoiceNumber}`,
+                notes:
+                  notes ||
+                  `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
+                transactionDate: new Date(),
+              },
+            ],
+            { session }
+          );
+
+        const [transaction] = await POSTransaction.create(
+          [
+            {
+              transactionNumber:
+                `POS-${crypto.randomUUID()}`,
+              invoiceType,
+              invoiceNumber,
+              customerName: invoice.customerName || "",
+              customerEkonId:
+                invoice.customerEkonId ||
+                invoice.customerKey ||
+                "",
+              amountPaid: paymentApplied,
+              amountTendered: tendered,
+              changeGiven,
+              paymentMethod,
+              paidIntoAccountNumber:
+                paidIntoAccountNumber || "",
+              paidIntoAccountName:
+                paidIntoAccountName ||
+                receivingAccount.accountName,
+              cashierUserId: getUserId(req),
+              cashierName: getUserName(req),
+              branch: getUserBranch(req),
+              drawerNumber: drawer.drawerNumber,
+              notes: notes || "",
+            },
+          ],
+          { session }
+        );
+
+        const refreshedReceivingAccount =
+          await FinancialAccount.findById(
+            receivingAccount._id
+          ).session(session);
+
+        return {
+          invoice,
+          drawer,
+          transaction,
+          financeTransaction,
+          receivingAccount:
+            refreshedReceivingAccount || receivingAccount,
+          journalEntry,
+          paymentSummary: {
+            invoiceTotal: finalTotal,
+            previousPaid: existingPaid,
+            paymentApplied,
+            amountTendered: tendered,
+            changeGiven,
+            amountPaid: newAmountPaid,
+            balanceDue: newBalanceDue,
+            status: invoice.status,
+          },
+        };
+      }
     );
 
-    let entityContext = {};
-
-    if (
-      invoice.invoiceSource === "Storage" ||
-      hasEntityCode
-    ) {
-      try {
-        entityContext =
-          await resolveEntityPostingContext({
-            source: invoice,
-            sourceName:
-              `Invoice ${invoice.invoiceNumber}`,
-          });
-      } catch (error) {
-        return res
-          .status(error.statusCode || 409)
-          .json({
-            success: false,
-            message: error.message,
-          });
-      }
-    }
-
-    const finalTotal = roundMoney(invoice.finalTotal || 0);
-    const existingPaid = roundMoney(invoice.amountPaid || 0);
-    const outstandingBeforePayment = roundMoney(finalTotal - existingPaid);
-
-    if (outstandingBeforePayment <= 0) {
-      invoice.status = "Paid";
-      invoice.balanceDue = 0;
-      await invoice.save();
-
-      return res.status(400).json({
-        success: false,
-        message: "This invoice has no outstanding balance.",
-      });
-    }
-
-    const tendered = roundMoney(amountTendered || outstandingBeforePayment);
-
-    if (tendered <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Amount tendered must be greater than zero.",
-      });
-    }
-
-    const paymentApplied = roundMoney(Math.min(tendered, outstandingBeforePayment));
-    const changeGiven =
-      paymentMethod === "Cash" ? roundMoney(Math.max(tendered - paymentApplied, 0)) : 0;
-
-    const newAmountPaid = roundMoney(existingPaid + paymentApplied);
-    const newBalanceDue = roundMoney(finalTotal - newAmountPaid);
-
-    invoice.amountPaid = newAmountPaid;
-    invoice.balanceDue = newBalanceDue;
-    invoice.status = newBalanceDue <= 0 ? "Paid" : "Partially Paid";
-
-    if (invoice.status === "Paid") {
-      invoice.paidAt = new Date();
-    }
-
-    if (invoiceType === "Shipping") {
-      invoice.paidDate =
-        invoice.status === "Paid" ? new Date().toISOString().split("T")[0] : null;
-      invoice.paymentMethod = paymentMethod;
-      invoice.amountTendered = tendered;
-      invoice.changeGiven = changeGiven;
-      invoice.paidIntoAccountNumber = paidIntoAccountNumber || "";
-      invoice.paidIntoAccountName = paidIntoAccountName || receivingAccount.accountName;
-      invoice.cashierName = getUserName(req);
-    }
-
-    await invoice.save();
-
-        if (invoiceType === "Shipping" && invoice.status === "Paid") {
-      const trackingNumbers = (invoice.packages || [])
-        .map((pkg) => pkg.trackingNumber)
-        .filter(Boolean);
-
-      if (trackingNumbers.length > 0) {
-        await Package.updateMany(
-          {
-            customerEkonId: invoice.customerEkonId,
-            trackingNumber: { $in: trackingNumbers },
-          },
-          {
-            $set: {
-              invoiceStatus: "Paid",
-            },
-          }
-        );
-      }
-    }
-
-    await updateDrawerTotals({
-      drawer,
-      paymentMethod,
-      amount: paymentApplied,
-    });
-
-    const journalEntry = await postJournalEntry({
-      entryDate: getDateString(),
-      reference: `${invoiceType} invoice ${invoiceNumber}`,
-      sourceModule: "POS",
-      ...entityContext,
-      memo: `POS payment received for ${invoiceType} invoice ${invoiceNumber}`,
-      createdBy: getUserName(req),
-      lines: [
-        {
-          accountCode: cashOrBankAccount.accountCode,
-          accountName: cashOrBankAccount.accountName,
-          debit: paymentApplied,
-          credit: 0,
-          description: `Payment received into ${receivingAccount.accountName}`,
-        },
-        {
-          accountCode: SYSTEM_ACCOUNTS.ACCOUNTS_RECEIVABLE,
-          debit: 0,
-          credit: paymentApplied,
-          description: `Customer receivable cleared for ${invoiceNumber}`,
-        },
-      ],
-    });
-
-    const financeTransaction = await AccountTransaction.create({
-      transactionNumber: `TRN-POS-${Date.now()}`,
-      accountNumber: receivingAccount.accountNumber,
-      accountName: receivingAccount.accountName,
-      linkedChartAccountCode: cashOrBankAccount.accountCode,
-      journalEntryNumber: journalEntry.entryNumber,
-      ledgerReference: journalEntry.entryNumber,
-      transactionType: "Invoice Payment",
-      amount: paymentApplied,
-      paymentMethod,
-      amountTendered: tendered,
-      changeGiven,
-      reference: `${invoiceType} invoice ${invoiceNumber}`,
-      notes:
-        notes ||
-        `POS cashout by ${getUserName(req)} at ${getUserBranch(req)} using ${paymentMethod}`,
-      transactionDate: new Date(),
-    });
-
-    const transaction = await POSTransaction.create({
-      transactionNumber: `POS-${Date.now()}`,
-      invoiceType,
-      invoiceNumber,
-      customerName: invoice.customerName || "",
-      customerEkonId: invoice.customerEkonId || invoice.customerKey || "",
-      amountPaid: paymentApplied,
-      amountTendered: tendered,
-      changeGiven,
-      paymentMethod,
-      paidIntoAccountNumber: paidIntoAccountNumber || "",
-      paidIntoAccountName: paidIntoAccountName || receivingAccount.accountName,
-      cashierUserId: getUserId(req),
-      cashierName: getUserName(req),
-      branch: getUserBranch(req),
-      drawerNumber: drawer.drawerNumber,
-      notes: notes || "",
-    });
-
-    res.json({
+    return res.json({
       success: true,
       message:
-        invoice.status === "Paid"
-          ? `${invoiceType} invoice paid successfully.`
-          : `${invoiceType} invoice partially paid. Balance remaining: ${newBalanceDue}`,
-      data: {
-        invoice,
-        drawer,
-        transaction,
-        financeTransaction,
-        receivingAccount,
-        journalEntry,
-        paymentSummary: {
-          invoiceTotal: finalTotal,
-          previousPaid: existingPaid,
-          paymentApplied,
-          amountTendered: tendered,
-          changeGiven,
-          amountPaid: newAmountPaid,
-          balanceDue: newBalanceDue,
-          status: invoice.status,
-        },
-      },
+        data.invoice.status === "Paid"
+          ? `${req.body.invoiceType} invoice paid successfully.`
+          : `${req.body.invoiceType} invoice partially paid. Balance remaining: ${data.paymentSummary.balanceDue}`,
+      data,
     });
   } catch (error) {
-    res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not cash out invoice",
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm POS payment completion. Check the invoice and POS transactions before retrying.",
       error: error.message,
     });
   }
