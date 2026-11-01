@@ -86,6 +86,7 @@ const receiveInvoicePayment = async ({
   amount,
   paymentDate,
   user,
+  session = null,
 }) => {
   if (!invoice) {
     throw new Error(
@@ -113,6 +114,7 @@ const receiveInvoicePayment = async ({
       : {};
 
   return postJournalEntry({
+    session,
     entryDate: normalizePostingDate(
       paymentDate || new Date()
     ),

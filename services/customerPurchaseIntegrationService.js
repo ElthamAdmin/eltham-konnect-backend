@@ -368,8 +368,8 @@ const markPurchasesInvoiced = async ({
       status: "Invoiced",
     });
 
-    await purchase.save();
-  }
+  await invoice.save(session ? { session } : {});
+}
 };
 
 const allocateInvoicePaymentToPurchases = async ({
@@ -378,6 +378,7 @@ const allocateInvoicePaymentToPurchases = async ({
   paymentJournalEntryNumber = "",
   paymentDate = new Date(),
   receivedBy = "",
+  session = null,
 }) => {
   if (
     !invoice ||
@@ -396,10 +397,10 @@ const allocateInvoicePaymentToPurchases = async ({
   for (const invoiceLine of invoice.customerPurchases) {
     if (remainingPayment <= 0) break;
 
-    const purchase = await CustomerPurchase.findOne({
+        const purchase = await CustomerPurchase.findOne({
       purchaseNumber: invoiceLine.purchaseNumber,
       invoiceNumber: invoice.invoiceNumber,
-    });
+    }).session(session);
 
     if (!purchase) continue;
 
@@ -475,7 +476,7 @@ const allocateInvoicePaymentToPurchases = async ({
           : "Partially Paid";
     }
 
-    await purchase.save();
+    await purchase.save(session ? { session } : {});
 
     invoiceLine.recoveredAmount = roundMoney(
       Number(invoiceLine.recoveredAmount || 0) +

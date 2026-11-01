@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Customer = require("../models/Customer");
 const Package = require("../models/Package");
 const Invoice = require("../models/Invoice");
@@ -65,12 +67,14 @@ const calculateBaseCurrencyAmount = ({
   );
 };
 
-const syncFinancialAccountFromLedger = async (account) => {
-  if (!account || !account.linkedChartAccountCode) return account;
+const syncFinancialAccountFromLedger = async (
+  account,
+  session = null
+) => {
 
-  const linkedChartAccount = await ChartOfAccount.findOne({
+    const linkedChartAccount = await ChartOfAccount.findOne({
     accountCode: account.linkedChartAccountCode,
-  });
+  }).session(session);
 
   if (!linkedChartAccount) return account;
 
@@ -81,8 +85,8 @@ const syncFinancialAccountFromLedger = async (account) => {
     exchangeRate: account.exchangeRate,
   });
 
-  await account.save();
-  return account;
+  await account.save(session ? { session } : {});
+    return account;
 };
 
 const getInvoiceChargesFromBody = (body = {}) => ({
@@ -126,9 +130,10 @@ const createCustomerNotification = async ({
   type,
   referenceType = "",
   referenceId = "",
+  session = null,
 }) => {
-  await CustomerNotification.create({
-    notificationNumber: `NTF-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+  const notification = {
+    notificationNumber: `NTF-${crypto.randomUUID()}`,
     customerEkonId,
     customerName,
     title,
@@ -138,7 +143,16 @@ const createCustomerNotification = async ({
     referenceId,
     isRead: false,
     date: getJamaicaDateString(),
-  });
+  };
+
+  if (session) {
+    await CustomerNotification.create(
+      [notification],
+      { session }
+    );
+  } else {
+    await CustomerNotification.create(notification);
+  }
 };
 
 const createRedemptionHistory = async ({ customer, invoice, redeemAmount }) => {
@@ -973,240 +987,321 @@ const updateInvoiceChargesAdjustment = async (req, res) => {
 };
 
 const markInvoicePaid = async (req, res) => {
+  const fail = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
   try {
-    const { invoiceNumber } = req.params;
-    const {
-      receivingAccountNumber,
-      paymentMethod = "Cash",
-      amountTendered,
-      paymentAmount,
-    } = req.body;
+    const result = await mongoose.connection.transaction(
+      async (session) => {
+        const { invoiceNumber } = req.params;
 
-    if (!receivingAccountNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Receiving account is required",
-      });
-    }
+        const {
+          receivingAccountNumber,
+          paymentMethod = "Cash",
+          amountTendered,
+          paymentAmount,
+        } = req.body;
 
-    const invoice = await Invoice.findOne({ invoiceNumber });
+        if (!receivingAccountNumber) {
+          fail("Receiving account is required.");
+        }
 
-    if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: "Invoice not found",
-      });
-    }
+        const invoice = await Invoice.findOne({
+          invoiceNumber,
+        }).session(session);
 
-    if (invoice.status === "Paid") {
-      return res.status(400).json({
-        success: false,
-        message: "Invoice is already marked as paid",
-      });
-    }
+        if (!invoice) {
+          fail("Invoice not found.", 404);
+        }
 
-    const account = await FinancialAccount.findOne({
-      accountNumber: receivingAccountNumber,
-    });
+        if (
+          [
+            "Paid",
+            "Cancelled",
+            "Refunded",
+            "Written Off",
+            "Reversed",
+          ].includes(invoice.status)
+        ) {
+          fail(
+            `A ${invoice.status} invoice cannot receive a payment.`
+          );
+        }
 
-    if (!account) {
-      return res.status(404).json({
-        success: false,
-        message: "Receiving account not found",
-      });
-    }
+        const account = await FinancialAccount.findOne({
+          accountNumber: receivingAccountNumber,
+          status: "Active",
+        }).session(session);
 
-        const outstandingBeforePayment = Math.max(
-      0,
-      roundMoney(
-        Number(invoice.finalTotal || 0) -
-          Number(invoice.amountPaid || 0)
-      )
-    );
+        if (!account) {
+          fail(
+            "Receiving account not found or inactive.",
+            404
+          );
+        }
 
-    const actualPaymentAmount = roundMoney(
-      paymentAmount || amountTendered || outstandingBeforePayment
-    );
+        const finalTotal = roundMoney(invoice.finalTotal);
+        const previouslyPaid = roundMoney(invoice.amountPaid);
 
-    if (actualPaymentAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment amount must be greater than zero.",
-      });
-    }
+        if (
+          !Number.isFinite(finalTotal) ||
+          !Number.isFinite(previouslyPaid) ||
+          previouslyPaid < 0
+        ) {
+          fail(
+            "The invoice has invalid payment amounts.",
+            409
+          );
+        }
 
-    if (actualPaymentAmount > outstandingBeforePayment) {
-      return res.status(400).json({
-        success: false,
-        message: "Payment amount cannot exceed outstanding balance.",
-      });
-    }
+        const outstandingBeforePayment = roundMoney(
+          finalTotal - previouslyPaid
+        );
 
-    const tenderedAmountValue =
-      amountTendered !== undefined && amountTendered !== ""
-        ? roundMoney(amountTendered)
-        : actualPaymentAmount;
+        if (outstandingBeforePayment <= 0) {
+          fail("This invoice has no outstanding balance.");
+        }
 
-    if (tenderedAmountValue < actualPaymentAmount) {
-      return res.status(400).json({
-        success: false,
-        message: "Amount tendered cannot be less than payment amount.",
-      });
-    }
+        const supplied = (value) =>
+          value !== undefined &&
+          value !== null &&
+          value !== "";
 
-    const changeGiven = roundMoney(tenderedAmountValue - actualPaymentAmount);
+        const actualPaymentAmount = roundMoney(
+          supplied(paymentAmount)
+            ? paymentAmount
+            : supplied(amountTendered)
+              ? amountTendered
+              : outstandingBeforePayment
+        );
 
-    const paymentJournalEntry = await receiveInvoicePayment({
-      invoice,
-      receivingAccount: account,
-      amount: actualPaymentAmount,
-      user: req.user,
-    });
+        if (
+          !Number.isFinite(actualPaymentAmount) ||
+          actualPaymentAmount <= 0
+        ) {
+          fail("Payment amount must be greater than zero.");
+        }
 
-    const now = new Date();
+        if (
+          actualPaymentAmount > outstandingBeforePayment
+        ) {
+          fail(
+            "Payment amount cannot exceed outstanding balance."
+          );
+        }
 
-    invoice.amountPaid = roundMoney(
-      Number(invoice.amountPaid || 0) + actualPaymentAmount
-    );
+        const tenderedAmountValue = supplied(amountTendered)
+          ? roundMoney(amountTendered)
+          : actualPaymentAmount;
 
-    invoice.balanceDue = roundMoney(
-      Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0)
-    );
+        if (
+          !Number.isFinite(tenderedAmountValue) ||
+          tenderedAmountValue < actualPaymentAmount
+        ) {
+          fail(
+            "Amount tendered cannot be less than payment amount."
+          );
+        }
 
-    invoice.status = invoice.balanceDue <= 0 ? "Paid" : "Partially Paid";
+        const changeGiven = roundMoney(
+          tenderedAmountValue - actualPaymentAmount
+        );
 
-    if (invoice.status === "Paid") {
-      invoice.paidDate = getJamaicaDateString(now);
-      invoice.paidAt = now;
-    }
+        const paymentJournalEntry =
+          await receiveInvoicePayment({
+            session,
+            invoice,
+            receivingAccount: account,
+            amount: actualPaymentAmount,
+            user: req.user,
+          });
 
-    invoice.paymentMethod = paymentMethod;
-    invoice.amountTendered = tenderedAmountValue;
-    invoice.changeGiven = changeGiven;
-    invoice.paidIntoAccountNumber = account.accountNumber;
-    invoice.paidIntoAccountName = account.accountName;
-    invoice.cashierName =
-      req.user?.fullName || req.user?.name || req.user?.email || "System User";
+        const now = new Date();
 
-    invoice.paymentHistory = invoice.paymentHistory || [];
-    invoice.paymentHistory.push({
-      paymentDate: now,
-      amount: actualPaymentAmount,
-      paymentMethod,
-      receivingAccountNumber: account.accountNumber,
-      receivingAccountName: account.accountName,
-      journalEntryNumber: paymentJournalEntry.entryNumber,
-      receivedBy: invoice.cashierName,
-    });
+        invoice.amountPaid = roundMoney(
+          previouslyPaid + actualPaymentAmount
+        );
 
-        await invoice.save();
+        invoice.balanceDue = roundMoney(
+          finalTotal - invoice.amountPaid
+        );
 
-    await AccountTransaction.create({
-      transactionNumber: `TRN-${Date.now()}`,
-      accountNumber: account.accountNumber,
-      accountName: account.accountName,
-      linkedChartAccountCode:
-        account.linkedChartAccountCode || "",
-      journalEntryNumber:
-        paymentJournalEntry.entryNumber,
-      ledgerReference:
-        paymentJournalEntry.entryNumber,
-      transactionType: "Invoice Payment",
-      amount: actualPaymentAmount,
-      paymentMethod,
-      amountTendered: tenderedAmountValue,
-      changeGiven,
-      reference: invoice.invoiceNumber,
-      notes: `Invoice payment received for ${invoice.customerName}`,
-      transactionDate: now,
-      invoiceNumber: invoice.invoiceNumber,
-      customerEkonId: invoice.customerEkonId,
-      customerName: invoice.customerName,
-    });
-
-    let customerPurchaseAllocation = null;
-
-    if (
-      Array.isArray(invoice.customerPurchases) &&
-      invoice.customerPurchases.length > 0
-    ) {
-      customerPurchaseAllocation =
-        await allocateInvoicePaymentToPurchases({
-          invoice,
-          paymentAmount:
-            actualPaymentAmount,
-          paymentJournalEntryNumber:
-            paymentJournalEntry.entryNumber,
-          paymentDate: now,
-          receivedBy: invoice.cashierName,
-        });
-    }
-
-    await syncFinancialAccountFromLedger(account);
+        invoice.status =
+          invoice.balanceDue <= 0
+            ? "Paid"
+            : "Partially Paid";
 
         if (invoice.status === "Paid") {
-      const trackingNumbers = (invoice.packages || [])
-        .map((pkg) => pkg.trackingNumber)
-        .filter(Boolean);
+          invoice.paidDate = getJamaicaDateString(now);
+          invoice.paidAt = now;
+        }
 
-      if (trackingNumbers.length > 0) {
-        await Package.updateMany(
-          {
-            customerEkonId: invoice.customerEkonId,
-            trackingNumber: { $in: trackingNumbers },
-          },
-          {
-            $set: {
-              invoiceStatus: "Paid",
+        invoice.paymentMethod = paymentMethod;
+        invoice.amountTendered = tenderedAmountValue;
+        invoice.changeGiven = changeGiven;
+        invoice.paidIntoAccountNumber = account.accountNumber;
+        invoice.paidIntoAccountName = account.accountName;
+
+        invoice.cashierName =
+          req.user?.fullName ||
+          req.user?.name ||
+          req.user?.email ||
+          "System User";
+
+        invoice.paymentHistory =
+          invoice.paymentHistory || [];
+
+        invoice.paymentHistory.push({
+          paymentDate: now,
+          amount: actualPaymentAmount,
+          paymentMethod,
+          receivingAccountNumber: account.accountNumber,
+          receivingAccountName: account.accountName,
+          journalEntryNumber: paymentJournalEntry.entryNumber,
+          receivedBy: invoice.cashierName,
+        });
+
+        await invoice.save({ session });
+
+        await AccountTransaction.create(
+          [
+            {
+              transactionNumber:
+                `TRN-${crypto.randomUUID()}`,
+              accountNumber: account.accountNumber,
+              accountName: account.accountName,
+              linkedChartAccountCode:
+                account.linkedChartAccountCode || "",
+              journalEntryNumber:
+                paymentJournalEntry.entryNumber,
+              ledgerReference:
+                paymentJournalEntry.entryNumber,
+              transactionType: "Invoice Payment",
+              amount: actualPaymentAmount,
+              paymentMethod,
+              amountTendered: tenderedAmountValue,
+              changeGiven,
+              reference: invoice.invoiceNumber,
+              notes:
+                `Invoice payment received for ${invoice.customerName}`,
+              transactionDate: now,
+              invoiceNumber: invoice.invoiceNumber,
+              customerEkonId: invoice.customerEkonId,
+              customerName: invoice.customerName,
             },
-          }
+          ],
+          { session }
         );
+
+        let customerPurchaseAllocation = null;
+
+        if (
+          Array.isArray(invoice.customerPurchases) &&
+          invoice.customerPurchases.length > 0
+        ) {
+          customerPurchaseAllocation =
+            await allocateInvoicePaymentToPurchases({
+              session,
+              invoice,
+              paymentAmount: actualPaymentAmount,
+              paymentJournalEntryNumber:
+                paymentJournalEntry.entryNumber,
+              paymentDate: now,
+              receivedBy: invoice.cashierName,
+            });
+        }
+
+        await syncFinancialAccountFromLedger(
+          account,
+          session
+        );
+
+        if (invoice.status === "Paid") {
+          const trackingNumbers = (invoice.packages || [])
+            .map((pkg) => pkg.trackingNumber)
+            .filter(Boolean);
+
+          if (trackingNumbers.length > 0) {
+            await Package.updateMany(
+              {
+                customerEkonId: invoice.customerEkonId,
+                trackingNumber: {
+                  $in: trackingNumbers,
+                },
+              },
+              {
+                $set: { invoiceStatus: "Paid" },
+              },
+              { session }
+            );
+          }
+        }
+
+        await createCustomerNotification({
+          session,
+          customerEkonId: invoice.customerEkonId,
+          customerName: invoice.customerName,
+          title:
+            invoice.status === "Paid"
+              ? "Invoice Paid Successfully"
+              : "Invoice Payment Received",
+          message:
+            `Payment of JMD ${actualPaymentAmount.toLocaleString()} ` +
+            `was received for invoice ${invoice.invoiceNumber}. ` +
+            `Balance due: JMD ${invoice.balanceDue.toLocaleString()}.`,
+          type: "Invoice Update",
+          referenceType: "Invoice",
+          referenceId: invoice.invoiceNumber,
+        });
+
+        await writeAuditLog({
+          session,
+          req,
+          action: "RECEIVE_INVOICE_PAYMENT",
+          module: "Invoices",
+          description:
+            `Payment received for invoice ${invoice.invoiceNumber}`,
+          targetType: "Invoice",
+          targetId: invoice.invoiceNumber,
+          metadata: {
+            customerName: invoice.customerName,
+            paymentAmount: actualPaymentAmount,
+            amountPaid: invoice.amountPaid,
+            balanceDue: invoice.balanceDue,
+            status: invoice.status,
+            journalEntryNumber:
+              paymentJournalEntry.entryNumber,
+            customerPurchaseAllocation,
+          },
+        });
+
+        return {
+          invoice,
+          receivingAccount: account,
+          journalEntryNumber:
+            paymentJournalEntry.entryNumber,
+        };
       }
-    }
+    );
 
-    await createCustomerNotification({
-      customerEkonId: invoice.customerEkonId,
-      customerName: invoice.customerName,
-      title:
-        invoice.status === "Paid"
-          ? "Invoice Paid Successfully"
-          : "Invoice Payment Received",
-      message: `Payment of JMD ${actualPaymentAmount.toLocaleString()} was received for invoice ${invoice.invoiceNumber}. Balance due: JMD ${Number(invoice.balanceDue || 0).toLocaleString()}.`,
-      type: "Invoice Update",
-      referenceType: "Invoice",
-      referenceId: invoice.invoiceNumber,
-    });
-
-    await writeAuditLog({
-      req,
-      action: "RECEIVE_INVOICE_PAYMENT",
-      module: "Invoices",
-      description: `Payment received for invoice ${invoice.invoiceNumber}`,
-      targetType: "Invoice",
-      targetId: invoice.invoiceNumber,
-      metadata: {
-        customerName: invoice.customerName,
-        paymentAmount: actualPaymentAmount,
-        amountPaid: invoice.amountPaid,
-        balanceDue: invoice.balanceDue,
-        status: invoice.status,
-        journalEntryNumber: paymentJournalEntry.entryNumber,
-        customerPurchaseAllocation,
-      },
-    });
-
-    res.json({
+    return res.json({
       success: true,
       message: "Invoice payment recorded successfully",
-      data: invoice,
-      receivingAccount: account,
-      journalEntryNumber: paymentJournalEntry.entryNumber,
+      data: result.invoice,
+      receivingAccount: result.receivingAccount,
+      journalEntryNumber: result.journalEntryNumber,
     });
   } catch (error) {
     console.error("Error updating invoice:", error);
-    res.status(500).json({
+
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not update invoice",
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm invoice payment completion. Check the invoice and payment records before retrying.",
       error: error.message,
     });
   }
