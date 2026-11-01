@@ -23,17 +23,23 @@ const buildDashboardSummary = async ({ from = "", to = "" } = {}) => {
     (invoice) => String(invoice.status || "") === "Paid"
   );
 
-  const outstandingReceivables = roundMoney(
-    unpaidInvoices.reduce(
-      (sum, invoice) =>
-        sum +
-        Number(
-          invoice.balanceDue && invoice.balanceDue > 0
-            ? invoice.balanceDue
-            : invoice.finalTotal || 0
-        ),
-      0
-    )
+    const outstandingReceivables = roundMoney(
+    unpaidInvoices.reduce((sum, invoice) => {
+      const total = Number(invoice.finalTotal);
+      const paid = Number(invoice.amountPaid || 0);
+      const savedBalance = Number(invoice.balanceDue);
+
+      // Preserve a recorded positive balance. Otherwise subtract
+      // payments rather than falling back to the full invoice total.
+      const balance =
+        Number.isFinite(savedBalance) && savedBalance > 0
+          ? savedBalance
+          : Number.isFinite(total) && Number.isFinite(paid)
+            ? Math.max(0, total - paid)
+            : 0;
+
+      return sum + balance;
+    }, 0)
   );
 
   return {
