@@ -18,6 +18,10 @@ const {
   resolveEntityPostingContext,
 } = require("../services/entityPostingContextService");
 
+const {
+  runPaymentOnce,
+} = require("../services/paymentRequestService");
+
 
 const roundMoney = (value) =>
   Math.round(
@@ -237,8 +241,10 @@ const cashOutInvoice = async (req, res) => {
   };
 
   try {
-    const data = await mongoose.connection.transaction(
-      async (session) => {
+        const data = await runPaymentOnce({
+      req,
+      channel: "POS",
+      execute: async (session, paymentRequestFields) => {
         const {
           invoiceType,
           invoiceNumber,
@@ -511,8 +517,9 @@ const cashOutInvoice = async (req, res) => {
           await AccountTransaction.create(
             [
               {
-                transactionNumber:
+                                transactionNumber:
                   `TRN-POS-${crypto.randomUUID()}`,
+                ...paymentRequestFields,
                 accountNumber:
                   receivingAccount.accountNumber,
                 accountName:
@@ -594,11 +601,13 @@ const cashOutInvoice = async (req, res) => {
             status: invoice.status,
           },
         };
-      }
-    );
+            },
+    });
 
     return res.json({
       success: true,
+            paymentRequestReplayed:
+        Boolean(data.paymentRequestReplayed),
       message:
         data.invoice.status === "Paid"
           ? `${req.body.invoiceType} invoice paid successfully.`

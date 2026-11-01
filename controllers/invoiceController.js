@@ -33,6 +33,10 @@ const {
   updateInvoiceCharges,
 } = require("../services/invoiceChargeAdjustmentService");
 
+const {
+  runPaymentOnce,
+} = require("../services/paymentRequestService");
+
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Jamaica",
@@ -994,8 +998,10 @@ const markInvoicePaid = async (req, res) => {
   };
 
   try {
-    const result = await mongoose.connection.transaction(
-      async (session) => {
+        const result = await runPaymentOnce({
+      req,
+      channel: "Invoices",
+      execute: async (session, paymentRequestFields) => {
         const { invoiceNumber } = req.params;
 
         const {
@@ -1169,8 +1175,9 @@ const markInvoicePaid = async (req, res) => {
         await AccountTransaction.create(
           [
             {
-              transactionNumber:
+                            transactionNumber:
                 `TRN-${crypto.randomUUID()}`,
+              ...paymentRequestFields,
               accountNumber: account.accountNumber,
               accountName: account.accountName,
               linkedChartAccountCode:
@@ -1284,11 +1291,13 @@ const markInvoicePaid = async (req, res) => {
           journalEntryNumber:
             paymentJournalEntry.entryNumber,
         };
-      }
-    );
+        },
+    });
 
     return res.json({
       success: true,
+            paymentRequestReplayed:
+        Boolean(result.paymentRequestReplayed),
       message: "Invoice payment recorded successfully",
       data: result.invoice,
       receivingAccount: result.receivingAccount,

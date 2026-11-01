@@ -35,6 +35,12 @@ const accountTransactionSchema = new mongoose.Schema(
       immutable: true,
     },
 
+        paymentRequestResult: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+      select: false,
+    },
+
     accountNumber: {
       type: String,
       required: true,
