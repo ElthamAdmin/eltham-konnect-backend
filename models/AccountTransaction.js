@@ -9,6 +9,32 @@ const accountTransactionSchema = new mongoose.Schema(
       index: true,
     },
 
+        paymentRequestId: {
+      type: String,
+      default: undefined,
+      trim: true,
+      immutable: true,
+    },
+
+    paymentRequestHash: {
+      type: String,
+      default: "",
+      immutable: true,
+    },
+
+    paymentRequestActorId: {
+      type: String,
+      default: "",
+      immutable: true,
+    },
+
+    paymentRequestChannel: {
+      type: String,
+      enum: ["", "POS", "Invoices"],
+      default: "",
+      immutable: true,
+    },
+
     accountNumber: {
       type: String,
       required: true,
@@ -234,6 +260,17 @@ const accountTransactionSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+  }
+);
+
+accountTransactionSchema.index(
+  { paymentRequestId: 1 },
+  {
+    name: "unique_payment_request_id",
+    unique: true,
+    partialFilterExpression: {
+      paymentRequestId: { $type: "string" },
+    },
   }
 );
 
