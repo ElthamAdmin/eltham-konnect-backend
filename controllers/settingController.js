@@ -99,6 +99,62 @@ const updateSettings = async (req, res) => {
   try {
     const body = req.body || {};
     const updates = {};
+        if (
+      Object.prototype.hasOwnProperty.call(
+        body.storageFees || {},
+        "additionalClosures"
+      )
+    ) {
+      const closures = body.storageFees.additionalClosures;
+
+      if (!Array.isArray(closures) || closures.length > 500) {
+        return res.status(400).json({
+          success: false,
+          message: "Provide a closure list with no more than 500 entries.",
+        });
+      }
+
+      const dates = new Set();
+      const validated = [];
+
+      for (const closure of closures) {
+        const date = closure?.date;
+        const name =
+          typeof closure?.name === "string"
+            ? closure.name.trim()
+            : "";
+
+        const parsed =
+          typeof date === "string" &&
+          /^\d{4}-\d{2}-\d{2}$/.test(date)
+            ? new Date(`${date}T00:00:00.000Z`)
+            : null;
+
+        if (
+          !parsed ||
+          !Number.isFinite(parsed.getTime()) ||
+          parsed.toISOString().slice(0, 10) !== date ||
+          date < "2027-01-01" ||
+          !name ||
+          name.length > 200 ||
+          dates.has(date)
+        ) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Each closure needs a unique valid date from January 1, " +
+              "2027 onward and a name of up to 200 characters.",
+          });
+        }
+
+        dates.add(date);
+        validated.push({ date, name });
+      }
+
+      updates["storageFees.additionalClosures"] = validated.sort(
+        (a, b) => a.date.localeCompare(b.date)
+      );
+    }
 
     const textFields = [
       "companyName",

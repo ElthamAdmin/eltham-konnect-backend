@@ -67,6 +67,25 @@ const SettingSchema = new mongoose.Schema(
         enum: [50],
       },
 
+            additionalClosures: {
+        type: [
+          {
+            date: {
+              type: String,
+              required: true,
+            },
+            name: {
+              type: String,
+              required: true,
+              trim: true,
+              maxlength: 200,
+            },
+            _id: false,
+          },
+        ],
+        default: [],
+      },
+
       timeZone: {
         type: String,
         default: "America/Jamaica",
