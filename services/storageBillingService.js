@@ -192,6 +192,35 @@ const createStorageInvoice = async ({
       throw new Error("Package not found.");
     }
 
+        const packageCreatedAt = pkg.createdAt
+      ? new Date(pkg.createdAt)
+      : null;
+
+    if (
+      !packageCreatedAt ||
+      !Number.isFinite(packageCreatedAt.getTime())
+    ) {
+      throw new Error(
+        "The package date added is missing or invalid. " +
+          "Review it before generating a storage invoice."
+      );
+    }
+
+    // Midnight on 1 January 2027 in Jamaica.
+    const storagePackageCutoff = new Date(
+      "2027-01-01T00:00:00-05:00"
+    );
+
+    if (packageCreatedAt < storagePackageCutoff) {
+      return {
+        created: false,
+        exempt: true,
+        message:
+          "This package was added before 1 January 2027 " +
+          "and is exempt from storage fees.",
+      };
+    }
+
     if (
       !pkg.collectedAt &&
       pkg.status !== "Ready for Pickup"
