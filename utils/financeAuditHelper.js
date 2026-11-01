@@ -1,7 +1,10 @@
 const AccountingPeriod = require("../models/AccountingPeriod");
 const { writeAuditLog } = require("./auditLogger");
 
-const resolvePeriodInfo = async (postingDate) => {
+const resolvePeriodInfo = async (
+  postingDate,
+  session = null
+) => {
   const date = new Date(postingDate || new Date());
 
   if (Number.isNaN(date.getTime())) {
@@ -15,10 +18,16 @@ const resolvePeriodInfo = async (postingDate) => {
   const fiscalYear = date.getFullYear();
   const periodMonth = date.getMonth() + 1;
 
-  const period = await AccountingPeriod.findOne({
+    const periodQuery = AccountingPeriod.findOne({
     fiscalYear,
     periodMonth,
   });
+
+  if (session) {
+    periodQuery.session(session);
+  }
+
+  const period = await periodQuery;
 
   return {
     fiscalYear,
@@ -41,14 +50,17 @@ const writeFinanceAuditLog = async ({
   accountNumber = "",
   accountName = "",
   status = "Success",
-  performedByName = "",
+    performedByName = "",
+  session = null,
 }) => {
-  const periodInfo = await resolvePeriodInfo(
-    postingDate || journalEntry?.entryDate || new Date()
+    const periodInfo = await resolvePeriodInfo(
+    postingDate || journalEntry?.entryDate || new Date(),
+    session
   );
 
   await writeAuditLog({
     req,
+    session,
     action,
     module: "Finance",
     description,

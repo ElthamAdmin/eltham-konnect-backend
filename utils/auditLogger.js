@@ -60,13 +60,14 @@ const writeAuditLog = async ({
   status = "Success",
   performedByName = "",
   performedByUserId = "",
-  performedByRole = "",
+    performedByRole = "",
+  session = null,
 }) => {
   try {
     const user = req?.user || {};
     const userAgent = getUserAgent(req);
 
-    await AuditLog.create({
+        const auditData = {
       auditNumber:
   `AUD-${Date.now()}-${crypto.randomUUID().toUpperCase()}`,
       action,
@@ -94,10 +95,20 @@ const writeAuditLog = async ({
       browser: getBrowserName(userAgent),
       device: getDeviceType(userAgent),
       requestMethod: req?.method || "",
-      requestUrl: req?.originalUrl || req?.url || "",
-    });
-  } catch (error) {
+            requestUrl: req?.originalUrl || req?.url || "",
+    };
+
+    if (session) {
+      await AuditLog.create([auditData], { session });
+    } else {
+      await AuditLog.create(auditData);
+    }
+    } catch (error) {
     console.error("Audit log write failed:", error.message);
+
+    if (session) {
+      throw error;
+    }
   }
 };
 
