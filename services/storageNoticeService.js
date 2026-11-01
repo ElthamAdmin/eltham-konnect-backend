@@ -5,6 +5,24 @@ const Package = require("../models/Package");
 const Setting = require("../models/Setting");
 const CustomerNotification = require("../models/CustomerNotification");
 
+// Midnight on 1 January 2027 in Jamaica.
+const STORAGE_PACKAGE_CUTOFF = new Date("2027-01-01T00:00:00-05:00");
+
+const getStoragePackageEligibility = (pkg) => {
+  const rawCreatedAt = pkg.createdAt;
+
+  if (
+    !rawCreatedAt ||
+    !Number.isFinite(new Date(rawCreatedAt).getTime())
+  ) {
+    return "Review";
+  }
+
+  return new Date(rawCreatedAt) >= STORAGE_PACKAGE_CUTOFF
+    ? "Eligible"
+    : "Exempt";
+};
+
 const getJamaicaDate = (date) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Jamaica",
@@ -63,6 +81,30 @@ const ensureStorageNotice = async ({
 
     if (!pkg) {
       throw new Error("Package not found.");
+    }
+
+        const eligibility = getStoragePackageEligibility(pkg);
+
+    if (eligibility === "Review") {
+      throw new Error(
+        "The package date added is missing or invalid. Review it before creating a storage notice."
+      );
+    }
+
+    if (eligibility === "Exempt") {
+      result = {
+        created: false,
+        exempt: true,
+        reason: "Package added before 1 January 2027.",
+      };
+
+      return;
+    }
+
+    if (today < "2027-01-01") {
+      throw new Error(
+        "Storage notices cannot start before 1 January 2027."
+      );
     }
 
     if (
@@ -176,7 +218,7 @@ const previewStorageLaunch = async () => {
       collectedAt: null,
     })
       .select(
-        "trackingNumber customerEkonId customerName storagePeriod"
+        "trackingNumber customerEkonId customerName storagePeriod createdAt"
       )
       .lean(),
   ]);
@@ -184,8 +226,11 @@ const previewStorageLaunch = async () => {
   const storage = settings?.storageFees;
   const today = getJamaicaDate(new Date());
 
-  const counts = {
+    const counts = {
     uncollectedReadyPackages: packages.length,
+    exemptBeforeStartDate: 0,
+    eligiblePackages: 0,
+    addedDateNeedsReview: 0,
     alreadyHaveNoticeReference: 0,
     needFreshNotice: 0,
     needReview: 0,
@@ -195,6 +240,31 @@ const previewStorageLaunch = async () => {
   const reviewSample = [];
 
   for (const pkg of packages) {
+        const eligibility = getStoragePackageEligibility(pkg);
+
+    if (eligibility === "Exempt") {
+      counts.exemptBeforeStartDate += 1;
+      continue;
+    }
+
+    if (eligibility === "Review") {
+      counts.addedDateNeedsReview += 1;
+      counts.needReview += 1;
+
+      if (reviewSample.length < 25) {
+        reviewSample.push({
+          packageId: String(pkg._id),
+          trackingNumber: pkg.trackingNumber,
+          customerEkonId: pkg.customerEkonId,
+          customerName: pkg.customerName,
+          reason: "Missing or invalid original date added.",
+        });
+      }
+
+      continue;
+    }
+
+    counts.eligiblePackages += 1;
     const period = pkg.storagePeriod;
 
     const hasNumber = Boolean(
@@ -257,9 +327,15 @@ const previewStorageLaunch = async () => {
     );
   }
 
+    conditions.push(
+    `${counts.exemptBeforeStartDate} package(s) were added before ` +
+      "1 January 2027 and are exempt from storage fees."
+  );
+
   if (counts.needReview) {
     conditions.push(
-      "Some packages have incomplete notice references and need review."
+      "Some packages have missing or invalid dates added, or incomplete " +
+        "storage notice references. Review them before sending notices."
     );
   }
 
