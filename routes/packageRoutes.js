@@ -20,6 +20,10 @@ const {
 } = require("../controllers/storagePreviewController");
 
 const {
+  getStorageLaunchPreview,
+} = require("../controllers/storageLaunchController");
+
+const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
@@ -53,6 +57,13 @@ router.get(
   "/my",
   protectCustomer,
   getMyPackages
+);
+
+router.get(
+  "/storage/launch-preview",
+  protect,
+  requirePermission("packages"),
+  getStorageLaunchPreview
 );
 
 router.get(
