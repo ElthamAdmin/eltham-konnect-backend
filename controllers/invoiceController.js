@@ -1186,7 +1186,12 @@ const markInvoicePaid = async (req, res) => {
                 paymentJournalEntry.entryNumber,
               ledgerReference:
                 paymentJournalEntry.entryNumber,
-              transactionType: "Invoice Payment",
+                            transactionType: "Invoice Payment",
+              branch: String(req.user?.branch || "").trim(),
+              cashierUserId: String(
+                req.user?.userId || req.user?._id || ""
+              ),
+              cashierName: invoice.cashierName,
               amount: actualPaymentAmount,
               paymentMethod,
               amountTendered: tenderedAmountValue,
