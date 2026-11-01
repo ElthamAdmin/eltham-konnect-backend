@@ -2,6 +2,8 @@ const Package = require("../models/Package");
 const Customer = require("../models/Customer");
 const AccountTransaction = require("../models/AccountTransaction");
 const Invoice = require("../models/Invoice");
+const CustomerPurchase = require("../models/CustomerPurchase");
+const AccountsPayable = require("../models/AccountsPayable");
 
 const TIME_ZONE = "America/Jamaica";
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -255,6 +257,251 @@ const buildCollectionsSummary = async ({
   };
 };
 
+const buildDashboardBalances = async ({ start, end, today }) => {
+  const [invoices, payables, purchases] = await Promise.all([
+    Invoice.find({
+      status: { $in: ["Unpaid", "Partially Paid"] },
+    })
+      .select(
+        "invoiceNumber customerName finalTotal amountPaid " +
+          "balanceDue dueDate"
+      )
+      .lean(),
+
+    AccountsPayable.find({
+      status: { $in: ["Unpaid", "Partially Paid", "Overdue"] },
+    })
+      .select(
+        "payableNumber vendorName amount amountPaid balanceDue " +
+          "dueDate approvalStatus"
+      )
+      .lean(),
+
+    CustomerPurchase.find()
+      .select(
+        "purchaseNumber customerName purchaseDate status " +
+          "baseCurrency baseCurrencyAmount shoppingAssistanceFee " +
+          "totalCustomerCharge recoveredAmount outstandingAmount " +
+          "recoveryStatus invoiceNumber invoiceHistory branch"
+      )
+      .lean(),
+  ]);
+
+  const number = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const balance = (saved, total, paid) =>
+    round(
+      Number(saved) > 0
+        ? Number(saved)
+        : Math.max(0, number(total) - number(paid))
+    );
+
+  const summariseBalances = (rows) => {
+    const aging = [
+      { label: "Not overdue", count: 0, amount: 0 },
+      { label: "1–30 days overdue", count: 0, amount: 0 },
+      { label: "31–60 days overdue", count: 0, amount: 0 },
+      { label: "61–90 days overdue", count: 0, amount: 0 },
+      { label: "91+ days overdue", count: 0, amount: 0 },
+      { label: "Due date unavailable", count: 0, amount: 0 },
+    ];
+
+    let outstanding = 0;
+    let overdue = 0;
+    let dueNextSevenDays = 0;
+
+    for (const row of rows) {
+      outstanding += row.balance;
+
+      const overdueDays = row.dueDate
+        ? daysBetween(row.dueDate, today)
+        : null;
+
+      let bucket = 5;
+
+      if (overdueDays !== null) {
+        bucket =
+          overdueDays <= 0 ? 0 :
+          overdueDays <= 30 ? 1 :
+          overdueDays <= 60 ? 2 :
+          overdueDays <= 90 ? 3 : 4;
+
+        if (overdueDays > 0) overdue += row.balance;
+
+        if (
+          row.dueDate >= today &&
+          row.dueDate <= shiftDate(today, 7)
+        ) {
+          dueNextSevenDays += row.balance;
+        }
+      }
+
+      aging[bucket].count += 1;
+      aging[bucket].amount += row.balance;
+    }
+
+    return {
+      scope: "Company-wide current balances",
+      asOf: today,
+      count: rows.length,
+      outstanding: round(outstanding),
+      overdue: round(overdue),
+      dueNextSevenDays: round(dueNextSevenDays),
+      aging: aging.map((bucket) => ({
+        ...bucket,
+        amount: round(bucket.amount),
+      })),
+      oldestDue: rows
+        .filter((row) => row.dueDate)
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        .slice(0, 10),
+    };
+  };
+
+  const receivableRows = invoices
+    .map((invoice) => ({
+      reference: invoice.invoiceNumber,
+      name: invoice.customerName,
+      dueDate: jamaicaDate(invoice.dueDate),
+      balance: balance(
+        invoice.balanceDue,
+        invoice.finalTotal,
+        invoice.amountPaid
+      ),
+    }))
+    .filter((row) => row.balance > 0);
+
+  const payableRows = payables
+    .map((payable) => ({
+      reference: payable.payableNumber,
+      name: payable.vendorName,
+      dueDate: jamaicaDate(payable.dueDate),
+      approvalStatus: payable.approvalStatus,
+      balance: balance(
+        payable.balanceDue,
+        payable.amount,
+        payable.amountPaid
+      ),
+    }))
+    .filter((row) => row.balance > 0);
+
+  const activePurchases = purchases.filter(
+    (purchase) =>
+      !["Cancelled", "Refunded", "Reversed"].includes(
+        purchase.status
+      )
+  );
+
+  const jmdPurchases = activePurchases.filter(
+    (purchase) =>
+      String(purchase.baseCurrency || "").toUpperCase() === "JMD"
+  );
+
+  const periodPurchases = jmdPurchases.filter((purchase) => {
+    const date = jamaicaDate(purchase.purchaseDate);
+    return date && date >= start && date <= end;
+  });
+
+  // Pending requests are counted separately from actual purchases.
+  const purchasedInPeriod = periodPurchases.filter(
+    (purchase) => purchase.status !== "Pending Purchase"
+  );
+
+  const openRecoveries = jmdPurchases
+    .filter(
+      (purchase) =>
+        purchase.status !== "Pending Purchase" &&
+        !["Paid", "Refunded", "Written Off"].includes(
+          purchase.recoveryStatus
+        )
+    )
+    .map((purchase) => ({
+      purchaseNumber: purchase.purchaseNumber,
+      customerName: purchase.customerName,
+      balance: balance(
+        purchase.outstandingAmount,
+        purchase.totalCustomerCharge,
+        purchase.recoveredAmount
+      ),
+    }))
+    .filter((purchase) => purchase.balance > 0);
+
+  const statusCounts = {};
+
+  for (const purchase of activePurchases) {
+    const status = purchase.status || "Unknown";
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+  }
+
+  return {
+    receivables: {
+      ...summariseBalances(receivableRows),
+      basis: "Unpaid and partially paid shipping-system invoices",
+      shoppingBalancesAddedSeparately: false,
+      marketplaceIncluded: false,
+    },
+
+    payables: {
+      ...summariseBalances(payableRows),
+      basis: "Recorded unpaid, partially paid and overdue bills",
+      pendingApprovalCount: payableRows.filter(
+        (row) => row.approvalStatus === "Pending"
+      ).length,
+    },
+
+    shoppingAssistance: {
+      currency: "JMD",
+      period: {
+        from: start,
+        to: end,
+        purchaseCount: purchasedInPeriod.length,
+        goodsCost: round(
+          purchasedInPeriod.reduce(
+            (sum, purchase) =>
+              sum + number(purchase.baseCurrencyAmount),
+            0
+          )
+        ),
+        recordedAssistanceFees: round(
+          purchasedInPeriod.reduce(
+            (sum, purchase) =>
+              sum + number(purchase.shoppingAssistanceFee),
+            0
+          )
+        ),
+      },
+      current: {
+        pendingPurchaseCount: activePurchases.filter(
+          (purchase) => purchase.status === "Pending Purchase"
+        ).length,
+        outstandingCustomerCharges: round(
+          openRecoveries.reduce(
+            (sum, purchase) => sum + purchase.balance,
+            0
+          )
+        ),
+        outstandingPurchaseCount: openRecoveries.length,
+        statusCounts: Object.entries(statusCounts).map(
+          ([status, count]) => ({ status, count })
+        ),
+        largestOutstanding: [...openRecoveries]
+          .sort((a, b) => b.balance - a.balance)
+          .slice(0, 10),
+      },
+      excludedNonJmdPurchaseCount:
+        activePurchases.length - jmdPurchases.length,
+      note:
+        "Goods cost is separate from assistance fees. Recorded fees " +
+        "are not a cash-receipts measure. Outstanding customer " +
+        "charges may already be included in invoice receivables " +
+        "and must not be added to them.",
+    },
+  };
+};
+
 const buildOperationalDashboard = async ({
   from = "",
   to = "",
@@ -395,6 +642,12 @@ const buildOperationalDashboard = async ({
     previousEnd,
   });
 
+    const balances = await buildDashboardBalances({
+    start,
+    end,
+    today,
+  });
+
   return {
     filters: {
       from: start,
@@ -416,6 +669,9 @@ const buildOperationalDashboard = async ({
       ...item,
       moneyCollected: collections.daily[item.date] || 0,
     })),
+        receivables: balances.receivables,
+    payables: balances.payables,
+    shoppingAssistance: balances.shoppingAssistance,
     collections: {
       currency: "JMD",
       basis: "Recorded invoice payment receipts",
