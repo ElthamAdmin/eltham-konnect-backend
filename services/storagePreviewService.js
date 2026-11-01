@@ -46,6 +46,37 @@ const previewPackageStorage = ({
     throw new Error("A package is required.");
   }
 
+    const packageCreatedAt = pkg.createdAt
+    ? new Date(pkg.createdAt)
+    : null;
+
+  if (
+    !packageCreatedAt ||
+    !Number.isFinite(packageCreatedAt.getTime())
+  ) {
+    return {
+      available: false,
+      reason:
+        "The package date added is missing or invalid. " +
+        "Review it before calculating storage fees.",
+    };
+  }
+
+  // Midnight on 1 January 2027 in Jamaica.
+  const storagePackageCutoff = new Date(
+    "2027-01-01T00:00:00-05:00"
+  );
+
+  if (packageCreatedAt < storagePackageCutoff) {
+    return {
+      available: false,
+      exempt: true,
+      reason:
+        "This package was added before 1 January 2027 " +
+        "and is exempt from storage fees.",
+    };
+  }
+
   const period = pkg.storagePeriod;
 
   if (!period?.noticeNumber || !period?.noticeSentAt) {
