@@ -101,9 +101,11 @@ const applyInvoicePoints = async ({
       );
     }
 
-    const adjustments = await JournalEntry.find({
+        const adjustments = await JournalEntry.find({
       reference: invoice.invoiceNumber,
-      sourceModule: "Invoice Points",
+      sourceModule: {
+        $in: ["Invoice Points", "Invoice Charges"],
+      },
     }).session(session);
 
     if (

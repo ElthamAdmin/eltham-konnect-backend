@@ -27,6 +27,10 @@ const {
   applyInvoicePoints,
 } = require("../services/invoicePointsAdjustmentService");
 
+const {
+  updateInvoiceCharges,
+} = require("../services/invoiceChargeAdjustmentService");
+
 const getJamaicaDateString = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Jamaica",
@@ -944,92 +948,26 @@ const applyInvoicePointsAdjustment = async (req, res) => {
 
 const updateInvoiceChargesAdjustment = async (req, res) => {
   try {
-    const { invoiceNumber } = req.params;
-
-    const invoice = await Invoice.findOne({ invoiceNumber });
-
-    if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: "Invoice not found.",
-      });
-    }
-
-    if (invoice.status === "Paid") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot adjust charges after invoice is paid.",
-      });
-    }
-
-    const invoiceCharges = getInvoiceChargesFromBody(req.body);
-
-    invoice.customsDuty = invoiceCharges.customsDuty;
-    invoice.gct = invoiceCharges.gct;
-    invoice.processingFee = invoiceCharges.processingFee;
-    invoice.deliveryFee = invoiceCharges.deliveryFee;
-    invoice.deliveryType = invoiceCharges.deliveryType;
-    invoice.otherAdjustment = invoiceCharges.otherAdjustment;
-    invoice.adjustmentNote = invoiceCharges.adjustmentNote;
-
-    invoice.finalTotal = calculateInvoiceFinalTotal({
-  subtotal: invoice.subtotal,
-  customsDuty: invoice.customsDuty,
-  gct: invoice.gct,
-  processingFee: invoice.processingFee,
-  deliveryFee: invoice.deliveryFee,
-  otherAdjustment: invoice.otherAdjustment,
-  pointsRedeemed: invoice.pointsRedeemed,
-});
-
-    invoice.balanceDue = roundMoney(
-      Math.max(
-        0,
-        Number(invoice.finalTotal || 0) -
-          Number(invoice.amountPaid || 0)
-      )
-    );
-
-    await invoice.save();
-
-    await createCustomerNotification({
-      customerEkonId: invoice.customerEkonId,
-      customerName: invoice.customerName,
-      title: "Invoice Charges Updated",
-      message: `Invoice ${invoice.invoiceNumber} was updated. New balance: JMD ${Number(invoice.finalTotal || 0).toLocaleString()}.`,
-      type: "Invoice Update",
-      referenceType: "Invoice",
-      referenceId: invoice.invoiceNumber,
-    });
-
-    await writeAuditLog({
+    const result = await updateInvoiceCharges({
+      invoiceNumber: req.params.invoiceNumber,
+      changes: req.body || {},
       req,
-      action: "UPDATE_INVOICE_CHARGES",
-      module: "Invoices",
-      description: `Invoice charges updated for ${invoice.invoiceNumber}`,
-      targetType: "Invoice",
-      targetId: invoice.invoiceNumber,
-      metadata: {
-        customsDuty: invoice.customsDuty,
-        gct: invoice.gct,
-        processingFee: invoice.processingFee,
-        otherAdjustment: invoice.otherAdjustment,
-        adjustmentNote: invoice.adjustmentNote,
-        finalTotal: invoice.finalTotal,
-      },
     });
 
-    res.json({
+    return res.json({
       success: true,
       message: "Invoice charges updated successfully.",
-      data: invoice,
+      data: result.invoice,
+      journalEntryNumber: result.journalEntryNumber,
     });
   } catch (error) {
     console.error("Error updating invoice charges:", error);
-    res.status(500).json({
+
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not update invoice charges.",
-      error: error.message,
+      message: error.statusCode
+        ? error.message
+        : "Could not update invoice charges. No changes were committed.",
     });
   }
 };
