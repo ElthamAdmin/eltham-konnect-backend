@@ -309,6 +309,53 @@ const createStorageInvoice = async ({
       };
     }
 
+        const reminderDay = new Date(
+      `${preview.firstChargeDate}T00:00:00.000Z`
+    );
+    reminderDay.setUTCDate(reminderDay.getUTCDate() - 3);
+
+    const requiredReminderDate = reminderDay
+      .toISOString()
+      .slice(0, 10);
+
+    const reminderDigest = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify([
+          String(pkg._id),
+          period.noticeNumber,
+        ])
+      )
+      .digest("hex");
+
+    const reminder = await CustomerNotification.findOne({
+      notificationNumber:
+        `NTF-STORAGE-REMINDER-${reminderDigest}`,
+      customerEkonId: pkg.customerEkonId,
+      referenceType: "Package",
+      referenceId: pkg.trackingNumber,
+      title: "Storage Fee Reminder",
+    })
+      .session(session)
+      .lean();
+
+    const reminderCreatedAt = reminder?.createdAt
+      ? new Date(reminder.createdAt)
+      : null;
+
+    if (
+      !reminderCreatedAt ||
+      !Number.isFinite(reminderCreatedAt.getTime()) ||
+      jamaicaDate(reminderCreatedAt) !== requiredReminderDate
+    ) {
+      throw new Error(
+        "Storage billing is blocked because the required " +
+          "customer portal reminder was not recorded three " +
+          "calendar days before the first charge date. " +
+          "Review this package before billing."
+      );
+    }
+
     const entities = await BusinessEntity.find({
       lifecycleStatus: "Active",
       effectiveFrom: { $lte: today },
