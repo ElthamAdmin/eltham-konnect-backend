@@ -73,7 +73,12 @@ const processPackageReminder = async (packageId) =>
       throw new Error("The original storage notice needs review.");
     }
 
-    const preview = previewPackageStorage({ pkg, asOf: now });
+        const preview = previewPackageStorage({
+      pkg,
+      asOf: now,
+      additionalClosures:
+        settings.storageFees.additionalClosures ?? [],
+    });
 
     if (!preview.available) return;
 

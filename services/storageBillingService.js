@@ -271,9 +271,11 @@ const createStorageInvoice = async ({
      * An unconfirmed year blocks billing.
      * The preview stops on the collection date when recorded.
      */
-    const preview = previewPackageStorage({
+        const preview = previewPackageStorage({
       pkg,
       asOf: now,
+      additionalClosures:
+        settings.storageFees.additionalClosures ?? [],
     });
 
     const existing = await StorageCharge.find({

@@ -40,7 +40,8 @@ const formatJamaicaDate = (value) => {
 const previewPackageStorage = ({
   pkg,
   asOf = new Date(),
-  calendar = getJamaicaHolidayCalendar(),
+  calendar = null,
+  additionalClosures = [],
 }) => {
   if (!pkg) {
     throw new Error("A package is required.");
@@ -110,15 +111,27 @@ const previewPackageStorage = ({
     }
   }
 
-  if (!Array.isArray(calendar?.holidays)) {
+    const storageCalendar = calendar ?? getJamaicaHolidayCalendar({
+    endYear:
+      Math.max(
+        Number(noticeDate.slice(0, 4)),
+        Number(calculationDate.slice(0, 4))
+      ) + 2,
+    additionalClosures,
+  });
+
+  if (
+    !Array.isArray(storageCalendar?.holidays) ||
+    !Array.isArray(storageCalendar?.coveredYears)
+  ) {
     throw new Error("A valid holiday calendar is required.");
   }
 
   const calculation = calculateStorageFee({
     noticeDate,
     asOfDate: calculationDate,
-    holidayDates: calendar.holidays.map((holiday) => holiday.date),
-    coveredYears: calendar.coveredYears,
+        holidayDates: storageCalendar.holidays.map((holiday) => holiday.date),
+    coveredYears: storageCalendar.coveredYears,
     freeBusinessDays: period.freeBusinessDays,
     firstDayFee: period.firstDayFee,
     additionalDailyFee: period.additionalDailyFee,

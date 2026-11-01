@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Package = require("../models/Package");
+const Setting = require("../models/Setting");
 
 const {
   previewPackageStorage,
@@ -29,7 +30,17 @@ const getPackageStoragePreview = async (req, res) => {
       });
     }
 
-    const preview = previewPackageStorage({ pkg });
+        const settings = await Setting.findOne({
+      settingKey: "main",
+    })
+      .select("storageFees.additionalClosures")
+      .lean();
+
+    const preview = previewPackageStorage({
+      pkg,
+      additionalClosures:
+        settings?.storageFees?.additionalClosures ?? [],
+    });
 
     res.setHeader("Cache-Control", "private, no-store");
 
