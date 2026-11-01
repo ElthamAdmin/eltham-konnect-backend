@@ -44,6 +44,9 @@ const { attachUserIfPresent } = require("./middleware/authMiddleware");
 const {
   ensureSystemAccounts,
 } = require("./utils/generalLedgerPoster");
+const {
+  startStorageReminderScheduler,
+} = require("./services/storageReminderService");
 
 const app = express();
 
@@ -330,6 +333,7 @@ mongoose
 
     await ensureSystemAccounts();
     console.log("System Chart of Accounts verified");
+        startStorageReminderScheduler();
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
