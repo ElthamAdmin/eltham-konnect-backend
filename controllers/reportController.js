@@ -1,4 +1,7 @@
 const Payroll = require("../models/Payroll");
+const {
+  buildOperationalDashboard,
+} = require("../services/operationalDashboardService");
 
 const {
   trialBalanceService,
@@ -11,6 +14,27 @@ const {
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const getOperationalDashboard = async (req, res) => {
+  try {
+    const data = await buildOperationalDashboard({
+      from: req.query.from,
+      to: req.query.to,
+    });
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error("Error getting operational dashboard:", error);
+
+    return res.status(error.status === 400 ? 400 : 500).json({
+      success: false,
+      message:
+        error.status === 400
+          ? error.message
+          : "Failed to retrieve operational dashboard.",
+    });
+  }
+};
 
 const getFinanceSummary = async (req, res) => {
   try {
@@ -205,6 +229,7 @@ const rebuildFinanceBalances = async (req, res) => {
 };
 
 module.exports = {
+  getOperationalDashboard,
   getFinanceSummary,
   getFinancialReports,
   getMonthlyIncomeVsExpenses,

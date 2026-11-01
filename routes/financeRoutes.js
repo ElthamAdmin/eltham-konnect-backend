@@ -24,6 +24,7 @@ const {
 const router = express.Router();
 
 const {
+  getOperationalDashboard,
   getFinanceSummary,
   getFinancialReports,
   getMonthlyIncomeVsExpenses,
@@ -67,6 +68,11 @@ const upload = multer({
   },
 });
 
+router.get(
+  "/operational-dashboard",
+  protect,
+  getOperationalDashboard
+);
 router.get("/summary", protect, getFinanceSummary);
 router.get("/reports", protect, getFinancialReports);
 router.get("/monthly-chart", protect, getMonthlyIncomeVsExpenses);
