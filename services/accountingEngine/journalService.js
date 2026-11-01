@@ -21,20 +21,23 @@ const generateEntryNumber = () =>
 const generateLedgerNumber = () =>
   `GL-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
-const validateAccountingPeriodOpen = async (entryDate) => {
+const validateAccountingPeriodOpen = async (
+  entryDate,
+  session = null
+) => {
   const postingDate = new Date(entryDate);
 
   if (Number.isNaN(postingDate.getTime())) {
     throw new Error("Invalid journal entry date.");
   }
 
-  const fiscalYear = postingDate.getFullYear();
-  const periodMonth = postingDate.getMonth() + 1;
+  const fiscalYear = postingDate.getUTCFullYear();
+  const periodMonth = postingDate.getUTCMonth() + 1;
 
   const accountingPeriod = await AccountingPeriod.findOne({
     fiscalYear,
     periodMonth,
-  });
+  }).session(session);
 
   if (accountingPeriod) {
     if (accountingPeriod.allowPosting === false) {
@@ -43,7 +46,11 @@ const validateAccountingPeriodOpen = async (entryDate) => {
       );
     }
 
-    if (["Closing", "Closed", "Locked"].includes(accountingPeriod.status)) {
+    if (
+      ["Closing", "Closed", "Locked"].includes(
+        accountingPeriod.status
+      )
+    ) {
       throw new Error(
         `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
       );
@@ -52,7 +59,7 @@ const validateAccountingPeriodOpen = async (entryDate) => {
 
   const fiscalYearRecord = await FiscalYear.findOne({
     fiscalYear,
-  });
+  }).session(session);
 
   if (fiscalYearRecord) {
     if (fiscalYearRecord.allowPosting === false) {
@@ -61,7 +68,11 @@ const validateAccountingPeriodOpen = async (entryDate) => {
       );
     }
 
-    if (["Closing", "Closed", "Locked"].includes(fiscalYearRecord.status)) {
+    if (
+      ["Closing", "Closed", "Locked"].includes(
+        fiscalYearRecord.status
+      )
+    ) {
       throw new Error(
         `Fiscal year ${fiscalYearRecord.yearName} is ${fiscalYearRecord.status}. Posting is not allowed.`
       );
@@ -80,124 +91,145 @@ const postJournalEntry = async ({
   reportingPeriodKey = "",
   createdBy = "System User",
   lines = [],
+  session: providedSession = null,
 }) => {
-  const { totalDebit, totalCredit } = validateJournalLines(lines);
+  const { totalDebit, totalCredit } =
+    validateJournalLines(lines);
 
-  await validateAccountingPeriodOpen(entryDate);
+  if (
+    providedSession &&
+    !providedSession.inTransaction()
+  ) {
+    throw new Error(
+      "The supplied journal session must have an active transaction."
+    );
+  }
 
-  const session = await mongoose.startSession();
+  const ownsSession = !providedSession;
+  const session =
+    providedSession || (await mongoose.startSession());
 
-  try {
-    let createdEntry = null;
+  let createdEntry = null;
 
-        const createdLedgerNumbers = [];
+  const postWithinSession = async () => {
+    await validateAccountingPeriodOpen(
+      entryDate,
+      session
+    );
 
-    await session.withTransaction(async () => {
-      const entryNumber = generateEntryNumber();
-      const preparedLines = [];
+    const entryNumber = generateEntryNumber();
+    const preparedLines = [];
+    const createdLedgerNumbers = [];
 
-      for (const line of lines) {
-        const account = await ChartOfAccount.findOne({
-          accountCode: line.accountCode,
-          status: "Active",
-        }).session(session);
+    for (const line of lines) {
+      const account = await ChartOfAccount.findOne({
+        accountCode: line.accountCode,
+        status: "Active",
+      }).session(session);
 
-        if (!account) {
-          throw new Error(`Active chart account ${line.accountCode} not found.`);
-        }
-
-        const debit = roundMoney(line.debit);
-        const credit = roundMoney(line.credit);
-
-        const updatedBalance = calculateUpdatedBalance({
-          currentBalance: account.currentBalance,
-          normalBalance: account.normalBalance,
-          debit,
-          credit,
-        });
-
-        account.currentBalance = updatedBalance;
-        await account.save({ session });
-
-        preparedLines.push({
-          accountCode: account.accountCode,
-          accountName: account.accountName,
-          accountCategory: account.accountCategory,
-          normalBalance: account.normalBalance,
-          debit,
-          credit,
-          runningBalance: updatedBalance,
-          description: line.description || "",
-        });
+      if (!account) {
+        throw new Error(
+          `Active chart account ${line.accountCode} not found.`
+        );
       }
 
-      const entries = await JournalEntry.create(
+      const debit = roundMoney(line.debit);
+      const credit = roundMoney(line.credit);
+
+      const updatedBalance = calculateUpdatedBalance({
+        currentBalance: account.currentBalance,
+        normalBalance: account.normalBalance,
+        debit,
+        credit,
+      });
+
+      account.currentBalance = updatedBalance;
+      await account.save({ session });
+
+      preparedLines.push({
+        accountCode: account.accountCode,
+        accountName: account.accountName,
+        accountCategory: account.accountCategory,
+        normalBalance: account.normalBalance,
+        debit,
+        credit,
+        runningBalance: updatedBalance,
+        description: line.description || "",
+      });
+    }
+
+    const entries = await JournalEntry.create(
+      [
+        {
+          entryNumber,
+          entryDate,
+          memo,
+          reference,
+          sourceModule,
+          entityId,
+          entityCode,
+          entitySnapshot,
+          reportingPeriodKey,
+          createdBy,
+          totalDebit,
+          totalCredit,
+          status: "Posted",
+          lines: preparedLines.map((line) => ({
+            accountCode: line.accountCode,
+            accountName: line.accountName,
+            debit: line.debit,
+            credit: line.credit,
+            description: line.description,
+          })),
+        },
+      ],
+      { session }
+    );
+
+    createdEntry = entries[0];
+
+    for (const line of preparedLines) {
+      const ledgerNumber = generateLedgerNumber();
+      createdLedgerNumbers.push(ledgerNumber);
+
+      await GeneralLedgerTransaction.create(
         [
           {
+            ledgerNumber,
             entryNumber,
             entryDate,
-            memo,
+            accountCode: line.accountCode,
+            accountName: line.accountName,
+            accountCategory: line.accountCategory,
+            normalBalance: line.normalBalance,
+            debit: line.debit,
+            credit: line.credit,
+            runningBalance: line.runningBalance,
             reference,
             sourceModule,
             entityId,
-entityCode,
-entitySnapshot,
-reportingPeriodKey,
-createdBy,
-            totalDebit,
-            totalCredit,
-            status: "Posted",
-            lines: preparedLines.map((line) => ({
-              accountCode: line.accountCode,
-              accountName: line.accountName,
-              debit: line.debit,
-              credit: line.credit,
-              description: line.description,
-            })),
+            entityCode,
+            entitySnapshot,
+            reportingPeriodKey,
+            memo,
+            description: line.description,
           },
         ],
         { session }
       );
 
-      createdEntry = entries[0];
-
-      for (const line of preparedLines) {
-        const ledgerNumber = generateLedgerNumber();
-        createdLedgerNumbers.push(ledgerNumber);
-
-        await GeneralLedgerTransaction.create(
-          [
-            {
-              ledgerNumber,
-              entryNumber,
-              entryDate,
-              accountCode: line.accountCode,
-              accountName: line.accountName,
-              accountCategory: line.accountCategory,
-              normalBalance: line.normalBalance,
-              debit: line.debit,
-              credit: line.credit,
-              runningBalance: line.runningBalance,
-              reference,
-              sourceModule,
-entityId,
-entityCode,
-entitySnapshot,
-reportingPeriodKey,
-memo,
-              description: line.description,
-            },
-          ],
-          { session }
-        );
-
-        await syncFinancialAccountsForChartAccount(line.accountCode, session);
-      }
-    });
+      await syncFinancialAccountsForChartAccount(
+        line.accountCode,
+        session
+      );
+    }
 
     await writeFinanceAuditLog({
+      session,
       action: "JOURNAL_POSTED",
-      description: `Journal entry ${createdEntry.entryNumber} posted from ${sourceModule || "Manual"}`,
+      description:
+        `Journal entry ${createdEntry.entryNumber} ` +
+        `posted from ${sourceModule || "Manual"}`,
       targetType: "JournalEntry",
       targetId: createdEntry.entryNumber,
       postingDate: entryDate,
@@ -213,10 +245,20 @@ memo,
         lineCount: lines.length,
       },
     });
+  };
+
+  try {
+    if (providedSession) {
+      await postWithinSession();
+    } else {
+      await session.withTransaction(postWithinSession);
+    }
 
     return createdEntry;
   } finally {
-    session.endSession();
+    if (ownsSession) {
+      await session.endSession();
+    }
   }
 };
 
