@@ -1,12 +1,12 @@
 /*
- * Preliminary Jamaican calendar for 2027.
+ * Jamaican public holidays and approved EKOS collection
+ * closures used for storage calculations in 2027.
  *
- * Review official announcements before using this list
- * for live storage charges. Special holidays or closures
- * may be announced later.
+ * December 27 is an approved Eltham Konnect closure,
+ * regardless of its eventual public-holiday designation.
  *
- * December 27 is included provisionally because Christmas
- * falls on Saturday and Boxing Day falls on Sunday.
+ * Update this calendar if additional holidays or
+ * collection closures are announced.
  */
 
 const jamaicaHolidays2027 = [
@@ -20,18 +20,18 @@ const jamaicaHolidays2027 = [
   { date: "2027-10-18", name: "National Heroes' Day" },
   { date: "2027-12-25", name: "Christmas Day" },
   { date: "2027-12-26", name: "Boxing Day" },
-  {
+    {
     date: "2027-12-27",
-    name: "Potential Boxing Day observance",
-    provisional: true,
+    name: "Eltham Konnect collection closure",
+    companyClosure: true,
   },
 ];
 
 /*
- * No year is marked confirmed yet. The calculator must
- * not treat this preliminary list as complete.
+ * Approved operational calendar for storage calculations.
+ * Other years remain blocked until their calendars are added.
  */
-const confirmedYears = [];
+const confirmedYears = [2027];
 
 const getJamaicaHolidayCalendar = () => ({
   holidays: jamaicaHolidays2027.map((holiday) => ({ ...holiday })),
