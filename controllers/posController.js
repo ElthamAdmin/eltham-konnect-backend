@@ -530,7 +530,16 @@ const cashOutInvoice = async (req, res) => {
                   journalEntry.entryNumber,
                 ledgerReference:
                   journalEntry.entryNumber,
-                transactionType: "Invoice Payment",
+                                transactionType: "Invoice Payment",
+                invoiceNumber,
+                customerName: invoice.customerName || "",
+                customerEkonId:
+                  invoice.customerEkonId ||
+                  invoice.customerKey ||
+                  "",
+                branch: getUserBranch(req),
+                cashierUserId: String(getUserId(req)),
+                cashierName: getUserName(req),
                 amount: paymentApplied,
                 paymentMethod,
                 amountTendered: tendered,
@@ -551,8 +560,11 @@ const cashOutInvoice = async (req, res) => {
             {
               transactionNumber:
                 `POS-${crypto.randomUUID()}`,
-              invoiceType,
+                            invoiceType,
               invoiceNumber,
+              accountTransactionNumber:
+                financeTransaction.transactionNumber,
+              journalEntryNumber: journalEntry.entryNumber,
               customerName: invoice.customerName || "",
               customerEkonId:
                 invoice.customerEkonId ||

@@ -41,6 +41,23 @@ const accountTransactionSchema = new mongoose.Schema(
       select: false,
     },
 
+        branch: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+
+    cashierUserId: {
+      type: String,
+      default: "",
+    },
+
+    cashierName: {
+      type: String,
+      default: "",
+    },
+
     accountNumber: {
       type: String,
       required: true,

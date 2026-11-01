@@ -9,6 +9,17 @@ const posTransactionSchema = new mongoose.Schema(
       required: true,
     },
     invoiceNumber: { type: String, required: true, index: true },
+        accountTransactionNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+    journalEntryNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
     customerName: { type: String, default: "" },
     customerEkonId: { type: String, default: "" },
     amountPaid: { type: Number, default: 0 },
