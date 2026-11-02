@@ -17,9 +17,10 @@ const roundMoney = (value) =>
 
 const getOperationalDashboard = async (req, res) => {
   try {
-    const data = await buildOperationalDashboard({
+        const data = await buildOperationalDashboard({
       from: req.query.from,
       to: req.query.to,
+      branch: req.query.branch,
     });
 
     return res.json({ success: true, data });

@@ -52,11 +52,26 @@ const daysBetween = (from, to) =>
 const round = (value) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
 
+const UNASSIGNED_BRANCH = "__unassigned__";
+
+const matchesDashboardBranch = (recordBranch, selectedBranch) => {
+  if (!selectedBranch) return true;
+
+  const recorded = String(recordBranch || "").trim();
+
+  if (selectedBranch === UNASSIGNED_BRANCH) {
+    return !recorded;
+  }
+
+  return recorded === selectedBranch;
+};
+
 const buildCollectionsSummary = async ({
   start,
   end,
   previousStart,
   previousEnd,
+  branchFilter = "",
 }) => {
   const payments = await AccountTransaction.find({
     transactionType: "Invoice Payment",
@@ -139,7 +154,11 @@ const buildCollectionsSummary = async ({
     return "other";
   };
 
-  for (const payment of payments) {
+    for (const payment of payments) {
+    if (!matchesDashboardBranch(payment.branch, branchFilter)) {
+      continue;
+    }
+
     const amount = Number(payment.amount);
     const date = jamaicaDate(payment.transactionDate);
 
@@ -289,7 +308,12 @@ const buildCollectionsSummary = async ({
   };
 };
 
-const buildDashboardBalances = async ({ start, end, today }) => {
+const buildDashboardBalances = async ({
+  start,
+  end,
+  today,
+  branchFilter = "",
+}) => {
   const [invoices, payables, purchases] = await Promise.all([
     Invoice.find({
       status: { $in: ["Unpaid", "Partially Paid"] },
@@ -420,8 +444,9 @@ const buildDashboardBalances = async ({ start, end, today }) => {
     }))
     .filter((row) => row.balance > 0);
 
-  const activePurchases = purchases.filter(
+    const activePurchases = purchases.filter(
     (purchase) =>
+      matchesDashboardBranch(purchase.branch, branchFilter) &&
       !["Cancelled", "Refunded", "Reversed"].includes(
         purchase.status
       )
@@ -484,8 +509,13 @@ const buildDashboardBalances = async ({ start, end, today }) => {
       ).length,
     },
 
-    shoppingAssistance: {
+        shoppingAssistance: {
       currency: "JMD",
+      branch: branchFilter,
+      scope:
+        branchFilter === UNASSIGNED_BRANCH
+          ? "Unassigned"
+          : branchFilter || "All stores",
       period: {
         from: start,
         to: end,
@@ -706,7 +736,15 @@ const buildReferencePanels = async ({
 const buildOperationalDashboard = async ({
   from = "",
   to = "",
+  branch = "",
 } = {}) => {
+  if (typeof branch !== "string" || branch.length > 200) {
+    const error = new Error("Choose a valid store.");
+    error.status = 400;
+    throw error;
+  }
+
+  const branchFilter = branch.trim();
   const today = jamaicaDate(new Date());
   const end = to || today;
   const start = from || shiftDate(end, -29);
@@ -723,6 +761,48 @@ const buildOperationalDashboard = async ({
     error.status = 400;
     throw error;
   }
+
+    const [paymentBranches, purchaseBranches] = await Promise.all([
+    AccountTransaction.distinct("branch", {
+      transactionType: "Invoice Payment",
+    }),
+    CustomerPurchase.distinct("branch"),
+  ]);
+
+  const recordedBranches = [
+    ...new Set(
+      [...paymentBranches, ...purchaseBranches]
+        .filter((value) => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    ),
+  ].sort((a, b) => a.localeCompare(b));
+
+  const branchOptions = [
+    { value: "", label: "All stores" },
+    ...recordedBranches.map((value) => ({
+      value,
+      label: value,
+    })),
+    { value: UNASSIGNED_BRANCH, label: "Unassigned" },
+  ];
+
+  // Keep the selected option available even if its last record
+  // has changed since the dropdown was loaded.
+  if (
+    branchFilter &&
+    !branchOptions.some((option) => option.value === branchFilter)
+  ) {
+    branchOptions.push({
+      value: branchFilter,
+      label: branchFilter,
+    });
+  }
+
+  const selectedBranchLabel =
+    branchFilter === UNASSIGNED_BRANCH
+      ? "Unassigned"
+      : branchFilter || "All stores";
 
   const periodDays = daysBetween(start, end) + 1;
   const previousEnd = shiftDate(start, -1);
@@ -837,17 +917,19 @@ const buildOperationalDashboard = async ({
     }
   }
 
-    const collections = await buildCollectionsSummary({
+      const collections = await buildCollectionsSummary({
     start,
     end,
     previousStart,
     previousEnd,
+    branchFilter,
   });
 
-    const balances = await buildDashboardBalances({
+      const balances = await buildDashboardBalances({
     start,
     end,
     today,
+    branchFilter,
   });
 
     const referencePanels = await buildReferencePanels({
@@ -869,7 +951,15 @@ const buildOperationalDashboard = async ({
       previousFrom: previousStart,
       previousTo: previousEnd,
       timeZone: TIME_ZONE,
-      scope: "All stores",
+            branch: branchFilter,
+      scope: selectedBranchLabel,
+      branchOptions,
+      scopeNote:
+        "Store selection applies to collections, cashier totals, " +
+        "customer receipt rankings and shopping assistance. " +
+        "Packages, customer signups, invoicing and AR/AP remain " +
+        "company-wide. Package counts beside ranked customers " +
+        "are also company-wide.",
     },
         current: {
       ...summarise(start, end),
