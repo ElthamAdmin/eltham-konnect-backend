@@ -124,6 +124,8 @@ const buildCollectionsSummary = async ({
   const daily = new Map();
   const cashiers = new Map();
   const branches = new Map();
+    const customerReceipts = new Map();
+  let unidentifiedCustomerReceipts = 0;
 
   let invalidPaymentCount = 0;
   let excludedNonJmdPaymentCount = 0;
@@ -171,6 +173,27 @@ const buildCollectionsSummary = async ({
 
     const history =
       historyByJournal.get(payment.journalEntryNumber) || {};
+
+          const customerEkonId = String(
+      payment.customerEkonId || history.customerEkonId || ""
+    ).trim();
+
+    if (customerEkonId) {
+      if (!customerReceipts.has(customerEkonId)) {
+        customerReceipts.set(customerEkonId, {
+          customerEkonId,
+          customerName:
+            payment.customerName ||
+            history.customerName ||
+            customerEkonId,
+          amount: 0,
+        });
+      }
+
+      customerReceipts.get(customerEkonId).amount += amount;
+    } else {
+      unidentifiedCustomerReceipts += amount;
+    }
 
     const branch =
       String(payment.branch || "").trim() || "Unassigned";
@@ -231,6 +254,15 @@ const buildCollectionsSummary = async ({
     previous,
     daily: Object.fromEntries(
       [...daily].map(([date, amount]) => [date, round(amount)])
+    ),
+        customerReceipts: [...customerReceipts.values()].map(
+      (customer) => ({
+        ...customer,
+        amount: round(customer.amount),
+      })
+    ),
+    unidentifiedCustomerReceipts: round(
+      unidentifiedCustomerReceipts
     ),
     byCashier: [...cashiers.values()]
       .map((cashier) => ({
@@ -502,6 +534,175 @@ const buildDashboardBalances = async ({ start, end, today }) => {
   };
 };
 
+const buildReferencePanels = async ({
+  start,
+  end,
+  previousStart,
+  previousEnd,
+  today,
+  packages,
+  customerReceipts,
+  unidentifiedCustomerReceipts,
+}) => {
+  const invoices = await Invoice.find({
+    status: {
+      $nin: ["Draft", "Cancelled", "Reversed"],
+    },
+  })
+    .select("invoiceNumber createdAt finalTotal status")
+    .lean();
+
+  const dailyInvoiced = {};
+  let currentInvoiced = 0;
+  let previousInvoiced = 0;
+  let invalidInvoiceCount = 0;
+
+  for (const invoice of invoices) {
+    const date = jamaicaDate(invoice.createdAt);
+    const amount = Number(invoice.finalTotal);
+
+    if (!date || !Number.isFinite(amount) || amount < 0) {
+      invalidInvoiceCount += 1;
+      continue;
+    }
+
+    if (date >= start && date <= end) {
+      currentInvoiced += amount;
+      dailyInvoiced[date] =
+        (dailyInvoiced[date] || 0) + amount;
+    }
+
+    if (date >= previousStart && date <= previousEnd) {
+      previousInvoiced += amount;
+    }
+  }
+
+  const buckets = [
+    { label: "0–3 days", count: 0, weight: 0 },
+    { label: "4–7 days", count: 0, weight: 0 },
+    { label: "8–14 days", count: 0, weight: 0 },
+    { label: "15–30 days", count: 0, weight: 0 },
+    { label: "31+ days", count: 0, weight: 0 },
+    { label: "Ready date unavailable", count: 0, weight: 0 },
+  ];
+
+  const receivedByCustomer = new Map();
+  let readyCount = 0;
+  let readyWeight = 0;
+  let futureReadyDateCount = 0;
+
+  for (const pkg of packages) {
+    const status = String(pkg.status || "").trim().toLowerCase();
+    const customerId = String(pkg.customerEkonId || "").trim();
+    const received =
+      jamaicaDate(pkg.dateReceived) || jamaicaDate(pkg.createdAt);
+
+    if (
+      customerId &&
+      received &&
+      received >= start &&
+      received <= end
+    ) {
+      receivedByCustomer.set(
+        customerId,
+        (receivedByCustomer.get(customerId) || 0) + 1
+      );
+    }
+
+    // Payment does not establish collection.
+    const isCollected =
+      Boolean(pkg.collectedAt) ||
+      ["delivered", "collected"].includes(status);
+
+    const isReady =
+      pkg.readyForPickup === true ||
+      status === "ready for pickup";
+
+    if (!isReady || isCollected) continue;
+
+    const parsedWeight = Number(pkg.weight);
+    const weight =
+      Number.isFinite(parsedWeight) && parsedWeight >= 0
+        ? parsedWeight
+        : 0;
+
+    const readyDate = jamaicaDate(pkg.readyForPickupDate);
+    const waitingDays = readyDate
+      ? daysBetween(readyDate, today)
+      : null;
+
+    let bucketIndex = 5;
+
+    if (waitingDays !== null && waitingDays >= 0) {
+      bucketIndex =
+        waitingDays <= 3 ? 0 :
+        waitingDays <= 7 ? 1 :
+        waitingDays <= 14 ? 2 :
+        waitingDays <= 30 ? 3 : 4;
+    } else if (waitingDays !== null) {
+      futureReadyDateCount += 1;
+    }
+
+    buckets[bucketIndex].count += 1;
+    buckets[bucketIndex].weight += weight;
+    readyCount += 1;
+    readyWeight += weight;
+  }
+
+  const topCustomers = customerReceipts
+    .map((customer) => ({
+      ...customer,
+      packagesReceived:
+        receivedByCustomer.get(customer.customerEkonId) || 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.amount - a.amount ||
+        b.packagesReceived - a.packagesReceived ||
+        a.customerEkonId.localeCompare(b.customerEkonId)
+    )
+    .slice(0, 10);
+
+  return {
+    invoicing: {
+      current: round(currentInvoiced),
+      previous: round(previousInvoiced),
+      daily: Object.fromEntries(
+        Object.entries(dailyInvoiced).map(([date, amount]) => [
+          date,
+          round(amount),
+        ])
+      ),
+      basis:
+        "Current face value of non-draft, non-cancelled invoices, " +
+        "grouped by recorded creation date. Marketplace excluded. " +
+        "This is not an accounting revenue or credit-note report.",
+      invalidInvoiceCount,
+    },
+    uncollected: {
+      asOf: today,
+      count: readyCount,
+      weight: round(readyWeight),
+      buckets: buckets.map((bucket) => ({
+        ...bucket,
+        weight: round(bucket.weight),
+      })),
+      futureReadyDateCount,
+      note:
+        "Currently ready and uncollected packages, including paid " +
+        "packages. Missing or future ready dates are grouped separately.",
+    },
+    topCustomers: {
+      rows: topCustomers,
+      unidentifiedReceipts: unidentifiedCustomerReceipts,
+      basis:
+        "Ranked by identified gross payment receipts, then packages " +
+        "received in the selected period. Refunds are not deducted. " +
+        "Payments without a reliable customer ID are excluded from ranking.",
+    },
+  };
+};
+
 const buildOperationalDashboard = async ({
   from = "",
   to = "",
@@ -530,8 +731,9 @@ const buildOperationalDashboard = async ({
   const [packages, customers] = await Promise.all([
     Package.find()
       .select(
-        "trackingNumber status weight dateReceived createdAt " +
-          "readyForPickup readyForPickupDate collectedAt"
+                "trackingNumber customerEkonId customerName status weight " +
+          "dateReceived createdAt readyForPickup " +
+          "readyForPickupDate collectedAt"
       )
       .lean(),
     Customer.find()
@@ -648,6 +850,18 @@ const buildOperationalDashboard = async ({
     today,
   });
 
+    const referencePanels = await buildReferencePanels({
+    start,
+    end,
+    previousStart,
+    previousEnd,
+    today,
+    packages: activePackages,
+    customerReceipts: collections.customerReceipts,
+    unidentifiedCustomerReceipts:
+      collections.unidentifiedCustomerReceipts,
+  });
+
   return {
     filters: {
       from: start,
@@ -660,17 +874,23 @@ const buildOperationalDashboard = async ({
         current: {
       ...summarise(start, end),
       ...collections.current,
+            invoiced: referencePanels.invoicing.current,
     },
     previous: {
       ...summarise(previousStart, previousEnd),
       ...collections.previous,
+            invoiced: referencePanels.invoicing.previous,
     },
     daily: daily.map((item) => ({
       ...item,
       moneyCollected: collections.daily[item.date] || 0,
+            invoiced: referencePanels.invoicing.daily[item.date] || 0,
     })),
         receivables: balances.receivables,
     payables: balances.payables,
+        invoicing: referencePanels.invoicing,
+    uncollected: referencePanels.uncollected,
+    topCustomers: referencePanels.topCustomers,
     shoppingAssistance: balances.shoppingAssistance,
     collections: {
       currency: "JMD",
