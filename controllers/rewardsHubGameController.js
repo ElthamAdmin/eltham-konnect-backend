@@ -13,6 +13,10 @@ const {
   createWordSearchConfig,
   validateWordSearchSubmission,
 } = require("../services/rewardsWordSearchService");
+const {
+  createSnakeConfig,
+  validateSnakeSubmission,
+} = require("../services/rewardsSnakeService");
 
 const getGames = async (req, res) => {
   try {
@@ -57,7 +61,7 @@ const createGame = async (req, res) => {
     }
 
         if (
-                  ["Snake", "Chess", "Crossword"]
+                  ["Chess", "Crossword"]
         .includes(gameType)
     ) {
       return res.status(409).json({
@@ -76,6 +80,9 @@ const createGame = async (req, res) => {
         : [];
 
             let interactiveConfig = {};
+                if (gameType === "Snake") {
+      interactiveConfig = createSnakeConfig();
+    }
 
     if (gameType === "Sudoku") {
       interactiveConfig = createSudokuConfig();
@@ -96,8 +103,10 @@ const createGame = async (req, res) => {
       title,
       instructions,
       gameType,
-      engineVersion:
-        ["Sudoku", "Find-a-Word"].includes(gameType) ? 2 : 1,
+            engineVersion:
+        ["Sudoku", "Find-a-Word", "Snake"].includes(gameType)
+          ? 2
+          : 1,
       publicConfig: interactiveConfig,
       question,
       correctAnswer,
@@ -213,12 +222,13 @@ const playGame = async (req, res) => {
         "Match Image",
       ];
 
-            const existingGameTypes = [
+                  const existingGameTypes = [
         ...answerGames,
         "Spin Wheel",
         "Scratch Card",
         "Sudoku",
         "Find-a-Word",
+        "Snake",
       ];
 
       // Interactive games will use their own server validators.
@@ -272,8 +282,21 @@ const playGame = async (req, res) => {
         );
       }
 
+            if (
+        game.gameType === "Snake" &&
+        !validateSnakeSubmission(
+          game.publicConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "This Snake run did not meet the completion rules. " +
+          "Your play has not been recorded."
+        );
+      }
+
       const isCorrect =
-                ["Sudoku", "Find-a-Word"].includes(game.gameType)
+                ["Sudoku", "Find-a-Word", "Snake"].includes(game.gameType)
           ? true
           : requiresAnswer
             ? normalize(submittedAnswer) ===
