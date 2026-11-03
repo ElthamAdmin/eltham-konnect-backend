@@ -29,6 +29,10 @@ const {
   createWheelConfig,
   selectWheelOutcome,
 } = require("../services/rewardsWheelService");
+const {
+  createScratchConfig,
+  selectScratchOutcome,
+} = require("../services/rewardsScratchService");
 
 const getGames = async (req, res) => {
   try {
@@ -142,6 +146,21 @@ const createGame = async (req, res) => {
                 let interactiveConfig = {};
     let privateConfig = {};
         if (
+      gameType === "Scratch Card" &&
+      req.body.scratchPrizes !== undefined
+    ) {
+      try {
+        interactiveConfig = createScratchConfig(
+          req.body.scratchPrizes
+        );
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
+    }
+        if (
       gameType === "Spin Wheel" &&
       req.body.wheelSegments !== undefined
     ) {
@@ -215,7 +234,7 @@ const createGame = async (req, res) => {
       title,
       instructions,
       gameType,
-              engineVersion:
+                    engineVersion:
         (
           [
             "Trivia",
@@ -228,6 +247,10 @@ const createGame = async (req, res) => {
           (
             gameType === "Spin Wheel" &&
             interactiveConfig.wheelVersion === 1
+          ) ||
+          (
+            gameType === "Scratch Card" &&
+            interactiveConfig.scratchVersion === 1
           )
         )
           ? 2
@@ -238,7 +261,7 @@ const createGame = async (req, res) => {
       correctAnswer: gameType === "Crossword" ? "" : correctAnswer,
       options: gameType === "Crossword" ? [] : parsedOptions,
       rewardText,
-            rewardPoints:
+                  rewardPoints:
         gameType === "Spin Wheel" &&
         interactiveConfig.wheelVersion === 1
           ? Math.max(
@@ -246,7 +269,14 @@ const createGame = async (req, res) => {
                 (segment) => segment.points
               )
             )
-          : Number(rewardPoints || 0),
+          : gameType === "Scratch Card" &&
+              interactiveConfig.scratchVersion === 1
+            ? Math.max(
+                ...interactiveConfig.prizes.map(
+                  (prize) => prize.points
+                )
+              )
+            : Number(rewardPoints || 0),
       startDate: startDate || null,
       endDate: endDate || null,
     });
@@ -520,6 +550,22 @@ const playGame = async (req, res) => {
         }
       }
 
+            if (
+        game.gameType === "Scratch Card" &&
+        game.engineVersion === 2
+      ) {
+        try {
+          wheelOutcome = selectScratchOutcome(
+            game.publicConfig
+          );
+        } catch {
+          fail(
+            "This Scratch Card's prize configuration needs staff review.",
+            409
+          );
+        }
+      }
+
             const isCorrect = wheelOutcome
         ? wheelOutcome.prizeType !== "No Prize"
         : ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
@@ -626,7 +672,10 @@ const playGame = async (req, res) => {
               `EK-NOTIF-${crypto.randomUUID()}`,
             customerEkonId: customer.ekonId,
             customerName: customer.name,
-            title: "You Won a Wheel Prize!",
+                        title:
+              game.gameType === "Scratch Card"
+                ? "You Won a Scratch Card Prize!"
+                : "You Won a Wheel Prize!",
             message:
               `You won "${wheelOutcome.label}" from ` +
               `"${game.title}". Your prize is recorded ` +
@@ -638,7 +687,8 @@ const playGame = async (req, res) => {
       }
 
             result = {
-        play,
+                play,
+        gameType: game.gameType,
         isCorrect,
         rewardText: wheelOutcome
           ? wheelOutcome.label
@@ -654,9 +704,14 @@ const playGame = async (req, res) => {
       };
     });
 
-        let message;
+            let message;
 
-        if (result.outcome) {
+    if (result.outcome) {
+      const activity =
+        result.gameType === "Scratch Card"
+          ? "Scratch Card"
+          : "Spin";
+
       if (result.outcome.fulfilmentStatus === "Pending") {
         message =
           `You won: ${result.outcome.label}! ` +
@@ -664,16 +719,16 @@ const playGame = async (req, res) => {
           "fulfilment by Eltham Konnect.";
       } else if (result.rewardPointsOffered === 0) {
         message =
-          `Spin recorded: ${result.outcome.label}. ` +
-          "No EK Points were awarded for this segment.";
+          `${activity} recorded: ${result.outcome.label}. ` +
+          "No EK Points were awarded for this result.";
       } else if (result.rewardPoints === 0) {
         message =
-          `Spin recorded: ${result.outcome.label}. ` +
+          `${activity} recorded: ${result.outcome.label}. ` +
           "No points were added because your balance " +
           "is at the 1,500-point limit.";
       } else {
         message =
-          `Spin recorded: ${result.outcome.label}. ` +
+          `${activity} recorded: ${result.outcome.label}. ` +
           `${result.rewardPoints} EK Points credited.`;
 
         if (
