@@ -78,10 +78,20 @@ const createGame = async (req, res) => {
                 let interactiveConfig = {};
     let privateConfig = {};
 
-    if (gameType === "Crossword") {
-      const crossword = createCrosswordConfig();
-      interactiveConfig = crossword.publicConfig;
-      privateConfig = crossword.privateConfig;
+        if (gameType === "Crossword") {
+      try {
+        const crossword = createCrosswordConfig(
+          req.body.crosswordEntries
+        );
+
+        interactiveConfig = crossword.publicConfig;
+        privateConfig = crossword.privateConfig;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
     }
                 if (gameType === "Chess") {
       interactiveConfig = createChessConfig();
