@@ -31,6 +31,25 @@ const RewardsHubGamePlaySchema = new mongoose.Schema(
     outcome: {
       type: new mongoose.Schema(
         {
+                    prizeType: {
+            type: String,
+            enum: [
+              "Points",
+              "Gift Card",
+              "Phone Credit",
+              "Other",
+              "No Prize",
+            ],
+          },
+          fulfilmentStatus: {
+            type: String,
+            enum: [
+              "Not Required",
+              "Pending",
+              "Delivered",
+            ],
+          },
+          
           segmentId: {
             type: String,
             default: "",

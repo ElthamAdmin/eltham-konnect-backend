@@ -520,8 +520,8 @@ const playGame = async (req, res) => {
         }
       }
 
-      const isCorrect = wheelOutcome
-        ? wheelOutcome.points > 0
+            const isCorrect = wheelOutcome
+        ? wheelOutcome.prizeType !== "No Prize"
         : ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
             .includes(game.gameType)
           ? true
@@ -617,6 +617,26 @@ const playGame = async (req, res) => {
         );
       }
 
+            if (
+        wheelOutcome?.fulfilmentStatus === "Pending"
+      ) {
+        await CustomerNotification.create(
+          [{
+            notificationNumber:
+              `EK-NOTIF-${crypto.randomUUID()}`,
+            customerEkonId: customer.ekonId,
+            customerName: customer.name,
+            title: "You Won a Wheel Prize!",
+            message:
+              `You won "${wheelOutcome.label}" from ` +
+              `"${game.title}". Your prize is recorded ` +
+              "and awaiting fulfilment by Eltham Konnect.",
+            type: "Rewards",
+          }],
+          { session }
+        );
+      }
+
             result = {
         play,
         isCorrect,
@@ -636,8 +656,13 @@ const playGame = async (req, res) => {
 
         let message;
 
-    if (result.outcome) {
-      if (result.rewardPointsOffered === 0) {
+        if (result.outcome) {
+      if (result.outcome.fulfilmentStatus === "Pending") {
+        message =
+          `You won: ${result.outcome.label}! ` +
+          "Your prize has been recorded and is awaiting " +
+          "fulfilment by Eltham Konnect.";
+      } else if (result.rewardPointsOffered === 0) {
         message =
           `Spin recorded: ${result.outcome.label}. ` +
           "No EK Points were awarded for this segment.";

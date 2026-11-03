@@ -15,6 +15,20 @@ const COLORS = [
   "#374151",
 ];
 
+const PRIZE_TYPES = [
+  "Points",
+  "Gift Card",
+  "Phone Credit",
+  "Other",
+  "No Prize",
+];
+
+const MANUAL_PRIZES = [
+  "Gift Card",
+  "Phone Credit",
+  "Other",
+];
+
 const createWheelConfig = (input) => {
   if (
     !Array.isArray(input) ||
@@ -30,13 +44,13 @@ const createWheelConfig = (input) => {
         ? item.label.trim()
         : "";
 
-    const raw = item?.points;
-
     if (!label || label.length > 60) {
       throw new Error(
         "Every wheel segment needs a label of 1–60 characters."
       );
     }
+
+    const raw = item?.points;
 
     if (
       !(
@@ -48,8 +62,8 @@ const createWheelConfig = (input) => {
       )
     ) {
       throw new Error(
-        "Every segment needs a whole-number points amount " +
-        "from 0 to 1,500."
+        "Enter a whole-number EK Points amount from 0 to 1,500. " +
+        "Use 0 for gift cards, phone credit and other prizes."
       );
     }
 
@@ -61,14 +75,40 @@ const createWheelConfig = (input) => {
       points > 1500
     ) {
       throw new Error(
-        "Every segment needs a whole-number points amount " +
-        "from 0 to 1,500."
+        "EK Points must be a whole number from 0 to 1,500."
+      );
+    }
+
+    // Compatibility with previously configured points-only wheels.
+    const prizeType =
+      item.prizeType == null
+        ? points > 0
+          ? "Points"
+          : "No Prize"
+        : item.prizeType;
+
+    if (!PRIZE_TYPES.includes(prizeType)) {
+      throw new Error("Select a valid prize type for every segment.");
+    }
+
+    if (prizeType === "Points" && points === 0) {
+      throw new Error(
+        "An EK Points prize must award at least 1 point. " +
+        "Choose No Prize for a non-winning segment."
+      );
+    }
+
+    if (prizeType !== "Points" && points !== 0) {
+      throw new Error(
+        "Only EK Points prizes can contain a points amount. " +
+        "Set points to 0 for all other prize types."
       );
     }
 
     return {
       id: `segment-${index + 1}`,
       label,
+      prizeType,
       points,
       color: COLORS[index],
     };
@@ -82,6 +122,8 @@ const createWheelConfig = (input) => {
       "One spin per customer for this game. " +
       "Every segment has an equal chance. " +
       "The server selects and saves the result. " +
+      "Gift cards, phone credit and other prizes are " +
+      "fulfilled separately by Eltham Konnect. " +
       "EK Points are subject to the 1,500-point balance limit.",
   };
 };
@@ -115,7 +157,11 @@ const selectWheelOutcome = (config) => {
     segmentId: segment.id,
     segmentIndex,
     label: segment.label,
+    prizeType: segment.prizeType,
     points: segment.points,
+    fulfilmentStatus: MANUAL_PRIZES.includes(segment.prizeType)
+      ? "Pending"
+      : "Not Required",
   };
 };
 
