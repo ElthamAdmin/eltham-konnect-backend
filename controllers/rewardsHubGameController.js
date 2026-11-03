@@ -48,6 +48,18 @@ const createGame = async (req, res) => {
       });
     }
 
+        if (
+      ["Sudoku", "Snake", "Find-a-Word", "Chess", "Crossword"]
+        .includes(gameType)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The interactive game engine is being installed. " +
+          "This game type cannot be published yet.",
+      });
+    }
+
     const parsedOptions =
       typeof options === "string"
         ? options.split(",").map((item) => item.trim()).filter(Boolean)
