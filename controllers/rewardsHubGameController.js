@@ -25,6 +25,10 @@ const {
   createCrosswordConfig,
   validateCrosswordSubmission,
 } = require("../services/rewardsCrosswordService");
+const {
+  createWheelConfig,
+  selectWheelOutcome,
+} = require("../services/rewardsWheelService");
 
 const getGames = async (req, res) => {
   try {
@@ -137,6 +141,21 @@ const createGame = async (req, res) => {
 
                 let interactiveConfig = {};
     let privateConfig = {};
+        if (
+      gameType === "Spin Wheel" &&
+      req.body.wheelSegments !== undefined
+    ) {
+      try {
+        interactiveConfig = createWheelConfig(
+          req.body.wheelSegments
+        );
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
+    }
         if (gameType === "Trivia") {
       interactiveConfig = {
         presentation: "answer-cards",
@@ -196,15 +215,21 @@ const createGame = async (req, res) => {
       title,
       instructions,
       gameType,
-                        engineVersion:
-        [
-          "Trivia",
-          "Sudoku",
-          "Find-a-Word",
-          "Snake",
-          "Chess",
-          "Crossword",
-        ].includes(gameType)
+              engineVersion:
+        (
+          [
+            "Trivia",
+            "Sudoku",
+            "Find-a-Word",
+            "Snake",
+            "Chess",
+            "Crossword",
+          ].includes(gameType) ||
+          (
+            gameType === "Spin Wheel" &&
+            interactiveConfig.wheelVersion === 1
+          )
+        )
           ? 2
           : 1,
       publicConfig: interactiveConfig,
@@ -213,7 +238,15 @@ const createGame = async (req, res) => {
       correctAnswer: gameType === "Crossword" ? "" : correctAnswer,
       options: gameType === "Crossword" ? [] : parsedOptions,
       rewardText,
-      rewardPoints: Number(rewardPoints || 0),
+            rewardPoints:
+        gameType === "Spin Wheel" &&
+        interactiveConfig.wheelVersion === 1
+          ? Math.max(
+              ...interactiveConfig.segments.map(
+                (segment) => segment.points
+              )
+            )
+          : Number(rewardPoints || 0),
       startDate: startDate || null,
       endDate: endDate || null,
     });
@@ -469,16 +502,37 @@ const playGame = async (req, res) => {
         );
       }
 
-                  const isCorrect =
-        ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
-          .includes(game.gameType)
+                        let wheelOutcome;
+
+      if (
+        game.gameType === "Spin Wheel" &&
+        game.engineVersion === 2
+      ) {
+        try {
+          wheelOutcome = selectWheelOutcome(
+            game.publicConfig
+          );
+        } catch {
+          fail(
+            "This wheel's prize configuration needs staff review.",
+            409
+          );
+        }
+      }
+
+      const isCorrect = wheelOutcome
+        ? wheelOutcome.points > 0
+        : ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
+            .includes(game.gameType)
           ? true
           : requiresAnswer
             ? normalize(submittedAnswer) ===
               normalize(game.correctAnswer)
             : true;
 
-      const offered = Number(game.rewardPoints || 0);
+      const offered = wheelOutcome
+        ? wheelOutcome.points
+        : Number(game.rewardPoints || 0);
 
       if (
         !Number.isSafeInteger(offered) ||
@@ -518,7 +572,12 @@ const playGame = async (req, res) => {
           gameId: game._id,
           customerEkonId: customer.ekonId,
           customerName: customer.name,
-          submittedAnswer,
+                    submittedAnswer: wheelOutcome
+            ? wheelOutcome.label
+            : submittedAnswer,
+          ...(wheelOutcome
+            ? { outcome: wheelOutcome }
+            : {}),
           isCorrect,
           rewardPointsOffered: offered,
           pointsAwarded,
@@ -558,23 +617,58 @@ const playGame = async (req, res) => {
         );
       }
 
-      result = {
+            result = {
         play,
         isCorrect,
-        rewardText: isCorrect ? game.rewardText : "",
+        rewardText: wheelOutcome
+          ? wheelOutcome.label
+          : isCorrect
+            ? game.rewardText
+            : "",
         rewardPoints: pointsAwarded,
         rewardPointsOffered: offered,
         pointsBalance: currentBalance + pointsAwarded,
+        ...(wheelOutcome
+          ? { outcome: wheelOutcome }
+          : {}),
       };
     });
 
-    const message = !result.isCorrect
-      ? "Game submitted, but the answer was incorrect."
-      : result.rewardPoints > 0
-        ? `Game completed. ${result.rewardPoints} EK Points credited.`
-        : result.rewardPointsOffered > 0
-          ? "Game completed. No points were added because your balance is at the 1,500-point limit."
-          : "Game completed successfully.";
+        let message;
+
+    if (result.outcome) {
+      if (result.rewardPointsOffered === 0) {
+        message =
+          `Spin recorded: ${result.outcome.label}. ` +
+          "No EK Points were awarded for this segment.";
+      } else if (result.rewardPoints === 0) {
+        message =
+          `Spin recorded: ${result.outcome.label}. ` +
+          "No points were added because your balance " +
+          "is at the 1,500-point limit.";
+      } else {
+        message =
+          `Spin recorded: ${result.outcome.label}. ` +
+          `${result.rewardPoints} EK Points credited.`;
+
+        if (
+          result.rewardPoints <
+          result.rewardPointsOffered
+        ) {
+          message +=
+            " The credited amount was reduced to keep " +
+            "your balance within the 1,500-point limit.";
+        }
+      }
+    } else {
+      message = !result.isCorrect
+        ? "Game submitted, but the answer was incorrect."
+        : result.rewardPoints > 0
+          ? `Game completed. ${result.rewardPoints} EK Points credited.`
+          : result.rewardPointsOffered > 0
+            ? "Game completed. No points were added because your balance is at the 1,500-point limit."
+            : "Game completed successfully.";
+    }
 
     return res.json({
       success: true,
