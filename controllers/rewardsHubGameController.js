@@ -17,6 +17,10 @@ const {
   createSnakeConfig,
   validateSnakeSubmission,
 } = require("../services/rewardsSnakeService");
+const {
+  createChessConfig,
+  validateChessSubmission,
+} = require("../services/rewardsChessService");
 
 const getGames = async (req, res) => {
   try {
@@ -60,10 +64,7 @@ const createGame = async (req, res) => {
       });
     }
 
-        if (
-                  ["Chess", "Crossword"]
-        .includes(gameType)
-    ) {
+            if (gameType === "Crossword") {
       return res.status(409).json({
         success: false,
         message:
@@ -80,6 +81,9 @@ const createGame = async (req, res) => {
         : [];
 
             let interactiveConfig = {};
+                if (gameType === "Chess") {
+      interactiveConfig = createChessConfig();
+    }
                 if (gameType === "Snake") {
       interactiveConfig = createSnakeConfig();
     }
@@ -104,7 +108,7 @@ const createGame = async (req, res) => {
       instructions,
       gameType,
             engineVersion:
-        ["Sudoku", "Find-a-Word", "Snake"].includes(gameType)
+        ["Sudoku", "Find-a-Word", "Snake", "Chess"].includes(gameType)
           ? 2
           : 1,
       publicConfig: interactiveConfig,
@@ -229,6 +233,7 @@ const playGame = async (req, res) => {
         "Sudoku",
         "Find-a-Word",
         "Snake",
+        "Chess",
       ];
 
       // Interactive games will use their own server validators.
@@ -295,8 +300,22 @@ const playGame = async (req, res) => {
         );
       }
 
-      const isCorrect =
-                ["Sudoku", "Find-a-Word", "Snake"].includes(game.gameType)
+            if (
+        game.gameType === "Chess" &&
+        !validateChessSubmission(
+          game.publicConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "This Chess game is not a verified win against " +
+          "the computer. Your play has not been recorded."
+        );
+      }
+
+            const isCorrect =
+        ["Sudoku", "Find-a-Word", "Snake", "Chess"]
+          .includes(game.gameType)
           ? true
           : requiresAnswer
             ? normalize(submittedAnswer) ===
