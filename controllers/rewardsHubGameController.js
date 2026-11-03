@@ -1,3 +1,8 @@
+const crypto = require("crypto");
+const mongoose = require("mongoose");
+const Customer = require("../models/Customer");
+const PointsHistory = require("../models/PointsHistory");
+const CustomerNotification = require("../models/CustomerNotification");
 const RewardsHubGame = require("../models/RewardsHubGame");
 const RewardsHubGamePlay = require("../models/RewardsHubGamePlay");
 
@@ -78,106 +83,249 @@ const createGame = async (req, res) => {
 };
 
 const playGame = async (req, res) => {
+  const session = await mongoose.startSession();
+
+  const fail = (message, status = 400) => {
+    const error = new Error(message);
+    error.status = status;
+    throw error;
+  };
+
   try {
-        const { gameId, submittedAnswer } = req.body;
     const customerEkonId = req.user?.ekonId;
-    const customerName = req.user?.name;
+    const customerId = req.user?.customerId;
+    const { gameId } = req.body;
 
-    if (!gameId || !customerEkonId || !customerName) {
-      return res.status(400).json({
-        success: false,
-        message: "Game ID, customer EKON ID, and customer name are required",
-      });
+    if (!customerId || !customerEkonId) {
+      fail("Customer authentication is required.", 401);
     }
 
-    const game = await RewardsHubGame.findById(gameId);
-
-    if (!game || !game.isActive) {
-      return res.status(404).json({
-        success: false,
-        message: "Game not found",
-      });
+    if (
+      typeof gameId !== "string" ||
+      !/^[a-f0-9]{24}$/i.test(gameId)
+    ) {
+      fail("A valid game ID is required.");
     }
 
-    const existingPlay = await RewardsHubGamePlay.findOne({
-      gameId,
-      customerEkonId,
-    });
-
-    if (existingPlay) {
-      return res.status(400).json({
-        success: false,
-        message: "You already played this game.",
-      });
+    if (
+      req.body.submittedAnswer != null &&
+      typeof req.body.submittedAnswer !== "string"
+    ) {
+      fail("The submitted answer must be text.");
     }
 
-    const normalizedSubmitted = String(submittedAnswer || "").trim().toLowerCase();
-    const normalizedCorrect = String(game.correctAnswer || "").trim().toLowerCase();
+    const submittedAnswer = String(
+      req.body.submittedAnswer || ""
+    ).trim();
 
-    const isCorrect =
-      game.gameType === "Trivia" || game.gameType === "Scavenger Hunt" || game.gameType === "Match Image"
-        ? normalizedSubmitted === normalizedCorrect
-        : true;
+    if (submittedAnswer.length > 2000) {
+      fail("The submitted answer is too long.");
+    }
 
-    const play = await RewardsHubGamePlay.create({
-      gameId,
-      customerEkonId,
-      customerName,
-      submittedAnswer,
-      isCorrect,
-    });
-
-    const Customer = require("../models/Customer");
-const PointsHistory = require("../models/PointsHistory");
-const CustomerNotification = require("../models/CustomerNotification");
-
-if (isCorrect && game.rewardPoints > 0) {
-  const customer = await Customer.findOne({ ekonId: customerEkonId });
-
-  if (customer) {
-    const newBalance = Math.min(
-      1500,
-      Number(customer.pointsBalance || 0) + game.rewardPoints
+    // A stable document ID uses MongoDB's existing unique _id
+    // index. Old play records do not need to be deleted or migrated.
+    const claimId = new mongoose.Types.ObjectId(
+      crypto
+        .createHash("sha256")
+        .update(
+          JSON.stringify([
+            "rewards-game-play-v1",
+            gameId.toLowerCase(),
+            customerEkonId,
+          ])
+        )
+        .digest("hex")
+        .slice(0, 24)
     );
 
-    customer.pointsBalance = newBalance;
-    await customer.save();
+    let result;
 
-    await PointsHistory.create({
-      customerId: customer._id,
-      customerName: customer.name,
-      customerEkonId: customer.ekonId,
-      action: `Game Reward (${game.title})`,
-      points: game.rewardPoints,
-    });
+    await session.withTransaction(async () => {
+      const game = await RewardsHubGame.findById(gameId)
+        .session(session);
 
-    await CustomerNotification.create({
-      notificationNumber: `EK-NOTIF-${Date.now()}`,
-      customerEkonId: customer.ekonId,
-      customerName: customer.name,
-      title: "🎉 You Earned EK Points!",
-      message: `You earned ${game.rewardPoints} EK Points from "${game.title}".`,
-      type: "Rewards",
-    });
-  }
-}
+      if (!game || !game.isActive) {
+        fail("Game not found.", 404);
+      }
 
-    res.json({
-      success: true,
-      message: isCorrect ? "Game submitted successfully." : "Game submitted, but answer was incorrect.",
-      data: {
+      const now = new Date();
+
+      if (game.startDate && now < game.startDate) {
+        fail("This game has not started yet.");
+      }
+
+      if (game.endDate && now > game.endDate) {
+        fail("This game has ended.");
+      }
+
+      const existingPlay = await RewardsHubGamePlay.findOne({
+        gameId: game._id,
+        customerEkonId,
+      }).session(session);
+
+      if (existingPlay) {
+        fail("You already played this game.", 409);
+      }
+
+      const answerGames = [
+        "Trivia",
+        "Scavenger Hunt",
+        "Match Image",
+      ];
+
+      const existingGameTypes = [
+        ...answerGames,
+        "Spin Wheel",
+        "Scratch Card",
+      ];
+
+      // Interactive games will use their own server validators.
+      // Never automatically award an unknown game type.
+      if (!existingGameTypes.includes(game.gameType)) {
+        fail(
+          "This game needs its interactive player before it can be submitted.",
+          409
+        );
+      }
+
+      const requiresAnswer = answerGames.includes(game.gameType);
+
+      const normalize = (value) =>
+        String(value || "").trim().toLowerCase();
+
+      if (
+        requiresAnswer &&
+        (!submittedAnswer || !normalize(game.correctAnswer))
+      ) {
+        fail(
+          submittedAnswer
+            ? "This game has no configured answer. Please contact support."
+            : "Please enter or select your answer."
+        );
+      }
+
+      const isCorrect = requiresAnswer
+        ? normalize(submittedAnswer) === normalize(game.correctAnswer)
+        : true;
+
+      const offered = Number(game.rewardPoints || 0);
+
+      if (
+        !Number.isSafeInteger(offered) ||
+        offered < 0 ||
+        offered > 1500
+      ) {
+        fail("This game's points reward needs staff review.", 409);
+      }
+
+      const customer = await Customer.findOne({
+        _id: customerId,
+        ekonId: customerEkonId,
+        status: "Active",
+      }).session(session);
+
+      if (!customer) {
+        fail("This customer session is no longer active.", 401);
+      }
+
+      const currentBalance = Number(customer.pointsBalance || 0);
+
+      if (
+        !Number.isFinite(currentBalance) ||
+        currentBalance < 0 ||
+        currentBalance > 1500
+      ) {
+        fail("Your points balance needs staff review.", 409);
+      }
+
+      const pointsAwarded = isCorrect
+        ? Math.min(offered, Math.max(0, 1500 - currentBalance))
+        : 0;
+
+      const [play] = await RewardsHubGamePlay.create(
+        [{
+          _id: claimId,
+          gameId: game._id,
+          customerEkonId: customer.ekonId,
+          customerName: customer.name,
+          submittedAnswer,
+          isCorrect,
+          rewardPointsOffered: offered,
+          pointsAwarded,
+          rewardGiven: pointsAwarded > 0,
+          rewardDate: pointsAwarded > 0 ? now : null,
+        }],
+        { session }
+      );
+
+      if (pointsAwarded > 0) {
+        customer.pointsBalance = currentBalance + pointsAwarded;
+        await customer.save({ session });
+
+        await PointsHistory.create(
+          [{
+            customerId: customer._id,
+            customerName: customer.name,
+            customerEkonId: customer.ekonId,
+            action: `Game Reward (${game.title})`,
+            points: pointsAwarded,
+          }],
+          { session }
+        );
+
+        await CustomerNotification.create(
+          [{
+            notificationNumber: `EK-NOTIF-${crypto.randomUUID()}`,
+            customerEkonId: customer.ekonId,
+            customerName: customer.name,
+            title: "You Earned EK Points!",
+            message:
+              `You earned ${pointsAwarded} EK Points from ` +
+              `"${game.title}".`,
+            type: "Rewards",
+          }],
+          { session }
+        );
+      }
+
+      result = {
         play,
         isCorrect,
-        rewardText: game.rewardText,
-        rewardPoints: game.rewardPoints,
-      },
+        rewardText: isCorrect ? game.rewardText : "",
+        rewardPoints: pointsAwarded,
+        rewardPointsOffered: offered,
+        pointsBalance: currentBalance + pointsAwarded,
+      };
+    });
+
+    const message = !result.isCorrect
+      ? "Game submitted, but the answer was incorrect."
+      : result.rewardPoints > 0
+        ? `Game completed. ${result.rewardPoints} EK Points credited.`
+        : result.rewardPointsOffered > 0
+          ? "Game completed. No points were added because your balance is at the 1,500-point limit."
+          : "Game completed successfully.";
+
+    return res.json({
+      success: true,
+      message,
+      data: result,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Rewards game submission error:", error);
+
+    const duplicate = error.code === 11000;
+
+    return res.status(duplicate ? 409 : error.status || 500).json({
       success: false,
-      message: "Failed to submit game",
-      error: error.message,
+      message: duplicate
+        ? "This game submission has already been recorded. Refresh your game history."
+        : error.status
+          ? error.message
+          : "Could not confirm the game submission. Refresh your game history before retrying.",
     });
+  } finally {
+    await session.endSession();
   }
 };
 

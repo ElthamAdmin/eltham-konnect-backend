@@ -14,6 +14,18 @@ const RewardsHubGamePlaySchema = new mongoose.Schema(
     submittedAnswer: { type: String, default: "" },
     isCorrect: { type: Boolean, default: false },
 
+        pointsAwarded: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    rewardPointsOffered: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     rewardGiven: { type: Boolean, default: false },
     rewardDate: { type: Date, default: null },
   },
