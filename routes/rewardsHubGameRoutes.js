@@ -1,5 +1,13 @@
 const express = require("express");
 const router = express.Router();
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
+
+const {
+  protectCustomer,
+} = require("../middleware/customerAuthMiddleware");
 
 const {
   getGames,
@@ -11,10 +19,34 @@ const {
 } = require("../controllers/rewardsHubGameController");
 
 router.get("/", getGames);
-router.post("/", createGame);
-router.post("/play", playGame);
-router.get("/:gameId/plays", getGamePlays);
-router.get("/customer/:ekonId/plays", getCustomerGamePlays);
-router.delete("/:id", deleteGame);
+
+router.post(
+  "/",
+  protect,
+  requirePermission("marketing"),
+  createGame
+);
+
+router.post("/play", protectCustomer, playGame);
+
+router.get(
+  "/:gameId/plays",
+  protect,
+  requirePermission("marketing"),
+  getGamePlays
+);
+
+router.get(
+  "/customer/:ekonId/plays",
+  protectCustomer,
+  getCustomerGamePlays
+);
+
+router.delete(
+  "/:id",
+  protect,
+  requirePermission("marketing"),
+  deleteGame
+);
 
 module.exports = router;

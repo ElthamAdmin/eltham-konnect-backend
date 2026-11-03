@@ -3,7 +3,9 @@ const RewardsHubGamePlay = require("../models/RewardsHubGamePlay");
 
 const getGames = async (req, res) => {
   try {
-    const games = await RewardsHubGame.find({ isActive: true }).sort({ createdAt: -1 });
+        const games = await RewardsHubGame.find({ isActive: true })
+      .select("-correctAnswer")
+      .sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -77,7 +79,9 @@ const createGame = async (req, res) => {
 
 const playGame = async (req, res) => {
   try {
-    const { gameId, customerEkonId, customerName, submittedAnswer } = req.body;
+        const { gameId, submittedAnswer } = req.body;
+    const customerEkonId = req.user?.ekonId;
+    const customerName = req.user?.name;
 
     if (!gameId || !customerEkonId || !customerName) {
       return res.status(400).json({
@@ -199,7 +203,14 @@ const getGamePlays = async (req, res) => {
 
 const getCustomerGamePlays = async (req, res) => {
   try {
-    const { ekonId } = req.params;
+        const ekonId = req.user?.ekonId;
+
+    if (!ekonId || req.params.ekonId !== ekonId) {
+      return res.status(403).json({
+        success: false,
+        message: "You can only view your own game history.",
+      });
+    }
 
     const plays = await RewardsHubGamePlay.find({
       customerEkonId: ekonId,
