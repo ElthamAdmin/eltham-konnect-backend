@@ -16,7 +16,15 @@ const {
   getGamePlays,
   getCustomerGamePlays,
   deleteGame,
+  getGameAnswerKey,
 } = require("../controllers/rewardsHubGameController");
+
+router.get(
+  "/:gameId/answer-key",
+  protect,
+  requirePermission("marketing"),
+  getGameAnswerKey
+);
 
 router.get("/", getGames);
 

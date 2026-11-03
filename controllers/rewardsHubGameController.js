@@ -556,6 +556,109 @@ const deleteGame = async (req, res) => {
   }
 };
 
+const getGameAnswerKey = async (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const { gameId } = req.params;
+
+    if (
+      typeof gameId !== "string" ||
+      !/^[a-f0-9]{24}$/i.test(gameId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid game ID is required.",
+      });
+    }
+
+    const game = await RewardsHubGame.findById(gameId)
+      .select("gameType publicConfig +privateConfig")
+      .lean();
+
+    if (!game) {
+      return res.status(404).json({
+        success: false,
+        message: "Game not found.",
+      });
+    }
+
+    if (game.gameType !== "Crossword") {
+      return res.status(400).json({
+        success: false,
+        message: "This answer key is for Crossword games.",
+      });
+    }
+
+    const config = game.publicConfig;
+    const solution = game.privateConfig?.solution;
+
+    if (
+      !Array.isArray(solution) ||
+      !Array.isArray(config?.entries)
+    ) {
+      return res.status(409).json({
+        success: false,
+        message: "This game has no available answer key.",
+      });
+    }
+
+    const entries = config.entries.map((entry) => {
+      if (
+        !Number.isInteger(entry.row) ||
+        !Number.isInteger(entry.column) ||
+        !Number.isInteger(entry.length) ||
+        entry.length < 1 ||
+        entry.length > 15 ||
+        !["across", "down"].includes(entry.direction)
+      ) {
+        throw new Error("Invalid stored Crossword entry.");
+      }
+
+      let answer = "";
+
+      for (let index = 0; index < entry.length; index += 1) {
+        const row =
+          entry.row + (entry.direction === "down" ? index : 0);
+
+        const column =
+          entry.column + (entry.direction === "across" ? index : 0);
+
+        const letter = solution[row]?.[column];
+
+        if (
+          typeof letter !== "string" ||
+          !/^[A-Z]$/.test(letter)
+        ) {
+          throw new Error("Invalid stored Crossword solution.");
+        }
+
+        answer += letter;
+      }
+
+      return {
+        number: entry.number,
+        direction: entry.direction,
+        clue: entry.clue,
+        answer,
+      };
+    });
+
+    return res.json({
+      success: true,
+      message: "Answer key retrieved successfully.",
+      data: { entries },
+    });
+  } catch (error) {
+    console.error("Crossword answer key error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not retrieve this answer key.",
+    });
+  }
+};
+
 module.exports = {
   getGames,
   createGame,
@@ -563,4 +666,5 @@ module.exports = {
   getGamePlays,
   getCustomerGamePlays,
   deleteGame,
+  getGameAnswerKey,
 };
