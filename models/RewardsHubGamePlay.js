@@ -26,6 +26,46 @@ const RewardsHubGamePlaySchema = new mongoose.Schema(
       min: 0,
     },
 
+        // Written by the backend after selecting a game outcome.
+    // Existing plays do not need an outcome or migration.
+    outcome: {
+      type: new mongoose.Schema(
+        {
+          segmentId: {
+            type: String,
+            default: "",
+            maxlength: 50,
+          },
+          segmentIndex: {
+            type: Number,
+            min: 0,
+            max: 11,
+            validate: {
+              validator: Number.isSafeInteger,
+              message: "Segment index must be a whole number.",
+            },
+          },
+          label: {
+            type: String,
+            required: true,
+            maxlength: 120,
+          },
+          points: {
+            type: Number,
+            required: true,
+            min: 0,
+            max: 1500,
+            validate: {
+              validator: Number.isSafeInteger,
+              message: "Prize points must be a whole number.",
+            },
+          },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
+
     rewardGiven: { type: Boolean, default: false },
     rewardDate: { type: Date, default: null },
   },
