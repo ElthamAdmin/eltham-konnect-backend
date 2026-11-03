@@ -9,6 +9,10 @@ const {
   createSudokuConfig,
   validateSudokuSubmission,
 } = require("../services/rewardsSudokuService");
+const {
+  createWordSearchConfig,
+  validateWordSearchSubmission,
+} = require("../services/rewardsWordSearchService");
 
 const getGames = async (req, res) => {
   try {
@@ -53,7 +57,7 @@ const createGame = async (req, res) => {
     }
 
         if (
-            ["Snake", "Find-a-Word", "Chess", "Crossword"]
+                  ["Snake", "Chess", "Crossword"]
         .includes(gameType)
     ) {
       return res.status(409).json({
@@ -71,13 +75,30 @@ const createGame = async (req, res) => {
         ? options
         : [];
 
+            let interactiveConfig = {};
+
+    if (gameType === "Sudoku") {
+      interactiveConfig = createSudokuConfig();
+    }
+
+    if (gameType === "Find-a-Word") {
+      try {
+        interactiveConfig = createWordSearchConfig(options);
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
+    }
+
         const game = await RewardsHubGame.create({
       title,
       instructions,
       gameType,
-      engineVersion: gameType === "Sudoku" ? 2 : 1,
-      publicConfig:
-        gameType === "Sudoku" ? createSudokuConfig() : {},
+      engineVersion:
+        ["Sudoku", "Find-a-Word"].includes(gameType) ? 2 : 1,
+      publicConfig: interactiveConfig,
       question,
       correctAnswer,
       options: parsedOptions,
@@ -197,6 +218,7 @@ const playGame = async (req, res) => {
         "Spin Wheel",
         "Scratch Card",
         "Sudoku",
+        "Find-a-Word",
       ];
 
       // Interactive games will use their own server validators.
@@ -237,8 +259,21 @@ const playGame = async (req, res) => {
         );
       }
 
+            if (
+        game.gameType === "Find-a-Word" &&
+        !validateWordSearchSubmission(
+          game.publicConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "Find every listed word before submitting. " +
+          "Your play has not been recorded."
+        );
+      }
+
       const isCorrect =
-        game.gameType === "Sudoku"
+                ["Sudoku", "Find-a-Word"].includes(game.gameType)
           ? true
           : requiresAnswer
             ? normalize(submittedAnswer) ===
