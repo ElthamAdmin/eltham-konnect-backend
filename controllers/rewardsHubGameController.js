@@ -33,6 +33,10 @@ const {
   createScratchConfig,
   selectScratchOutcome,
 } = require("../services/rewardsScratchService");
+const {
+  createHuntConfig,
+  validateHuntSubmission,
+} = require("../services/rewardsHuntService");
 
 const getGames = async (req, res) => {
   try {
@@ -146,6 +150,22 @@ const createGame = async (req, res) => {
                 let interactiveConfig = {};
     let privateConfig = {};
         if (
+      gameType === "Scavenger Hunt" &&
+      req.body.huntClues !== undefined
+    ) {
+      try {
+        const hunt = createHuntConfig(req.body.huntClues);
+
+        interactiveConfig = hunt.publicConfig;
+        privateConfig = hunt.privateConfig;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
+    }
+        if (
       gameType === "Scratch Card" &&
       req.body.scratchPrizes !== undefined
     ) {
@@ -230,11 +250,18 @@ const createGame = async (req, res) => {
       }
     }
 
+        const usesPrivateAnswers =
+      gameType === "Crossword" ||
+      (
+        gameType === "Scavenger Hunt" &&
+        interactiveConfig.huntVersion === 1
+      );
+
         const game = await RewardsHubGame.create({
       title,
       instructions,
       gameType,
-                    engineVersion:
+                          engineVersion:
         (
           [
             "Trivia",
@@ -251,15 +278,19 @@ const createGame = async (req, res) => {
           (
             gameType === "Scratch Card" &&
             interactiveConfig.scratchVersion === 1
+          ) ||
+          (
+            gameType === "Scavenger Hunt" &&
+            interactiveConfig.huntVersion === 1
           )
         )
           ? 2
           : 1,
       publicConfig: interactiveConfig,
       privateConfig,
-      question: gameType === "Crossword" ? "" : question,
-      correctAnswer: gameType === "Crossword" ? "" : correctAnswer,
-      options: gameType === "Crossword" ? [] : parsedOptions,
+      question: usesPrivateAnswers ? "" : question,
+      correctAnswer: usesPrivateAnswers ? "" : correctAnswer,
+      options: usesPrivateAnswers ? [] : parsedOptions,
       rewardText,
                   rewardPoints:
         gameType === "Spin Wheel" &&
@@ -411,7 +442,13 @@ const playGame = async (req, res) => {
         );
       }
 
-      const requiresAnswer = answerGames.includes(game.gameType);
+            const isInteractiveHunt =
+        game.gameType === "Scavenger Hunt" &&
+        game.engineVersion === 2;
+
+      const requiresAnswer =
+        answerGames.includes(game.gameType) &&
+        !isInteractiveHunt;
 
       const normalize = (value) =>
         String(value || "").trim().toLowerCase();
@@ -532,7 +569,22 @@ const playGame = async (req, res) => {
         );
       }
 
-                        let wheelOutcome;
+            if (
+        isInteractiveHunt &&
+        !validateHuntSubmission(
+          game.publicConfig,
+          game.privateConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "The hunt is incomplete or one or more answers " +
+          "are incorrect. Check the clues and try again. " +
+          "Your completed play has not been recorded."
+        );
+      }
+
+        let wheelOutcome;
 
       if (
         game.gameType === "Spin Wheel" &&
@@ -566,15 +618,22 @@ const playGame = async (req, res) => {
         }
       }
 
-            const isCorrect = wheelOutcome
+                  const isCorrect = wheelOutcome
         ? wheelOutcome.prizeType !== "No Prize"
-        : ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
-            .includes(game.gameType)
+        : isInteractiveHunt
           ? true
-          : requiresAnswer
-            ? normalize(submittedAnswer) ===
-              normalize(game.correctAnswer)
-            : true;
+          : [
+              "Sudoku",
+              "Find-a-Word",
+              "Snake",
+              "Chess",
+              "Crossword",
+            ].includes(game.gameType)
+            ? true
+            : requiresAnswer
+              ? normalize(submittedAnswer) ===
+                normalize(game.correctAnswer)
+              : true;
 
       const offered = wheelOutcome
         ? wheelOutcome.points
