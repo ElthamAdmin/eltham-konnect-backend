@@ -21,6 +21,10 @@ const {
   createChessConfig,
   validateChessSubmission,
 } = require("../services/rewardsChessService");
+const {
+  createCrosswordConfig,
+  validateCrosswordSubmission,
+} = require("../services/rewardsCrosswordService");
 
 const getGames = async (req, res) => {
   try {
@@ -64,15 +68,6 @@ const createGame = async (req, res) => {
       });
     }
 
-            if (gameType === "Crossword") {
-      return res.status(409).json({
-        success: false,
-        message:
-          "The interactive game engine is being installed. " +
-          "This game type cannot be published yet.",
-      });
-    }
-
     const parsedOptions =
       typeof options === "string"
         ? options.split(",").map((item) => item.trim()).filter(Boolean)
@@ -80,7 +75,14 @@ const createGame = async (req, res) => {
         ? options
         : [];
 
-            let interactiveConfig = {};
+                let interactiveConfig = {};
+    let privateConfig = {};
+
+    if (gameType === "Crossword") {
+      const crossword = createCrosswordConfig();
+      interactiveConfig = crossword.publicConfig;
+      privateConfig = crossword.privateConfig;
+    }
                 if (gameType === "Chess") {
       interactiveConfig = createChessConfig();
     }
@@ -107,24 +109,30 @@ const createGame = async (req, res) => {
       title,
       instructions,
       gameType,
-            engineVersion:
-        ["Sudoku", "Find-a-Word", "Snake", "Chess"].includes(gameType)
+                  engineVersion:
+        ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
+          .includes(gameType)
           ? 2
           : 1,
       publicConfig: interactiveConfig,
-      question,
-      correctAnswer,
-      options: parsedOptions,
+      privateConfig,
+      question: gameType === "Crossword" ? "" : question,
+      correctAnswer: gameType === "Crossword" ? "" : correctAnswer,
+      options: gameType === "Crossword" ? [] : parsedOptions,
       rewardText,
       rewardPoints: Number(rewardPoints || 0),
       startDate: startDate || null,
       endDate: endDate || null,
     });
 
+        const publicGame = game.toObject();
+    delete publicGame.privateConfig;
+    delete publicGame.correctAnswer;
+
     res.status(201).json({
       success: true,
       message: "Game created successfully",
-      data: game,
+      data: publicGame,
     });
   } catch (error) {
     res.status(500).json({
@@ -194,7 +202,8 @@ const playGame = async (req, res) => {
     let result;
 
     await session.withTransaction(async () => {
-      const game = await RewardsHubGame.findById(gameId)
+            const game = await RewardsHubGame.findById(gameId)
+        .select("+privateConfig")
         .session(session);
 
       if (!game || !game.isActive) {
@@ -234,6 +243,7 @@ const playGame = async (req, res) => {
         "Find-a-Word",
         "Snake",
         "Chess",
+        "Crossword",
       ];
 
       // Interactive games will use their own server validators.
@@ -313,8 +323,23 @@ const playGame = async (req, res) => {
         );
       }
 
-            const isCorrect =
-        ["Sudoku", "Find-a-Word", "Snake", "Chess"]
+            if (
+        game.gameType === "Crossword" &&
+        !validateCrosswordSubmission(
+          game.publicConfig,
+          game.privateConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "The Crossword is incomplete or incorrect. " +
+          "Check the clues and crossing letters, then try again. " +
+          "Your play has not been recorded."
+        );
+      }
+
+                  const isCorrect =
+        ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
           .includes(game.gameType)
           ? true
           : requiresAnswer
