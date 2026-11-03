@@ -5,6 +5,10 @@ const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
 const RewardsHubGame = require("../models/RewardsHubGame");
 const RewardsHubGamePlay = require("../models/RewardsHubGamePlay");
+const {
+  createSudokuConfig,
+  validateSudokuSubmission,
+} = require("../services/rewardsSudokuService");
 
 const getGames = async (req, res) => {
   try {
@@ -49,7 +53,7 @@ const createGame = async (req, res) => {
     }
 
         if (
-      ["Sudoku", "Snake", "Find-a-Word", "Chess", "Crossword"]
+            ["Snake", "Find-a-Word", "Chess", "Crossword"]
         .includes(gameType)
     ) {
       return res.status(409).json({
@@ -67,10 +71,13 @@ const createGame = async (req, res) => {
         ? options
         : [];
 
-    const game = await RewardsHubGame.create({
+        const game = await RewardsHubGame.create({
       title,
       instructions,
       gameType,
+      engineVersion: gameType === "Sudoku" ? 2 : 1,
+      publicConfig:
+        gameType === "Sudoku" ? createSudokuConfig() : {},
       question,
       correctAnswer,
       options: parsedOptions,
@@ -185,10 +192,11 @@ const playGame = async (req, res) => {
         "Match Image",
       ];
 
-      const existingGameTypes = [
+            const existingGameTypes = [
         ...answerGames,
         "Spin Wheel",
         "Scratch Card",
+        "Sudoku",
       ];
 
       // Interactive games will use their own server validators.
@@ -216,9 +224,26 @@ const playGame = async (req, res) => {
         );
       }
 
-      const isCorrect = requiresAnswer
-        ? normalize(submittedAnswer) === normalize(game.correctAnswer)
-        : true;
+            if (
+        game.gameType === "Sudoku" &&
+        !validateSudokuSubmission(
+          game.publicConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "The Sudoku board is incomplete or incorrect. " +
+          "Check the rows, columns and boxes, then try again."
+        );
+      }
+
+      const isCorrect =
+        game.gameType === "Sudoku"
+          ? true
+          : requiresAnswer
+            ? normalize(submittedAnswer) ===
+              normalize(game.correctAnswer)
+            : true;
 
       const offered = Number(game.rewardPoints || 0);
 
