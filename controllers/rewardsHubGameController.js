@@ -75,8 +75,85 @@ const createGame = async (req, res) => {
         ? options
         : [];
 
+            if (gameType === "Trivia") {
+      const normalizedAnswer = String(correctAnswer || "")
+        .trim()
+        .toLowerCase();
+
+      const validOptions =
+        parsedOptions.length >= 2 &&
+        parsedOptions.length <= 6 &&
+        parsedOptions.every(
+          (option) =>
+            typeof option === "string" &&
+            option.trim().length > 0 &&
+            option.trim().length <= 120
+        );
+
+      if (
+        typeof question !== "string" ||
+        !question.trim() ||
+        question.trim().length > 500
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Trivia needs a question of 1–500 characters.",
+        });
+      }
+
+      if (!validOptions) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Trivia needs 2–6 answer choices. " +
+            "Each choice must contain 1–120 characters.",
+        });
+      }
+
+      const normalizedOptions = parsedOptions.map(
+        (option) => option.trim().toLowerCase()
+      );
+
+      if (
+        new Set(normalizedOptions).size !==
+        normalizedOptions.length
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Trivia answer choices must be distinct.",
+        });
+      }
+
+      if (!normalizedOptions.includes(normalizedAnswer)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "The correct answer must match one of " +
+            "the Trivia answer choices.",
+        });
+      }
+    }
+
                 let interactiveConfig = {};
     let privateConfig = {};
+        if (gameType === "Trivia") {
+      interactiveConfig = {
+        presentation: "answer-cards",
+        palette: [
+          "#2563eb",
+          "#ea580c",
+          "#7c3aed",
+          "#0f766e",
+          "#be185d",
+          "#4338ca",
+        ],
+        rules:
+          "Choose one answer, then submit. " +
+          "You have one recorded attempt for this game. " +
+          "Only a correct answer qualifies for its reward.",
+      };
+    }
 
         if (gameType === "Crossword") {
       try {
@@ -119,9 +196,15 @@ const createGame = async (req, res) => {
       title,
       instructions,
       gameType,
-                  engineVersion:
-        ["Sudoku", "Find-a-Word", "Snake", "Chess", "Crossword"]
-          .includes(gameType)
+                        engineVersion:
+        [
+          "Trivia",
+          "Sudoku",
+          "Find-a-Word",
+          "Snake",
+          "Chess",
+          "Crossword",
+        ].includes(gameType)
           ? 2
           : 1,
       publicConfig: interactiveConfig,
@@ -279,6 +362,44 @@ const playGame = async (req, res) => {
             ? "This game has no configured answer. Please contact support."
             : "Please enter or select your answer."
         );
+      }
+
+            if (
+        game.gameType === "Trivia" &&
+        game.engineVersion === 2
+      ) {
+        const choices = Array.isArray(game.options)
+          ? game.options
+          : [];
+
+        if (
+          choices.length < 2 ||
+          choices.length > 6 ||
+          !choices.every(
+            (choice) => typeof choice === "string"
+          ) ||
+          !choices.some(
+            (choice) =>
+              normalize(choice) === normalize(game.correctAnswer)
+          )
+        ) {
+          fail(
+            "This Trivia game's answer choices need staff review.",
+            409
+          );
+        }
+
+        if (
+          !choices.some(
+            (choice) =>
+              normalize(choice) === normalize(submittedAnswer)
+          )
+        ) {
+          fail(
+            "Select one of the displayed Trivia answers. " +
+            "Your attempt has not been recorded."
+          );
+        }
       }
 
             if (
