@@ -62,6 +62,41 @@ const RewardsHubGameSchema = new mongoose.Schema(
       },
     },
 
+        // Playing and earning game score are separate from rewards.
+    // Existing games keep rewards enabled with a once-per-game limit.
+    rewardsEnabled: {
+      type: Boolean,
+      default: true,
+    },
+
+    rewardFrequency: {
+      type: String,
+      enum: ["Once Per Game", "Daily"],
+      default: "Once Per Game",
+    },
+
+    // Daily reward limits use Jamaica calendar dates.
+    rewardTimeZone: {
+      type: String,
+      enum: ["America/Jamaica"],
+      default: "America/Jamaica",
+    },
+
+    // Separate from redeemable EK Points.
+    // The backend awards this score only for a validated success.
+    scorePerSuccess: {
+      type: Number,
+      default: 100,
+      min: 0,
+      max: 10000,
+      validate: {
+        validator: Number.isSafeInteger,
+        message:
+          "Game score must be a whole number from 0 to 10,000.",
+      },
+    },
+
+
     isActive: { type: Boolean, default: true },
     startDate: { type: Date, default: null },
     endDate: { type: Date, default: null },
