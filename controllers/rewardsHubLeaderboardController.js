@@ -3,24 +3,45 @@ const RewardsHubEntry = require("../models/RewardsHubEntry");
 
 const getLeaderboard = async (req, res) => {
   try {
-    // 🎮 GAME PLAY LEADERBOARD
-    // 🎮 GAME PLAY LEADERBOARD
-const gameStats = await RewardsHubGamePlay.aggregate([
-  {
-    $group: {
-      _id: "$customerEkonId",
-      totalGames: { $sum: 1 },
-      correctAnswers: {
-        $sum: { $cond: ["$isCorrect", 1, 0] },
+        // Rank game players by saved game score.
+    // Practice plays count toward score, but not reward earnings.
+    const gameStats = await RewardsHubGamePlay.aggregate([
+      {
+        $group: {
+          _id: "$customerEkonId",
+          totalScore: {
+            $sum: { $ifNull: ["$scoreEarned", 0] },
+          },
+          totalGames: { $sum: 1 },
+          correctAnswers: {
+            $sum: {
+              $cond: [
+                { $eq: ["$isCorrect", true] },
+                1,
+                0,
+              ],
+            },
+          },
+          rewardsEarned: {
+            $sum: {
+              $cond: [
+                { $eq: ["$rewardGiven", true] },
+                1,
+                0,
+              ],
+            },
+          },
+        },
       },
-      rewardsEarned: {
-        $sum: { $cond: ["$rewardGiven", 1, 0] },
+      {
+        $sort: {
+          totalScore: -1,
+          _id: 1,
+        },
       },
-    },
-  },
-  { $sort: { correctAnswers: -1, totalGames: -1 } },
-  { $limit: 10 },
-]);
+      { $limit: 10 },
+    ]);
+
 
 // 🎁 REWARDS HUB ENTRY LEADERBOARD
 const entryStats = await RewardsHubEntry.aggregate([
