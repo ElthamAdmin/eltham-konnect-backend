@@ -17,6 +17,7 @@ const {
   getCustomerGamePlays,
   deleteGame,
   getGameAnswerKey,
+  updateGameSettings,
 } = require("../controllers/rewardsHubGameController");
 
 router.get(
@@ -49,6 +50,14 @@ router.get(
   protectCustomer,
   getCustomerGamePlays
 );
+
+router.patch(
+  "/:gameId/settings",
+  protect,
+  requirePermission("marketing"),
+  updateGameSettings
+);
+
 
 router.delete(
   "/:id",

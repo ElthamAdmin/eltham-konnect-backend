@@ -1273,6 +1273,142 @@ const getGameAnswerKey = async (req, res) => {
   }
 };
 
+const updateGameSettings = async (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  try {
+    const { gameId } = req.params;
+
+    if (
+      typeof gameId !== "string" ||
+      !/^[a-f0-9]{24}$/i.test(gameId)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid game ID is required.",
+      });
+    }
+
+    const body = req.body;
+
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return res.status(400).json({
+        success: false,
+        message: "Game settings are required.",
+      });
+    }
+
+    const allowedFields = [
+      "rewardsEnabled",
+      "rewardFrequency",
+      "scorePerSuccess",
+    ];
+
+    const fields = Object.keys(body);
+
+    if (
+      fields.length === 0 ||
+      fields.some((field) => !allowedFields.includes(field))
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only rewardsEnabled, rewardFrequency and " +
+          "scorePerSuccess can be updated here.",
+      });
+    }
+
+    const updates = {};
+
+    if (Object.prototype.hasOwnProperty.call(body, "rewardsEnabled")) {
+      if (typeof body.rewardsEnabled !== "boolean") {
+        return res.status(400).json({
+          success: false,
+          message: "Rewards enabled must be true or false.",
+        });
+      }
+
+      updates.rewardsEnabled = body.rewardsEnabled;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, "rewardFrequency")) {
+      if (
+        !["Once Per Game", "Daily"].includes(body.rewardFrequency)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Select Once Per Game or Daily.",
+        });
+      }
+
+      updates.rewardFrequency = body.rewardFrequency;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, "scorePerSuccess")) {
+      const rawScore = body.scorePerSuccess;
+
+      const validFormat =
+        typeof rawScore === "number" ||
+        (
+          typeof rawScore === "string" &&
+          /^\d+$/.test(rawScore.trim())
+        );
+
+      const score = Number(rawScore);
+
+      if (
+        !validFormat ||
+        !Number.isSafeInteger(score) ||
+        score < 0 ||
+        score > 10000
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Game score must be a whole number from 0 to 10,000.",
+        });
+      }
+
+      updates.scorePerSuccess = score;
+    }
+
+    const game = await RewardsHubGame.findOneAndUpdate(
+      {
+        _id: gameId,
+        isActive: true,
+      },
+      { $set: updates },
+      {
+        new: true,
+        runValidators: true,
+      }
+    ).select("-correctAnswer -privateConfig");
+
+    if (!game) {
+      return res.status(404).json({
+        success: false,
+        message: "Active game not found.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message:
+        "Game settings updated. Saved scores and rewards " +
+        "have not been changed.",
+      data: game,
+    });
+  } catch (error) {
+    console.error("Game settings update error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not update the game settings.",
+    });
+  }
+};
+
+
 module.exports = {
   getGames,
   createGame,
@@ -1281,4 +1417,5 @@ module.exports = {
   getCustomerGamePlays,
   deleteGame,
   getGameAnswerKey,
+  updateGameSettings,
 };
