@@ -84,6 +84,36 @@ const createGame = async (req, res) => {
       });
     }
 
+        const rewardsEnabled = req.body.rewardsEnabled ?? true;
+    const rewardFrequency =
+      req.body.rewardFrequency ?? "Once Per Game";
+
+    const rawScore = req.body.scorePerSuccess ?? 100;
+    const scorePerSuccess = Number(rawScore);
+
+    if (
+      typeof rewardsEnabled !== "boolean" ||
+      !["Once Per Game", "Daily"].includes(rewardFrequency) ||
+      !(
+        typeof rawScore === "number" ||
+        (
+          typeof rawScore === "string" &&
+          /^\d+$/.test(rawScore.trim())
+        )
+      ) ||
+      !Number.isSafeInteger(scorePerSuccess) ||
+      scorePerSuccess < 0 ||
+      scorePerSuccess > 10000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Select valid reward settings and a whole-number " +
+          "game score from 0 to 10,000.",
+      });
+    }
+
+
     const parsedOptions =
       typeof options === "string"
         ? options.split(",").map((item) => item.trim()).filter(Boolean)
@@ -228,10 +258,10 @@ const createGame = async (req, res) => {
           "#be185d",
           "#4338ca",
         ],
-        rules:
+                rules:
           "Choose one answer, then submit. " +
-          "You have one recorded attempt for this game. " +
-          "Only a correct answer qualifies for its reward.",
+          "Correct answers earn game score. " +
+          "Reward eligibility follows this game's reward settings.",
       };
     }
 
@@ -339,6 +369,12 @@ const createGame = async (req, res) => {
                 )
               )
             : Number(rewardPoints || 0),
+
+                  rewardsEnabled,
+      rewardFrequency,
+      rewardTimeZone: "America/Jamaica",
+      scorePerSuccess,
+
       startDate: startDate || null,
       endDate: endDate || null,
     });
@@ -362,7 +398,7 @@ const createGame = async (req, res) => {
 };
 
 const playGame = async (req, res) => {
-  const session = await mongoose.startSession();
+  let session;
 
   const fail = (message, status = 400) => {
     const error = new Error(message);
@@ -373,7 +409,19 @@ const playGame = async (req, res) => {
   try {
     const customerEkonId = req.user?.ekonId;
     const customerId = req.user?.customerId;
-    const { gameId } = req.body;
+        const { gameId, attemptId } = req.body;
+
+    const hasAttemptId = attemptId !== undefined;
+
+    if (
+      hasAttemptId &&
+      (
+        typeof attemptId !== "string" ||
+        !/^[a-zA-Z0-9_-]{16,100}$/.test(attemptId)
+      )
+    ) {
+      fail("A valid game attempt ID is required.");
+    }
 
     if (!customerId || !customerEkonId) {
       fail("Customer authentication is required.", 401);
@@ -401,23 +449,60 @@ const playGame = async (req, res) => {
       fail("The submitted answer is too long.");
     }
 
-    // A stable document ID uses MongoDB's existing unique _id
-    // index. Old play records do not need to be deleted or migrated.
+        // New players supply one ID per attempt and reuse it
+    // when retrying that same submission.
+    // Older players retain their original one-play document ID.
     const claimId = new mongoose.Types.ObjectId(
       crypto
         .createHash("sha256")
         .update(
-          JSON.stringify([
-            "rewards-game-play-v1",
-            gameId.toLowerCase(),
-            customerEkonId,
-          ])
+          JSON.stringify(
+            hasAttemptId
+              ? [
+                  "rewards-game-attempt-v2",
+                  gameId.toLowerCase(),
+                  customerEkonId,
+                  attemptId,
+                ]
+              : [
+                  "rewards-game-play-v1",
+                  gameId.toLowerCase(),
+                  customerEkonId,
+                ]
+          )
         )
         .digest("hex")
         .slice(0, 24)
     );
 
+    const buildResult = (
+      play,
+      game,
+      pointsBalance,
+      replayed = false
+    ) => ({
+      play,
+      gameType: game.gameType,
+      isCorrect: play.isCorrect,
+      playMode: play.playMode || "Legacy",
+      scoreEarned: play.scoreEarned || 0,
+      rewardText:
+        play.playMode === "Practice"
+          ? ""
+          : play.outcome
+            ? play.outcome.label
+            : play.isCorrect
+              ? game.rewardText
+              : "",
+      rewardPoints: play.pointsAwarded || 0,
+      rewardPointsOffered: play.rewardPointsOffered || 0,
+      pointsBalance,
+      replayed,
+      ...(play.outcome ? { outcome: play.outcome } : {}),
+    });
+
     let result;
+    session = await mongoose.startSession();
 
     await session.withTransaction(async () => {
             const game = await RewardsHubGame.findById(gameId)
@@ -438,14 +523,125 @@ const playGame = async (req, res) => {
         fail("This game has ended.");
       }
 
-      const existingPlay = await RewardsHubGamePlay.findOne({
+            // Every submission writes this customer document.
+      // Concurrent transactions for this customer therefore
+      // conflict and retry before checking reward eligibility.
+      // This also protects zero-point and physical-prize plays.
+      const customer = await Customer.findOneAndUpdate(
+        {
+          _id: customerId,
+          ekonId: customerEkonId,
+          status: "Active",
+        },
+        { $inc: { __v: 1 } },
+        { new: true, session }
+      );
+
+      if (!customer) {
+        fail("This customer session is no longer active.", 401);
+      }
+
+      const currentBalance = Number(customer.pointsBalance || 0);
+
+      if (
+        !Number.isSafeInteger(currentBalance) ||
+        currentBalance < 0 ||
+        currentBalance > 1500
+      ) {
+        fail("Your points balance needs staff review.", 409);
+      }
+
+      const duplicateAttempt = await RewardsHubGamePlay.findOne({
+        _id: claimId,
         gameId: game._id,
         customerEkonId,
       }).session(session);
 
-      if (existingPlay) {
-        fail("You already played this game.", 409);
+      if (duplicateAttempt) {
+        result = buildResult(
+          duplicateAttempt,
+          game,
+          currentBalance,
+          true
+        );
+        return;
       }
+
+      // Keep older customer players compatible during rollout.
+      // They cannot create repeat attempts without an attempt ID.
+      if (!hasAttemptId) {
+        const previousPlay = await RewardsHubGamePlay.findOne({
+          gameId: game._id,
+          customerEkonId,
+        }).session(session);
+
+        if (previousPlay) {
+          fail(
+            "You already played this game. " +
+            "The updated player is required to play again.",
+            409
+          );
+        }
+      }
+
+      const rewardsEnabled = game.rewardsEnabled ?? true;
+      const rewardFrequency =
+        game.rewardFrequency || "Once Per Game";
+      const configuredScore = game.scorePerSuccess ?? 100;
+
+      if (
+        typeof rewardsEnabled !== "boolean" ||
+        !["Once Per Game", "Daily"].includes(rewardFrequency) ||
+        !Number.isSafeInteger(configuredScore) ||
+        configuredScore < 0 ||
+        configuredScore > 10000
+      ) {
+        fail("This game's play settings need staff review.", 409);
+      }
+
+      const rewardQuery = {
+        gameId: game._id,
+        customerEkonId,
+        $or: [
+          { playMode: "Standard" },
+          { playMode: "Legacy" },
+          { playMode: { $exists: false } },
+          { playMode: null },
+        ],
+      };
+
+      if (rewardFrequency === "Daily") {
+        const dateParts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/Jamaica",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).formatToParts(now);
+
+        const part = (type) =>
+          dateParts.find((item) => item.type === type).value;
+
+        const dayStart = new Date(
+          `${part("year")}-${part("month")}-${part("day")}` +
+          "T00:00:00-05:00"
+        );
+
+        rewardQuery.createdAt = {
+          $gte: dayStart,
+          $lt: new Date(dayStart.getTime() + 24 * 60 * 60 * 1000),
+        };
+      }
+
+      const previousRewardAttempt = rewardsEnabled
+        ? await RewardsHubGamePlay.findOne(rewardQuery)
+            .select("_id")
+            .session(session)
+        : null;
+
+      const rewardEligible =
+        rewardsEnabled && !previousRewardAttempt;
+
+      const playMode = rewardEligible ? "Standard" : "Practice";
 
       const answerGames = [
         "Trivia",
@@ -687,41 +883,44 @@ const playGame = async (req, res) => {
                 normalize(game.correctAnswer)
               : true;
 
-      const offered = wheelOutcome
+            const configuredReward = wheelOutcome
         ? wheelOutcome.points
         : Number(game.rewardPoints || 0);
 
       if (
-        !Number.isSafeInteger(offered) ||
-        offered < 0 ||
-        offered > 1500
+        !Number.isSafeInteger(configuredReward) ||
+        configuredReward < 0 ||
+        configuredReward > 1500
       ) {
         fail("This game's points reward needs staff review.", 409);
       }
 
-      const customer = await Customer.findOne({
-        _id: customerId,
-        ekonId: customerEkonId,
-        status: "Active",
-      }).session(session);
+      // Wheel/Scratch earn game score for completing the activity,
+      // including a No Prize result. Other games require success.
+      // Older players do not submit repeatable scored attempts yet.
+      const scoreEarned =
+        hasAttemptId && (wheelOutcome || isCorrect)
+          ? configuredScore
+          : 0;
 
-      if (!customer) {
-        fail("This customer session is no longer active.", 401);
+      const offered = rewardEligible ? configuredReward : 0;
+
+      const pointsAwarded =
+        rewardEligible && isCorrect
+          ? Math.min(offered, Math.max(0, 1500 - currentBalance))
+          : 0;
+
+      // A practice result is a simulation, never a deliverable prize.
+      // Keep its label/type for display, but remove reward value
+      // and pending fulfilment.
+      if (wheelOutcome && !rewardEligible) {
+        wheelOutcome = {
+          ...wheelOutcome,
+          points: 0,
+          fulfilmentStatus: "Not Required",
+        };
       }
 
-      const currentBalance = Number(customer.pointsBalance || 0);
-
-      if (
-        !Number.isFinite(currentBalance) ||
-        currentBalance < 0 ||
-        currentBalance > 1500
-      ) {
-        fail("Your points balance needs staff review.", 409);
-      }
-
-      const pointsAwarded = isCorrect
-        ? Math.min(offered, Math.max(0, 1500 - currentBalance))
-        : 0;
 
       const [play] = await RewardsHubGamePlay.create(
         [{
@@ -729,6 +928,9 @@ const playGame = async (req, res) => {
           gameId: game._id,
           customerEkonId: customer.ekonId,
           customerName: customer.name,
+                    ...(hasAttemptId ? { attemptId } : {}),
+          playMode,
+          scoreEarned,
                     submittedAnswer: wheelOutcome
             ? wheelOutcome.label
             : submittedAnswer,
@@ -774,7 +976,8 @@ const playGame = async (req, res) => {
         );
       }
 
-            if (
+                  if (
+        rewardEligible &&
         wheelOutcome?.fulfilmentStatus === "Pending"
       ) {
         await CustomerNotification.create(
@@ -797,27 +1000,25 @@ const playGame = async (req, res) => {
         );
       }
 
-            result = {
-                play,
-        gameType: game.gameType,
-        isCorrect,
-        rewardText: wheelOutcome
-          ? wheelOutcome.label
-          : isCorrect
-            ? game.rewardText
-            : "",
-        rewardPoints: pointsAwarded,
-        rewardPointsOffered: offered,
-        pointsBalance: currentBalance + pointsAwarded,
-        ...(wheelOutcome
-          ? { outcome: wheelOutcome }
-          : {}),
-      };
+                  result = buildResult(
+        play,
+        game,
+        currentBalance + pointsAwarded
+      );
     });
 
             let message;
 
-    if (result.outcome) {
+        if (result.replayed) {
+      message =
+        "This attempt was already saved. " +
+        "No additional game score, EK Points or prize was awarded.";
+    } else if (result.playMode === "Practice") {
+      message =
+        `Play recorded. ${result.scoreEarned} game score added. ` +
+        "This was a practice play with no reward awarded. " +
+        "You can play again.";
+    } else if (result.outcome) {
       const activity =
         result.gameType === "Scratch Card"
           ? "Scratch Card"
@@ -861,6 +1062,11 @@ const playGame = async (req, res) => {
             : "Game completed successfully.";
     }
 
+        if (!result.replayed && result.playMode !== "Practice") {
+      message += ` Game score added: ${result.scoreEarned}.`;
+    }
+
+
     return res.json({
       success: true,
       message,
@@ -880,7 +1086,9 @@ const playGame = async (req, res) => {
           : "Could not confirm the game submission. Refresh your game history before retrying.",
     });
   } finally {
-    await session.endSession();
+        if (session) {
+      await session.endSession();
+    }
   }
 };
 
