@@ -37,6 +37,10 @@ const {
   createHuntConfig,
   validateHuntSubmission,
 } = require("../services/rewardsHuntService");
+const {
+  createMatchImageConfig,
+  validateMatchImageSubmission,
+} = require("../services/rewardsMatchImageService");
 
 const getGames = async (req, res) => {
   try {
@@ -150,6 +154,24 @@ const createGame = async (req, res) => {
                 let interactiveConfig = {};
     let privateConfig = {};
         if (
+      gameType === "Match Image" &&
+      req.body.imagePairs !== undefined
+    ) {
+      try {
+        const matching = createMatchImageConfig(
+          req.body.imagePairs
+        );
+
+        interactiveConfig = matching.publicConfig;
+        privateConfig = matching.privateConfig;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: error.message,
+        });
+      }
+    }
+        if (
       gameType === "Scavenger Hunt" &&
       req.body.huntClues !== undefined
     ) {
@@ -250,12 +272,17 @@ const createGame = async (req, res) => {
       }
     }
 
-        const usesPrivateAnswers =
+            const usesPrivateAnswers =
       gameType === "Crossword" ||
       (
         gameType === "Scavenger Hunt" &&
         interactiveConfig.huntVersion === 1
+      ) ||
+      (
+        gameType === "Match Image" &&
+        interactiveConfig.matchImageVersion === 1
       );
+
 
         const game = await RewardsHubGame.create({
       title,
@@ -279,9 +306,13 @@ const createGame = async (req, res) => {
             gameType === "Scratch Card" &&
             interactiveConfig.scratchVersion === 1
           ) ||
-          (
+                    (
             gameType === "Scavenger Hunt" &&
             interactiveConfig.huntVersion === 1
+          ) ||
+          (
+            gameType === "Match Image" &&
+            interactiveConfig.matchImageVersion === 1
           )
         )
           ? 2
@@ -446,9 +477,14 @@ const playGame = async (req, res) => {
         game.gameType === "Scavenger Hunt" &&
         game.engineVersion === 2;
 
+            const isInteractiveMatchImage =
+        game.gameType === "Match Image" &&
+        game.engineVersion === 2;
+
       const requiresAnswer =
         answerGames.includes(game.gameType) &&
-        !isInteractiveHunt;
+        !isInteractiveHunt &&
+        !isInteractiveMatchImage;
 
       const normalize = (value) =>
         String(value || "").trim().toLowerCase();
@@ -584,6 +620,22 @@ const playGame = async (req, res) => {
         );
       }
 
+            if (
+        isInteractiveMatchImage &&
+        !validateMatchImageSubmission(
+          game.publicConfig,
+          game.privateConfig,
+          submittedAnswer
+        )
+      ) {
+        fail(
+          "One or more image matches are missing or incorrect. " +
+          "Check your matches and try again. " +
+          "Your completed play has not been recorded."
+        );
+      }
+
+
         let wheelOutcome;
 
       if (
@@ -620,7 +672,7 @@ const playGame = async (req, res) => {
 
                   const isCorrect = wheelOutcome
         ? wheelOutcome.prizeType !== "No Prize"
-        : isInteractiveHunt
+                : (isInteractiveHunt || isInteractiveMatchImage)
           ? true
           : [
               "Sudoku",
