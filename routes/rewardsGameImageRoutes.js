@@ -12,11 +12,11 @@ const router = express.Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: {
+    limits: {
     fileSize: 5 * 1024 * 1024,
     files: 1,
     fields: 0,
-    parts: 1,
+    parts: 2,
   },
   fileFilter: (req, file, callback) => {
     if (
