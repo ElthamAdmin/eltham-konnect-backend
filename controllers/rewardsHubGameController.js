@@ -310,7 +310,7 @@ const createGame = async (req, res) => {
       ) ||
       (
         gameType === "Match Image" &&
-        interactiveConfig.matchImageVersion === 1
+        [1, 2].includes(interactiveConfig.matchImageVersion)
       );
 
 
@@ -342,7 +342,7 @@ const createGame = async (req, res) => {
           ) ||
           (
             gameType === "Match Image" &&
-            interactiveConfig.matchImageVersion === 1
+            [1, 2].includes(interactiveConfig.matchImageVersion)
           )
         )
           ? 2
@@ -825,9 +825,10 @@ const playGame = async (req, res) => {
         )
       ) {
         fail(
-          "One or more image matches are missing or incorrect. " +
-          "Check your matches and try again. " +
-          "Your completed play has not been recorded."
+                    "The image game is incomplete or its submitted " +
+          "matches are invalid. Complete every matching pair " +
+          "before submitting. Your completed play has not " +
+          "been recorded."
         );
       }
 

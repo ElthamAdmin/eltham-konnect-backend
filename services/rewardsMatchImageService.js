@@ -1,8 +1,5 @@
 const crypto = require("crypto");
 
-const normalize = (value) =>
-  value.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
-
 const shuffle = (items) => {
   const result = [...items];
 
@@ -16,98 +13,93 @@ const shuffle = (items) => {
 
 const createMatchImageConfig = (input) => {
   if (!Array.isArray(input) || input.length < 3 || input.length > 8) {
-    throw new Error("Enter 3–8 image-and-label pairs.");
+    throw new Error("Upload 3–8 different images for the memory game.");
   }
 
-  const labelsSeen = new Set();
   const imagesSeen = new Set();
+  const cards = [];
+  const memoryPairs = [];
 
-  const pairs = input.map((item, index) => {
-    const label =
-      typeof item?.label === "string" ? item.label.trim() : "";
-
+  input.forEach((item) => {
     const imageUrl =
-      typeof item?.imageUrl === "string" ? item.imageUrl.trim() : "";
-
-    if (!label || label.length > 80) {
-      throw new Error("Every image needs a label of 1–80 characters.");
-    }
+      typeof item?.imageUrl === "string"
+        ? item.imageUrl.trim()
+        : "";
 
     if (!imageUrl || imageUrl.length > 1000) {
-      throw new Error("Every image needs an HTTPS image URL.");
+      throw new Error("Every image needs a valid uploaded image URL.");
     }
 
-    let parsedUrl;
+    let url;
 
     try {
-      parsedUrl = new URL(imageUrl);
+      url = new URL(imageUrl);
     } catch {
-      throw new Error("Enter a valid HTTPS image URL for every image.");
+      throw new Error("Every image needs a valid HTTPS image URL.");
     }
 
     if (
-      parsedUrl.protocol !== "https:" ||
-      parsedUrl.username ||
-      parsedUrl.password ||
-      !parsedUrl.hostname
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      !url.hostname ||
+      url.href.length > 1000
     ) {
       throw new Error(
-        "Image URLs must use HTTPS and must not contain login details."
+        "Image URLs must use HTTPS without login details."
       );
     }
 
-    const normalizedLabel = normalize(label);
-    const normalizedUrl = parsedUrl.href;
-
-    if (labelsSeen.has(normalizedLabel)) {
-      throw new Error("Use a different label for every image.");
+    if (imagesSeen.has(url.href)) {
+      throw new Error(
+        "Upload each image once. The game creates its matching copy."
+      );
     }
 
-    if (imagesSeen.has(normalizedUrl)) {
-      throw new Error("Use a different image URL for every pair.");
-    }
+    imagesSeen.add(url.href);
 
-    labelsSeen.add(normalizedLabel);
-    imagesSeen.add(normalizedUrl);
+    const firstCardId = crypto.randomBytes(16).toString("hex");
+    const secondCardId = crypto.randomBytes(16).toString("hex");
 
-    return {
-      imageId: `image-${index + 1}`,
-      labelId: `label-${crypto.randomUUID()}`,
-      imageUrl: normalizedUrl,
-      label,
-    };
+    cards.push(
+      {
+        id: firstCardId,
+        imageUrl: url.href,
+        alt: "Memory card image",
+      },
+      {
+        id: secondCardId,
+        imageUrl: url.href,
+        alt: "Memory card image",
+      }
+    );
+
+    memoryPairs.push({
+      cardIds: [firstCardId, secondCardId],
+    });
   });
 
   return {
     publicConfig: {
-      matchImageVersion: 1,
-      images: pairs.map((pair, index) => ({
-        id: pair.imageId,
-        imageUrl: pair.imageUrl,
-        alt: `Matching image ${index + 1}`,
-      })),
-      labels: shuffle(
-        pairs.map((pair) => ({
-          id: pair.labelId,
-          text: pair.label,
-        }))
-      ),
+      matchImageVersion: 2,
+      presentation: "memory-pairs",
+      pairCount: input.length,
+      cards: shuffle(cards),
+      mismatchDelayMs: 1000,
       rules:
-        "Match every image to its correct label. " +
-        "Use each label once, then submit all matches. " +
-        "Incorrect matches can be corrected before completion. " +
-        "One completed play is recorded per customer.",
+        "Reveal two cards at a time. Matching images stay revealed. " +
+        "Different images turn face down again. " +
+        "Match every pair to complete the game. " +
+        "Play again reshuffles the cards. " +
+        "Completed games earn game score; reward limits still apply.",
     },
     privateConfig: {
-      imageMatches: pairs.map((pair) => ({
-        imageId: pair.imageId,
-        labelId: pair.labelId,
-      })),
+      memoryPairs,
     },
   };
 };
 
-const validateMatchImageSubmission = (
+const validateLegacyMatchImageSubmission = (
   publicConfig,
   privateConfig,
   submittedAnswer
@@ -197,6 +189,128 @@ const validateMatchImageSubmission = (
     return false;
   }
 };
+
+const validateMatchImageSubmission = (
+  publicConfig,
+  privateConfig,
+  submittedAnswer
+) => {
+  // Preserve validation for previously created label-matching games.
+  if (publicConfig?.matchImageVersion === 1) {
+    return validateLegacyMatchImageSubmission(
+      publicConfig,
+      privateConfig,
+      submittedAnswer
+    );
+  }
+
+  try {
+    const cards = publicConfig?.cards;
+    const pairs = privateConfig?.memoryPairs;
+    const pairCount = publicConfig?.pairCount;
+
+    if (
+      publicConfig?.matchImageVersion !== 2 ||
+      publicConfig?.presentation !== "memory-pairs" ||
+      !Number.isInteger(pairCount) ||
+      pairCount < 3 ||
+      pairCount > 8 ||
+      !Array.isArray(cards) ||
+      cards.length !== pairCount * 2 ||
+      !Array.isArray(pairs) ||
+      pairs.length !== pairCount ||
+      typeof submittedAnswer !== "string" ||
+      submittedAnswer.length > 2000
+    ) {
+      return false;
+    }
+
+    const cardMap = new Map();
+
+    for (const card of cards) {
+      if (
+        typeof card?.id !== "string" ||
+        !/^[a-f0-9]{32}$/.test(card.id) ||
+        cardMap.has(card.id) ||
+        typeof card.imageUrl !== "string" ||
+        !card.imageUrl
+      ) {
+        return false;
+      }
+
+      cardMap.set(card.id, card);
+    }
+
+    const partners = new Map();
+    const imageUrls = new Set();
+
+    for (const pair of pairs) {
+      if (
+        !Array.isArray(pair?.cardIds) ||
+        pair.cardIds.length !== 2
+      ) {
+        return false;
+      }
+
+      const [firstId, secondId] = pair.cardIds;
+      const first = cardMap.get(firstId);
+      const second = cardMap.get(secondId);
+
+      if (
+        !first ||
+        !second ||
+        firstId === secondId ||
+        partners.has(firstId) ||
+        partners.has(secondId) ||
+        first.imageUrl !== second.imageUrl ||
+        imageUrls.has(first.imageUrl)
+      ) {
+        return false;
+      }
+
+      partners.set(firstId, secondId);
+      partners.set(secondId, firstId);
+      imageUrls.add(first.imageUrl);
+    }
+
+    if (partners.size !== cards.length) return false;
+
+    const submitted = JSON.parse(submittedAnswer);
+
+    if (
+      !Array.isArray(submitted) ||
+      submitted.length !== pairCount
+    ) {
+      return false;
+    }
+
+    const usedCards = new Set();
+
+    for (const match of submitted) {
+      const firstId = match?.firstCardId;
+      const secondId = match?.secondCardId;
+
+      if (
+        typeof firstId !== "string" ||
+        typeof secondId !== "string" ||
+        !partners.has(firstId) ||
+        partners.get(firstId) !== secondId ||
+        usedCards.has(firstId) ||
+        usedCards.has(secondId)
+      ) {
+        return false;
+      }
+
+      usedCards.add(firstId);
+      usedCards.add(secondId);
+    }
+
+    return usedCards.size === cards.length;
+  } catch {
+    return false;
+  }
+};
+
 
 module.exports = {
   createMatchImageConfig,
