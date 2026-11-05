@@ -41,6 +41,7 @@ const getPurchaseStatusFromPackage = ({
 const syncCustomerPurchaseFromPackage = async ({
   pkg,
   user = null,
+  session = null,
 }) => {
   if (!pkg) return null;
 
@@ -49,13 +50,13 @@ const syncCustomerPurchaseFromPackage = async ({
   if (pkg.customerPurchaseNumber) {
     purchase = await CustomerPurchase.findOne({
       purchaseNumber: pkg.customerPurchaseNumber,
-    });
+    }).session(session);
   }
 
   if (!purchase && pkg.customerPurchaseId) {
     purchase = await CustomerPurchase.findById(
       pkg.customerPurchaseId
-    );
+    ).session(session);
   }
 
   if (!purchase && pkg.trackingNumber) {
@@ -65,7 +66,7 @@ const syncCustomerPurchaseFromPackage = async ({
       status: {
         $nin: ["Cancelled", "Refunded", "Reversed"],
       },
-    });
+    }).session(session);
   }
 
   if (!purchase) {
@@ -118,7 +119,7 @@ const syncCustomerPurchaseFromPackage = async ({
     purchase.status = "Ready to Invoice";
   }
 
-  await purchase.save();
+  await purchase.save({ session });
 
   pkg.customerPurchaseId = purchase._id;
   pkg.customerPurchaseNumber = purchase.purchaseNumber;
@@ -128,7 +129,7 @@ const syncCustomerPurchaseFromPackage = async ({
   pkg.customerPurchaseLinkedBy =
     pkg.customerPurchaseLinkedBy || getUserName(user);
 
-  await pkg.save();
+  await pkg.save({ session });
 
   return purchase;
 };

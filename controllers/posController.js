@@ -22,6 +22,14 @@ const {
   runPaymentOnce,
 } = require("../services/paymentRequestService");
 
+const {
+  applyPackageStatusDetails,
+} = require("./packageController");
+
+const {
+  syncCustomerPurchaseFromPackage,
+} = require("../services/customerPurchaseIntegrationService");
+
 
 const roundMoney = (value) =>
   Math.round(
@@ -196,12 +204,25 @@ const findInvoiceForPOS = async (req, res) => {
 
     const shippingInvoice = await Invoice.findOne({ invoiceNumber });
 
-    if (shippingInvoice) {
+        if (shippingInvoice) {
+      const trackingNumbers = (shippingInvoice.packages || [])
+        .map((pkg) => pkg.trackingNumber)
+        .filter(Boolean);
+
+      const pickupPackages = shippingInvoice.customerEkonId && trackingNumbers.length
+        ? await Package.find({
+            customerEkonId: shippingInvoice.customerEkonId,
+            trackingNumber: { $in: trackingNumbers },
+            status: "Ready for Pickup",
+          }).select("trackingNumber -_id").lean()
+        : [];
+
       return res.json({
         success: true,
         data: {
           invoiceType: "Shipping",
           invoice: shippingInvoice,
+          pickupTrackingNumbers: pickupPackages.map((pkg) => pkg.trackingNumber),
         },
       });
     }
@@ -253,7 +274,25 @@ const cashOutInvoice = async (req, res) => {
           paidIntoAccountNumber,
           paidIntoAccountName,
           notes,
+          handoverTrackingNumbers = [],
         } = req.body;
+
+                if (
+          !Array.isArray(handoverTrackingNumbers) ||
+          handoverTrackingNumbers.some(
+            (number) =>
+              typeof number !== "string" ||
+              !number ||
+              number !== number.trim()
+          ) ||
+          new Set(handoverTrackingNumbers).size !== handoverTrackingNumbers.length
+        ) {
+          fail("Select valid, distinct tracking numbers for handover.");
+        }
+
+        if (handoverTrackingNumbers.length && invoiceType !== "Shipping") {
+          fail("Package handover is only available for shipping invoices.");
+        }
 
         if (
           !["Shipping", "Marketplace"].includes(invoiceType) ||
@@ -450,6 +489,10 @@ const cashOutInvoice = async (req, res) => {
           invoice.cashierName = getUserName(req);
         }
 
+                if (handoverTrackingNumbers.length && invoice.status !== "Paid") {
+          fail("This payment does not clear the balance. Remove the handover selection to record a partial payment.");
+        }
+
         await invoice.save({ session });
 
         if (
@@ -473,6 +516,49 @@ const cashOutInvoice = async (req, res) => {
               },
               { session }
             );
+          }
+        }
+
+                const deliveredTrackingNumbers = [];
+
+        if (handoverTrackingNumbers.length) {
+          const invoiceTrackingNumbers = new Set(
+            (invoice.packages || []).map((pkg) => pkg.trackingNumber)
+          );
+
+          if (
+            !invoice.customerEkonId ||
+            handoverTrackingNumbers.some(
+              (number) => !invoiceTrackingNumbers.has(number)
+            )
+          ) {
+            fail("Every handover package must belong to this invoice.", 409);
+          }
+
+          const packagesToDeliver = await Package.find({
+            customerEkonId: invoice.customerEkonId,
+            trackingNumber: { $in: handoverTrackingNumbers },
+            status: "Ready for Pickup",
+          }).session(session);
+
+          if (packagesToDeliver.length !== handoverTrackingNumbers.length) {
+            fail(
+              "One or more selected packages are no longer ready for pickup. Refresh the invoice before trying again.",
+              409
+            );
+          }
+
+          for (const pkg of packagesToDeliver) {
+            applyPackageStatusDetails(pkg, "Delivered", req.user);
+            await pkg.save({ session });
+
+            await syncCustomerPurchaseFromPackage({
+              pkg,
+              user: req.user,
+              session,
+            });
+
+            deliveredTrackingNumbers.push(pkg.trackingNumber);
           }
         }
 
@@ -596,6 +682,7 @@ const cashOutInvoice = async (req, res) => {
 
         return {
           invoice,
+          deliveredTrackingNumbers,
           drawer,
           transaction,
           financeTransaction,

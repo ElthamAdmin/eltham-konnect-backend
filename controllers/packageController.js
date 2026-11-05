@@ -978,4 +978,5 @@ module.exports = {
   updatePackageStatus,
   bulkUpdatePackageStatus,
   deletePackage,
+  applyPackageStatusDetails,
 };
