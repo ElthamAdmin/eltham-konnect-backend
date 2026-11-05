@@ -1,6 +1,12 @@
 const express = require("express");
 
 const {
+  uploadLoginWallpaper,
+  saveLoginAppearance,
+  getPublicLoginAppearance,
+} = require("../controllers/loginAppearanceController");
+
+const {
   getSettings,
   updateSettings,
   uploadPrimaryLogo,
@@ -13,6 +19,7 @@ const {
 const {
   logoUpload,
   documentUpload,
+  wallpaperUpload,
 } = require("../middleware/upload");
 
 const {
@@ -25,6 +32,11 @@ const {
   setStorageChargingStatus,
 } = require("../controllers/storageSettingsController");
 
+router.get(
+  "/login-appearance/public/:portal",
+  getPublicLoginAppearance
+);
+
 router.use(protect, requirePermission("settings"));
 
 const receiveFile = (uploader, field) => (req, res, next) => {
@@ -35,13 +47,25 @@ const receiveFile = (uploader, field) => (req, res, next) => {
       success: false,
       message:
         error.code === "LIMIT_FILE_SIZE"
-          ? field === "logo"
-            ? "Logos must be 5 MB or smaller."
-            : "PDF documents must be 10 MB or smaller."
+                    ? field === "document"
+            ? "PDF documents must be 10 MB or smaller."
+            : "Images must be 5 MB or smaller."
           : error.message || "The upload could not be processed.",
     });
   });
 };
+
+router.post(
+  "/login-appearance/wallpaper",
+  receiveFile(wallpaperUpload, "wallpaper"),
+  uploadLoginWallpaper
+);
+
+router.put(
+  "/login-appearance",
+  saveLoginAppearance
+);
+
 
 router.get("/", getSettings);
 router.put("/", updateSettings);

@@ -1,5 +1,79 @@
 const mongoose = require("mongoose");
 
+const LoginAppearanceSchema = new mongoose.Schema(
+  {
+    enabled: {
+      type: Boolean,
+      default: false,
+    },
+
+    wallpaperUrl: {
+      type: String,
+      default: "",
+      maxlength: 1500,
+    },
+
+    wallpaperPublicId: {
+      type: String,
+      default: "",
+      maxlength: 300,
+    },
+
+    wallpaperName: {
+      type: String,
+      default: "",
+      maxlength: 180,
+    },
+
+    position: {
+      type: String,
+      enum: [
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+      ],
+      default: "center",
+    },
+
+    // Darkens the wallpaper while the login card stays opaque.
+    overlayOpacity: {
+      type: Number,
+      default: 0.45,
+      min: 0,
+      max: 0.85,
+    },
+
+    heading: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 120,
+    },
+
+    message: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+
+    // Stored as timestamps. The Settings interface will
+    // interpret entered dates and times in Jamaica time.
+    startsAt: {
+      type: Date,
+      default: null,
+    },
+
+    endsAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
 const SettingSchema = new mongoose.Schema(
   {
     settingKey: {
@@ -142,6 +216,21 @@ const SettingSchema = new mongoose.Schema(
         default: true,
       },
     },
+
+        // Separate from logo branding so logo uploads and
+    // general Settings saves cannot replace login appearance.
+    loginAppearance: {
+      admin: {
+        type: LoginAppearanceSchema,
+        default: () => ({}),
+      },
+
+      customer: {
+        type: LoginAppearanceSchema,
+        default: () => ({}),
+      },
+    },
+
 
     branding: {
       primaryLogoName: {

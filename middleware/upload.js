@@ -31,7 +31,15 @@ const documentUpload = makeUpload(
   "Only PDF documents are allowed."
 );
 
+const wallpaperUpload = makeUpload(
+  ["image/jpeg", "image/png", "image/webp"],
+  5 * 1024 * 1024,
+  "Please choose a JPG, PNG or WebP wallpaper."
+);
+
+
 module.exports = {
   logoUpload,
   documentUpload,
+  wallpaperUpload,
 };
