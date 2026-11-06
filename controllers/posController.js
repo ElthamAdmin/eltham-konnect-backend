@@ -254,6 +254,120 @@ const findInvoiceForPOS = async (req, res) => {
   }
 };
 
+const confirmPaidInvoicePickup = async (req, res) => {
+  const { invoiceNumber, handoverTrackingNumbers } = req.body || {};
+
+  const fail = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
+  try {
+    if (
+      typeof invoiceNumber !== "string" ||
+      !invoiceNumber.trim() ||
+      !Array.isArray(handoverTrackingNumbers) ||
+      handoverTrackingNumbers.length === 0 ||
+      handoverTrackingNumbers.some(
+        (number) =>
+          typeof number !== "string" ||
+          !number ||
+          number !== number.trim()
+      ) ||
+      new Set(handoverTrackingNumbers).size !== handoverTrackingNumbers.length
+    ) {
+      fail("Enter an invoice number and select distinct packages for pickup.");
+    }
+
+    const data = await mongoose.connection.transaction(async (session) => {
+      const invoice = await Invoice.findOne({
+        invoiceNumber: invoiceNumber.trim(),
+      }).session(session);
+
+      if (!invoice) {
+        fail("Shipping invoice not found.", 404);
+      }
+
+      if (
+        invoice.status !== "Paid" ||
+        (invoice.balanceDue != null && Number(invoice.balanceDue) !== 0)
+      ) {
+        fail("Confirm Pickup is only available for fully paid shipping invoices.", 409);
+      }
+
+      const invoiceTrackingNumbers = new Set(
+        (invoice.packages || []).map((pkg) => pkg.trackingNumber)
+      );
+
+      if (
+        !invoice.customerEkonId ||
+        handoverTrackingNumbers.some(
+          (number) => !invoiceTrackingNumbers.has(number)
+        )
+      ) {
+        fail("Every selected package must belong to this invoice.", 409);
+      }
+
+      const packages = await Package.find({
+        customerEkonId: invoice.customerEkonId,
+        trackingNumber: { $in: handoverTrackingNumbers },
+      }).session(session);
+
+      if (
+        packages.length !== handoverTrackingNumbers.length ||
+        packages.some(
+          (pkg) => !["Ready for Pickup", "Delivered"].includes(pkg.status)
+        )
+      ) {
+        fail("A selected package is unavailable for pickup. Reload the invoice and check the package statuses.", 409);
+      }
+
+      const deliveredTrackingNumbers = [];
+      const alreadyDeliveredTrackingNumbers = [];
+
+      for (const pkg of packages) {
+        if (pkg.status === "Delivered") {
+          alreadyDeliveredTrackingNumbers.push(pkg.trackingNumber);
+          continue;
+        }
+
+        applyPackageStatusDetails(pkg, "Delivered", req.user);
+        await pkg.save({ session });
+
+        await syncCustomerPurchaseFromPackage({
+          pkg,
+          user: req.user,
+          session,
+        });
+
+        deliveredTrackingNumbers.push(pkg.trackingNumber);
+      }
+
+      return {
+        invoiceNumber: invoice.invoiceNumber,
+        deliveredTrackingNumbers,
+        alreadyDeliveredTrackingNumbers,
+      };
+    });
+
+    return res.json({
+      success: true,
+      message: data.deliveredTrackingNumbers.length
+        ? "Package pickup recorded."
+        : "The selected packages were already marked Delivered.",
+      data,
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm pickup. Reload the invoice and check package statuses before retrying.",
+    });
+  }
+};
+
 const cashOutInvoice = async (req, res) => {
   const fail = (message, statusCode = 400) => {
     const error = new Error(message);
@@ -1186,6 +1300,7 @@ module.exports = {
   recordDrawerSale,
   findInvoiceForPOS,
   cashOutInvoice,
+  confirmPaidInvoicePickup,
   applyPOSDiscount,
   closeDrawer,
   getDrawerHistory,

@@ -9,6 +9,7 @@ const {
   recordDrawerSale,
   findInvoiceForPOS,
   cashOutInvoice,
+    confirmPaidInvoicePickup,
   applyPOSDiscount,
   closeDrawer,
   getDrawerHistory,
@@ -35,6 +36,12 @@ router.post(
   applyPOSDiscount
 );
 router.post("/cashout", protect, requirePermission("pos"), cashOutInvoice);
+router.post(
+  "/pickup",
+  protect,
+  requirePermission("pos"),
+  confirmPaidInvoicePickup
+);
 router.get("/transactions", protect, requirePermission("pos"), getPOSTransactions);
 
 router.get("/analytics", protect, requirePermission("pos_shift_reports"), getPOSAnalytics);
