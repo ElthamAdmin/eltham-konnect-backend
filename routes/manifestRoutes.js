@@ -1,5 +1,11 @@
 const express = require("express");
 const router = express.Router();
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
+
+router.use(protect, requirePermission("manifests"));
 
 const {
   createManifest,

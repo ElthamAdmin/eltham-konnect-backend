@@ -1,264 +1,369 @@
+const crypto = require("crypto");
+const mongoose = require("mongoose");
 const Manifest = require("../models/Manifest");
 const Package = require("../models/Package");
 
+const {
+  applyPackageStatusDetails,
+} = require("./packageController");
+
+const {
+  syncCustomerPurchaseFromPackage,
+} = require("../services/customerPurchaseIntegrationService");
+
+const fail = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  throw error;
+};
+
+const readText = (value, label, maxLength = 200) => {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.trim().length > maxLength
+  ) {
+    fail(`${label} must contain 1–${maxLength} characters.`);
+  }
+
+  return value.trim();
+};
+
+const sendError = (res, error) => {
+  console.error("Manifest action failed:", error);
+
+  return res.status(error.statusCode || 500).json({
+    success: false,
+    message: error.statusCode
+      ? error.message
+      : "Could not confirm the manifest action. Refresh manifests and packages before retrying.",
+  });
+};
+
+const findManifest = async (number, session) => {
+  const manifest = await Manifest.findOne({
+    manifestNumber: readText(number, "Manifest number"),
+  }).session(session);
+
+  if (!manifest) fail("Manifest not found.", 404);
+  return manifest;
+};
+
+const requireCreated = (manifest) => {
+  if (manifest.status !== "Created") {
+    fail("Only a Created manifest can be edited.", 409);
+  }
+};
+
+const findManifestPackages = async (manifest, session) => {
+  const trackingNumbers = [...new Set(manifest.packages || [])];
+
+  if (trackingNumbers.length !== manifest.packages.length) {
+    fail("This manifest contains duplicate tracking references. Review it before proceeding.", 409);
+  }
+
+  const packages = await Package.find({
+    trackingNumber: { $in: trackingNumbers },
+  }).session(session);
+
+  if (packages.length !== trackingNumbers.length) {
+    fail("Some manifest packages could not be found. No changes were saved.", 409);
+  }
+
+  return packages;
+};
+
+const changePackageStatus = async (
+  pkg,
+  status,
+  manifest,
+  req,
+  session
+) => {
+  applyPackageStatusDetails(pkg, status, req.user, {
+    source: "Manifests",
+    reason: `Manifest ${manifest.manifestNumber}`,
+  });
+
+  await pkg.save({ session });
+
+  await syncCustomerPurchaseFromPackage({
+    pkg,
+    user: req.user,
+    session,
+  });
+};
+
 const createManifest = async (req, res) => {
   try {
-    const { origin } = req.body;
+    const origin = readText(req.body?.origin || "Florida", "Origin");
 
     const manifest = await Manifest.create({
-      manifestNumber: `MFT-${Date.now()}`,
-      origin: origin || "Florida",
-      packageCount: 0,
+      manifestNumber: `MFT-${crypto.randomUUID()}`,
+      origin,
       packages: [],
+      packageCount: 0,
       status: "Created",
     });
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Manifest created",
+      message: "Manifest created.",
       data: manifest,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Could not create manifest",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
 const addPackageToManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
-    const { trackingNumber } = req.body;
+    const trackingNumber = readText(
+      req.body?.trackingNumber,
+      "Tracking number"
+    );
 
-    const manifest = await Manifest.findOne({ manifestNumber });
-    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
+    const data = await mongoose.connection.transaction(async (session) => {
+      const manifest = await findManifest(req.params.manifestNumber, session);
+      requireCreated(manifest);
 
-    if (manifest.status !== "Created") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot modify manifest after departure",
-      });
-    }
+      if (manifest.packages.includes(trackingNumber)) {
+        return { manifest, unchanged: true };
+      }
 
-    const pkg = await Package.findOne({ trackingNumber });
-    if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
+      const pkg = await Package.findOne({ trackingNumber }).session(session);
+      if (!pkg) fail("Package not found.", 404);
 
-    if (manifest.packages.includes(trackingNumber)) {
-      return res.status(400).json({
-        success: false,
-        message: "Package already added",
-      });
-    }
+      if (pkg.status !== "At Warehouse") {
+        fail("Only a package currently At Warehouse can be assigned to a manifest.", 409);
+      }
 
-    manifest.packages.push(trackingNumber);
-    manifest.packageCount = manifest.packages.length;
-    await manifest.save();
+      const otherManifest = await Manifest.findOne({
+        _id: { $ne: manifest._id },
+        packages: trackingNumber,
+        status: { $in: ["Created", "In Transit", "Arrived Jamaica"] },
+      }).session(session);
 
-    pkg.status = "In Transit";
-    await pkg.save();
+      if (otherManifest) {
+        fail(
+          `Package already belongs to active manifest ${otherManifest.manifestNumber}.`,
+          409
+        );
+      }
 
-    res.json({
+      manifest.packages.push(trackingNumber);
+      manifest.packageCount = manifest.packages.length;
+
+      await changePackageStatus(
+        pkg, "Manifest Assigned", manifest, req, session
+      );
+      await manifest.save({ session });
+
+      return { manifest, unchanged: false };
+    });
+
+    return res.json({
       success: true,
-      message: "Package added",
-      data: manifest,
+      message: data.unchanged
+        ? "Package is already on this manifest. No changes made."
+        : "Package assigned to manifest.",
+      data: data.manifest,
+      unchanged: data.unchanged,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error adding package",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
-/* ✅ REMOVE PACKAGE */
 const removePackageFromManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
-    const { trackingNumber } = req.body;
-
-    const manifest = await Manifest.findOne({ manifestNumber });
-
-    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
-
-    if (manifest.status !== "Created") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot remove packages after departure",
-      });
-    }
-
-    manifest.packages = manifest.packages.filter((t) => t !== trackingNumber);
-    manifest.packageCount = manifest.packages.length;
-    await manifest.save();
-
-    await Package.updateOne(
-      { trackingNumber },
-      { $set: { status: "At Warehouse" } }
+    const trackingNumber = readText(
+      req.body?.trackingNumber,
+      "Tracking number"
     );
 
-    res.json({
+    const data = await mongoose.connection.transaction(async (session) => {
+      const manifest = await findManifest(req.params.manifestNumber, session);
+      requireCreated(manifest);
+
+      if (!manifest.packages.includes(trackingNumber)) {
+        return { manifest, unchanged: true };
+      }
+
+      const pkg = await Package.findOne({ trackingNumber }).session(session);
+      if (!pkg) fail("Package not found. No changes were saved.", 409);
+
+      if (pkg.status !== "Manifest Assigned") {
+        fail(
+          "This package is no longer Manifest Assigned. Removal will not reset a progressed package.",
+          409
+        );
+      }
+
+      manifest.packages = manifest.packages.filter(
+        (number) => number !== trackingNumber
+      );
+      manifest.packageCount = manifest.packages.length;
+
+      await changePackageStatus(pkg, "At Warehouse", manifest, req, session);
+      await manifest.save({ session });
+
+      return { manifest, unchanged: false };
+    });
+
+    return res.json({
       success: true,
-      message: "Package removed",
-      data: manifest,
+      message: data.unchanged
+        ? "Package is not on this manifest. No changes made."
+        : "Package removed and returned to At Warehouse.",
+      data: data.manifest,
+      unchanged: data.unchanged,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error removing package",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
-/* ✅ DELETE MANIFEST */
 const deleteManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
+    await mongoose.connection.transaction(async (session) => {
+      const manifest = await findManifest(req.params.manifestNumber, session);
+      requireCreated(manifest);
 
-    const manifest = await Manifest.findOne({ manifestNumber });
+      const packages = await findManifestPackages(manifest, session);
 
-    if (!manifest) {
-      return res.status(404).json({ success: false, message: "Manifest not found" });
-    }
+      if (packages.some((pkg) => pkg.status !== "Manifest Assigned")) {
+        fail(
+          "This manifest contains packages that are not Manifest Assigned. Deletion will not reset progressed packages.",
+          409
+        );
+      }
 
-    if (manifest.status !== "Created") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot delete manifest after departure",
-      });
-    }
+      for (const pkg of packages) {
+        await changePackageStatus(pkg, "At Warehouse", manifest, req, session);
+      }
 
-    // Reset packages
-    await Package.updateMany(
-      { trackingNumber: { $in: manifest.packages } },
-      { $set: { status: "At Warehouse" } }
-    );
+      await manifest.deleteOne({ session });
+    });
 
-    await manifest.deleteOne();
-
-    res.json({
+    return res.json({
       success: true,
-      message: "Manifest deleted successfully",
+      message: "Manifest deleted. Assigned packages returned to At Warehouse.",
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error deleting manifest",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
-/* ✅ EDIT MANIFEST */
 const updateManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
-    const { origin } = req.body;
+    const origin = readText(req.body?.origin, "Origin");
 
-    const manifest = await Manifest.findOne({ manifestNumber });
+    const manifest = await mongoose.connection.transaction(async (session) => {
+      const record = await findManifest(req.params.manifestNumber, session);
+      requireCreated(record);
+      record.origin = origin;
+      await record.save({ session });
+      return record;
+    });
 
-    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
-
-    if (manifest.status !== "Created") {
-      return res.status(400).json({
-        success: false,
-        message: "Cannot edit after departure",
-      });
-    }
-
-    manifest.origin = origin || manifest.origin;
-    await manifest.save();
-
-    res.json({
+    return res.json({
       success: true,
-      message: "Manifest updated",
+      message: "Manifest updated.",
       data: manifest,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error updating manifest",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
 const departManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
+    const data = await mongoose.connection.transaction(async (session) => {
+      const manifest = await findManifest(req.params.manifestNumber, session);
 
-    const manifest = await Manifest.findOne({ manifestNumber });
+      if (manifest.status === "In Transit") {
+        return { manifest, unchanged: true };
+      }
 
-    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
+      requireCreated(manifest);
+      const packages = await findManifestPackages(manifest, session);
 
-    manifest.status = "In Transit";
-    await manifest.save();
+      if (!packages.length) fail("Add packages before departure.", 409);
 
-    res.json({
+      if (packages.some((pkg) => pkg.status !== "Manifest Assigned")) {
+        fail(
+          "Every package must be Manifest Assigned before departure. No changes were saved.",
+          409
+        );
+      }
+
+      for (const pkg of packages) {
+        await changePackageStatus(pkg, "In Transit", manifest, req, session);
+      }
+
+      manifest.status = "In Transit";
+      manifest.packageCount = manifest.packages.length;
+      await manifest.save({ session });
+
+      return { manifest, unchanged: false };
+    });
+
+    return res.json({
       success: true,
-      message: "Manifest departed",
-      data: manifest,
+      message: data.unchanged
+        ? "Manifest already departed. No changes made."
+        : "Manifest and its packages marked In Transit.",
+      data: data.manifest,
+      unchanged: data.unchanged,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error updating manifest",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
 const arriveManifest = async (req, res) => {
   try {
-    const { manifestNumber } = req.params;
+    const data = await mongoose.connection.transaction(async (session) => {
+      const manifest = await findManifest(req.params.manifestNumber, session);
 
-    const manifest = await Manifest.findOne({ manifestNumber });
-
-    if (!manifest) return res.status(404).json({ success: false, message: "Manifest not found" });
-
-    manifest.status = "Arrived Jamaica";
-    await manifest.save();
-
-    await Package.updateMany(
-      { trackingNumber: { $in: manifest.packages } },
-      {
-        $set: {
-          status: "Cleared Customs",
-        },
+      if (manifest.status === "Arrived Jamaica") {
+        return { manifest, unchanged: true };
       }
-    );
 
-    res.json({
+      if (manifest.status !== "In Transit") {
+        fail("Only an In Transit manifest can be marked Arrived Jamaica.", 409);
+      }
+
+      // Arrival does not certify customs clearance or reset package status.
+      manifest.status = "Arrived Jamaica";
+      await manifest.save({ session });
+
+      return { manifest, unchanged: false };
+    });
+
+    return res.json({
       success: true,
-      message: "Manifest arrived",
-      data: manifest,
+      message: data.unchanged
+        ? "Arrival already recorded. No changes made."
+        : "Arrival recorded. Customs clearance remains a separate package action.",
+      data: data.manifest,
+      unchanged: data.unchanged,
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Error updating manifest",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
 const getManifests = async (req, res) => {
   try {
-    const manifests = await Manifest.find().sort({ createdAt: -1 });
+    const manifests = await Manifest.find()
+      .select("-rawPayload")
+      .sort({ createdAt: -1 });
 
-    res.json({
-      success: true,
-      data: manifests,
-    });
+    return res.json({ success: true, data: manifests });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Could not retrieve manifests",
-      error: error.message,
-    });
+    return sendError(res, error);
   }
 };
 
