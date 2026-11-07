@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Package = require("../models/Package");
 const ShippingRate = require("../models/ShippingRate");
 const Customer = require("../models/Customer");
@@ -716,141 +717,262 @@ const applyPackageStatusDetails = (
   return true;
 };
 
-const updatePackageStatus = async (req, res) => {
-  try {
-    const { trackingNumber } = req.params;
-    const { status } = req.body;
+const savePackageStatusAction = async ({
+  req,
+  trackingNumbers,
+  status,
+  bulk = false,
+}) => {
+  const fail = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
 
-    const validStatuses = [
-      "At Warehouse",
-      "Manifest Assigned",
-      "In Transit",
-      "Cleared Customs",
-      "Ready for Pickup",
-      "Delivered",
-      "In Transit to Branch",
-    ];
+  const validStatuses = [
+    "At Warehouse",
+    "Manifest Assigned",
+    "In Transit",
+    "Cleared Customs",
+    "Ready for Pickup",
+    "Delivered",
+    "In Transit to Branch",
+  ];
 
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid package status",
-      });
+  if (!validStatuses.includes(status)) {
+    fail("Invalid package status.");
+  }
+
+  if (
+    !Array.isArray(trackingNumbers) ||
+    !trackingNumbers.length ||
+    trackingNumbers.some(
+      (number) =>
+        typeof number !== "string" ||
+        !number.trim() ||
+        number !== number.trim()
+    )
+  ) {
+    fail("Select valid package tracking numbers.");
+  }
+
+  const requested = [...new Set(trackingNumbers)];
+
+  const result = await mongoose.connection.transaction(async (session) => {
+    const packages = await Package.find({
+      trackingNumber: { $in: requested },
+    }).session(session);
+
+    const found = new Set(packages.map((pkg) => pkg.trackingNumber));
+    const missing = requested.filter((number) => !found.has(number));
+
+    if (missing.length) {
+      fail(
+        `Packages not found: ${missing.join(", ")}. No status changes were saved.`,
+        409
+      );
     }
 
-    const pkg = await Package.findOne({ trackingNumber });
+    const blocked = packages.filter(
+      (pkg) =>
+        ["Deleted", "Deleted by KP"].includes(pkg.status) ||
+        (bulk && pkg.status === "Delivered" && status !== "Delivered")
+    );
 
-    if (!pkg) {
-      return res.status(404).json({
-        success: false,
-        message: "Package not found",
-      });
+    if (blocked.length) {
+      fail(
+        "This action cannot change deleted packages or reopen Delivered packages in bulk. " +
+          "Use the single-package correction control where appropriate. " +
+          `Affected packages: ${blocked.map((pkg) => pkg.trackingNumber).join(", ")}. ` +
+          "No status changes were saved.",
+        409
+      );
     }
 
-        const previousStatus = pkg.status;
+    const changed = [];
+    const unchangedTrackingNumbers = [];
+    const records = [];
 
-        if (pkg.status === status) {
-      return res.json({
-        success: true,
-        message: "Package already has this status. No changes made.",
-        data: pkg,
-        unchanged: true,
-        pointsAwarded: 0,
+    for (const pkg of packages) {
+      if (pkg.status === status) {
+        unchangedTrackingNumbers.push(pkg.trackingNumber);
+        records.push(pkg.toObject());
+        continue;
+      }
+
+      const previousStatus = pkg.status;
+      const correction =
+        previousStatus === "Delivered" && status !== "Delivered";
+
+      const reason =
+        typeof req.body?.reason === "string"
+          ? req.body.reason.trim()
+          : "";
+
+      applyPackageStatusDetails(pkg, status, req.user, {
+        source: correction
+          ? "Packages delivery correction"
+          : bulk
+            ? "Packages bulk update"
+            : "Packages",
+        reason: correction ? reason : "",
+        allowDeliveredCorrection:
+          !bulk && correction && req.body?.confirmCorrection === true,
       });
-    }
 
-        const deliveredCorrection =
-      pkg.status === "Delivered" && status !== "Delivered";
+      await pkg.save({ session });
 
-    const correctionReason =
-      typeof req.body.reason === "string"
-        ? req.body.reason.trim()
-        : "";
-
-    applyPackageStatusDetails(pkg, status, req.user, {
-      source: deliveredCorrection
-        ? "Packages delivery correction"
-        : "Packages",
-      reason: deliveredCorrection ? correctionReason : "",
-      allowDeliveredCorrection:
-        deliveredCorrection && req.body.confirmCorrection === true,
-    });
-
-        await pkg.save();
-
-    const synchronizedPurchase =
-      await syncCustomerPurchaseFromPackage({
+      const purchase = await syncCustomerPurchaseFromPackage({
         pkg,
         user: req.user,
+        session,
       });
 
-    let pointsAwarded = 0;
-    let customer = null;
+      changed.push({
+        package: pkg.toObject(),
+        previousStatus,
+        customerPurchaseNumber: purchase?.purchaseNumber || "",
+      });
 
-    if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
-      customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
+      records.push(pkg.toObject());
+    }
+
+    return { changed, unchangedTrackingNumbers, records };
+  });
+
+  // Run follow-up actions only after the status transaction commits.
+  const warnings = [];
+  let totalPointsAwarded = 0;
+
+  for (const change of result.changed) {
+    const pkg = change.package;
+    let pointsAwarded = 0;
+
+    const followUp = async (label, action) => {
+      try {
+        await action();
+      } catch (error) {
+        console.error(
+          `Package ${pkg.trackingNumber}: ${label} failed`,
+          error
+        );
+        warnings.push(
+          `${pkg.trackingNumber}: status saved, but ${label} could not be confirmed.`
+        );
+      }
+    };
+
+    if (
+      change.previousStatus !== "At Warehouse" &&
+      status === "At Warehouse"
+    ) {
+      let customer = null;
+
+      await followUp("customer lookup", async () => {
+        customer = await Customer.findOne({
+          ekonId: pkg.customerEkonId,
+        });
+      });
 
       if (customer) {
-                pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
+        await followUp("warehouse points", async () => {
+          pointsAwarded = await awardWarehousePointsIfEligible(
+            customer,
+            pkg,
+            req
+          );
+          totalPointsAwarded += pointsAwarded;
+        });
 
-        await completeReferralIfFirstWarehousePackage(pkg);
+        await followUp("referral update", async () => {
+          await completeReferralIfFirstWarehousePackage(pkg);
+        });
 
-        await createCustomerNotification({
-          customerEkonId: customer.ekonId,
-          customerName: customer.name,
-          title: "Package Received at Warehouse",
-          message: `Your package ${pkg.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
-          type: "Package Update",
-          referenceType: "Package",
-          referenceId: pkg.trackingNumber,
+        await followUp("warehouse notification", async () => {
+          await createCustomerNotification({
+            customerEkonId: customer.ekonId,
+            customerName: customer.name,
+            title: "Package Received at Warehouse",
+            message:
+              `Your package ${pkg.trackingNumber} has been received at the warehouse.` +
+              (pointsAwarded > 0
+                ? ` You earned ${pointsAwarded} EK points.`
+                : ""),
+            type: "Package Update",
+            referenceType: "Package",
+            referenceId: pkg.trackingNumber,
+          });
         });
       }
     }
 
-        if (status === "Ready for Pickup") {
-      const notice = await ensurePickupNotification(pkg._id);
-            await createStorageNoticeIfEnabled(pkg._id);
+    if (status === "Ready for Pickup") {
+      await followUp("pickup notification", async () => {
+        await ensurePickupNotification(pkg._id);
+      });
 
-      if (notice) {
-        pkg.pickupNotificationNumber = notice.notificationNumber;
-        pkg.pickupNotifiedAt = notice.notifiedAt;
-      }
+      await followUp("storage notice check", async () => {
+        await createStorageNoticeIfEnabled(pkg._id);
+      });
     }
 
-    await writeAuditLog({
+    await followUp("general audit log", async () => {
+      await writeAuditLog({
+        req,
+        action: bulk
+          ? "BULK_UPDATE_PACKAGE_STATUS"
+          : "UPDATE_PACKAGE_STATUS",
+        module: "Packages",
+        description:
+          `Package ${pkg.trackingNumber} status changed from ` +
+          `${change.previousStatus} to ${pkg.status}`,
+        targetType: "Package",
+        targetId: pkg.trackingNumber,
+        metadata: {
+          previousStatus: change.previousStatus,
+          newStatus: pkg.status,
+          readyForPickup: pkg.readyForPickup,
+          readyForPickupDate: pkg.readyForPickupDate,
+          collectedAt: pkg.collectedAt,
+          collectedByUserId: pkg.collectedByUserId,
+          collectedByName: pkg.collectedByName,
+          statusUpdatedAt: pkg.statusUpdatedAt,
+          customerPurchaseNumber: change.customerPurchaseNumber,
+          pointsAwarded,
+        },
+      });
+    });
+  }
+
+  return {
+    ...result,
+    totalPointsAwarded,
+    warnings,
+  };
+};
+
+const updatePackageStatus = async (req, res) => {
+  try {
+    const result = await savePackageStatusAction({
       req,
-      action: "UPDATE_PACKAGE_STATUS",
-      module: "Packages",
-      description: `Package ${pkg.trackingNumber} status changed from ${previousStatus} to ${pkg.status}`,
-      targetType: "Package",
-      targetId: pkg.trackingNumber,
-      metadata: {
-        previousStatus,
-        newStatus: pkg.status,
-        readyForPickup: pkg.readyForPickup,
-        readyForPickupDate: pkg.readyForPickupDate,
-                collectedAt: pkg.collectedAt,
-        collectedByUserId: pkg.collectedByUserId,
-        collectedByName: pkg.collectedByName,
-        statusUpdatedAt: pkg.statusUpdatedAt,
-        pointsAwarded,
-                customerPurchaseNumber:
-          synchronizedPurchase?.purchaseNumber || "",
-      },
+      trackingNumbers: [req.params.trackingNumber],
+      status: req.body?.status,
     });
 
-    res.json({
+    return res.json({
       success: true,
-      message:
-        pointsAwarded > 0
-          ? `Package status updated successfully and ${pointsAwarded} EK points awarded`
-          : "Package status updated successfully",
-      data: pkg,
-      pointsAwarded,
+      message: result.changed.length
+        ? "Package status updated successfully."
+        : "Package already has this status. No changes made.",
+      data: result.records[0],
+      unchanged: result.changed.length === 0,
+      pointsAwarded: result.totalPointsAwarded,
+      warnings: result.warnings,
     });
   } catch (error) {
-    console.error("Error updating package status:", error);
-        res.status(error.statusCode || 500).json({
+    console.error("Package status update failed:", error);
+
+    return res.status(error.statusCode || 500).json({
       success: false,
       message: error.statusCode
         ? error.message
@@ -861,169 +983,37 @@ const updatePackageStatus = async (req, res) => {
 
 const bulkUpdatePackageStatus = async (req, res) => {
   try {
-    const { trackingNumbers, status } = req.body;
-
-    const validStatuses = [
-      "At Warehouse",
-      "Manifest Assigned",
-      "In Transit",
-      "Cleared Customs",
-      "Ready for Pickup",
-      "Delivered",
-      "In Transit to Branch",
-    ];
-
-    if (!Array.isArray(trackingNumbers) || trackingNumbers.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Please provide at least one tracking number",
-      });
-    }
-
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid package status",
-      });
-    }
-
-    const packages = await Package.find({
-      trackingNumber: { $in: trackingNumbers },
+    const result = await savePackageStatusAction({
+      req,
+      trackingNumbers: req.body?.trackingNumbers,
+      status: req.body?.status,
+      bulk: true,
     });
 
-    if (packages.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "No matching packages found",
-      });
-    }
-
-        const uniqueTrackingNumbers = [...new Set(trackingNumbers)];
-
-    if (
-      uniqueTrackingNumbers.some(
-        (number) => typeof number !== "string" || !number.trim()
-      ) ||
-      packages.length !== uniqueTrackingNumbers.length
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Some selected packages could not be found. Refresh Packages and select them again. No bulk updates were started.",
-      });
-    }
-
-    const blocked = packages.filter(
-      (pkg) =>
-        ["Deleted", "Deleted by KP"].includes(pkg.status) ||
-        (pkg.status === "Delivered" && status !== "Delivered")
+    const changedTrackingNumbers = result.changed.map(
+      (item) => item.package.trackingNumber
     );
 
-    if (blocked.length) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Bulk updates cannot reopen Delivered packages or change deleted packages. " +
-          "Deselect these packages: " +
-          blocked.map((pkg) => pkg.trackingNumber).join(", ") +
-          ". No bulk updates were started.",
-      });
-    }
-
-    let updatedCount = 0;
-    let totalPointsAwarded = 0;
-
-    for (const pkg of packages) {
-            const previousStatus = pkg.status;
-
-            if (pkg.status === status) continue;
-
-      applyPackageStatusDetails(pkg, status, req.user, {
-        source: "Packages bulk update",
-      });
-
-            await pkg.save();
-
-      const synchronizedPurchase =
-        await syncCustomerPurchaseFromPackage({
-          pkg,
-          user: req.user,
-        });
-
-      let pointsAwarded = 0;
-      let customer = null;
-
-      if (previousStatus !== "At Warehouse" && status === "At Warehouse") {
-        customer = await Customer.findOne({ ekonId: pkg.customerEkonId });
-
-        if (customer) {
-                    pointsAwarded = await awardWarehousePointsIfEligible(customer, pkg, req);
-          totalPointsAwarded += pointsAwarded;
-
-          await completeReferralIfFirstWarehousePackage(pkg);
-
-          await createCustomerNotification({
-            customerEkonId: customer.ekonId,
-            customerName: customer.name,
-            title: "Package Received at Warehouse",
-            message: `Your package ${pkg.trackingNumber} has been received at the warehouse.${pointsAwarded > 0 ? ` You earned ${pointsAwarded} EK points.` : ""}`,
-            type: "Package Update",
-            referenceType: "Package",
-            referenceId: pkg.trackingNumber,
-          });
-        }
-      }
-
-            if (status === "Ready for Pickup") {
-        const notice = await ensurePickupNotification(pkg._id);
-                await createStorageNoticeIfEnabled(pkg._id);
-
-        if (notice) {
-          pkg.pickupNotificationNumber = notice.notificationNumber;
-          pkg.pickupNotifiedAt = notice.notifiedAt;
-        }
-      }
-
-      await writeAuditLog({
-        req,
-        action: "BULK_UPDATE_PACKAGE_STATUS",
-        module: "Packages",
-        description: `Package ${pkg.trackingNumber} status changed from ${previousStatus} to ${pkg.status} by bulk update`,
-        targetType: "Package",
-        targetId: pkg.trackingNumber,
-        metadata: {
-          previousStatus,
-          newStatus: pkg.status,
-          readyForPickup: pkg.readyForPickup,
-          readyForPickupDate: pkg.readyForPickupDate,
-                  collectedAt: pkg.collectedAt,
-        collectedByUserId: pkg.collectedByUserId,
-        collectedByName: pkg.collectedByName,
-          statusUpdatedAt: pkg.statusUpdatedAt,
-          pointsAwarded,
-                    customerPurchaseNumber:
-            synchronizedPurchase?.purchaseNumber || "",
-        },
-      });
-
-      updatedCount += 1;
-    }
-
-    res.json({
+    return res.json({
       success: true,
       message:
-        totalPointsAwarded > 0
-          ? `${updatedCount} package(s) updated successfully and ${totalPointsAwarded} EK points awarded`
-          : `${updatedCount} package(s) updated successfully`,
-      updatedCount,
-      totalPointsAwarded,
+        `${changedTrackingNumbers.length} package(s) changed; ` +
+        `${result.unchangedTrackingNumbers.length} already had this status.`,
+      updatedCount: changedTrackingNumbers.length,
+      unchangedCount: result.unchangedTrackingNumbers.length,
+      changedTrackingNumbers,
+      unchangedTrackingNumbers: result.unchangedTrackingNumbers,
+      totalPointsAwarded: result.totalPointsAwarded,
+      warnings: result.warnings,
     });
   } catch (error) {
-    console.error("Error bulk updating package status:", error);
-    res.status(500).json({
+    console.error("Bulk package status update failed:", error);
+
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to bulk update package statuses",
-      error: error.message,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm the bulk update. Refresh Packages before retrying.",
     });
   }
 };
