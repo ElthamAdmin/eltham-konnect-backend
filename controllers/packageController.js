@@ -638,12 +638,36 @@ const applyPackageStatusDetails = (
   pkg,
   status,
   user = {},
-  { source = "Staff action", reason = "" } = {}
+    {
+    source = "Staff action",
+    reason = "",
+    allowDeliveredCorrection = false,
+  } = {}
 ) => {
   const previousStatus = pkg.status;
 
   // A repeat is not a new status event.
   if (previousStatus === status) return false;
+    if (previousStatus === "Delivered" && status !== "Delivered") {
+    if (
+      allowDeliveredCorrection !== true ||
+      typeof reason !== "string" ||
+      reason.trim().length < 10 ||
+      reason.trim().length > 1000
+    ) {
+      const error = new Error(
+        "Reopening a Delivered package requires an explicit correction and a reason of 10–1000 characters."
+      );
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+
+  if (["Deleted", "Deleted by KP"].includes(previousStatus)) {
+    const error = new Error("A deleted package cannot receive a status update.");
+    error.statusCode = 409;
+    throw error;
+  }
 
   const now = new Date();
   const actor = user || {};
@@ -735,8 +759,21 @@ const updatePackageStatus = async (req, res) => {
       });
     }
 
+        const deliveredCorrection =
+      pkg.status === "Delivered" && status !== "Delivered";
+
+    const correctionReason =
+      typeof req.body.reason === "string"
+        ? req.body.reason.trim()
+        : "";
+
     applyPackageStatusDetails(pkg, status, req.user, {
-      source: "Packages",
+      source: deliveredCorrection
+        ? "Packages delivery correction"
+        : "Packages",
+      reason: deliveredCorrection ? correctionReason : "",
+      allowDeliveredCorrection:
+        deliveredCorrection && req.body.confirmCorrection === true,
     });
 
         await pkg.save();
@@ -813,10 +850,11 @@ const updatePackageStatus = async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating package status:", error);
-    res.status(500).json({
+        res.status(error.statusCode || 500).json({
       success: false,
-      message: "Failed to update package status",
-      error: error.message,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm the status update. Refresh Packages before retrying.",
     });
   }
 };
@@ -857,6 +895,38 @@ const bulkUpdatePackageStatus = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "No matching packages found",
+      });
+    }
+
+        const uniqueTrackingNumbers = [...new Set(trackingNumbers)];
+
+    if (
+      uniqueTrackingNumbers.some(
+        (number) => typeof number !== "string" || !number.trim()
+      ) ||
+      packages.length !== uniqueTrackingNumbers.length
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Some selected packages could not be found. Refresh Packages and select them again. No bulk updates were started.",
+      });
+    }
+
+    const blocked = packages.filter(
+      (pkg) =>
+        ["Deleted", "Deleted by KP"].includes(pkg.status) ||
+        (pkg.status === "Delivered" && status !== "Delivered")
+    );
+
+    if (blocked.length) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Bulk updates cannot reopen Delivered packages or change deleted packages. " +
+          "Deselect these packages: " +
+          blocked.map((pkg) => pkg.trackingNumber).join(", ") +
+          ". No bulk updates were started.",
       });
     }
 
