@@ -634,9 +634,19 @@ if (packageStatus === "At Warehouse") {
   }
 };
 
-const applyPackageStatusDetails = (pkg, status, user = {}) => {
+const applyPackageStatusDetails = (
+  pkg,
+  status,
+  user = {},
+  { source = "Staff action", reason = "" } = {}
+) => {
   const previousStatus = pkg.status;
+
+  // A repeat is not a new status event.
+  if (previousStatus === status) return false;
+
   const now = new Date();
+  const actor = user || {};
 
   pkg.status = status;
   pkg.statusUpdatedAt = now;
@@ -644,33 +654,42 @@ const applyPackageStatusDetails = (pkg, status, user = {}) => {
   if (status === "Ready for Pickup") {
     pkg.readyForPickup = true;
     pkg.readyForPickupDate =
-      pkg.pickupNotifiedAt ||
-      pkg.readyForPickupDate ||
-      now;
+      pkg.pickupNotifiedAt || pkg.readyForPickupDate || now;
   } else {
     pkg.readyForPickup = false;
     pkg.readyForPickupDate = null;
   }
 
-  // Record a new collection, preserving its original date on retries.
-  // Existing Delivered records are not given invented collection dates.
   if (
     status === "Delivered" &&
     previousStatus !== "Delivered" &&
     !pkg.collectedAt
   ) {
     pkg.collectedAt = now;
-
     pkg.collectedByUserId = String(
-      user.userId || user._id || user.id || ""
+      actor.userId || actor._id || actor.id || ""
     );
-
     pkg.collectedByName =
-      user.fullName ||
-      user.name ||
-      user.email ||
-      "System User";
+      actor.fullName || actor.name || actor.email || "System User";
   }
+
+  if (!pkg.statusHistory) pkg.statusHistory = [];
+
+  pkg.statusHistory.push({
+    previousStatus: previousStatus || "",
+    newStatus: status,
+    changedAt: now,
+    changedByUserId: String(
+      actor.userId || actor._id || actor.id || ""
+    ),
+    changedByName:
+      actor.fullName || actor.name || actor.email || "System User",
+    changedByRole: actor.role || "",
+    source,
+    reason,
+  });
+
+  return true;
 };
 
 const updatePackageStatus = async (req, res) => {
@@ -706,7 +725,19 @@ const updatePackageStatus = async (req, res) => {
 
         const previousStatus = pkg.status;
 
-    applyPackageStatusDetails(pkg, status, req.user);
+        if (pkg.status === status) {
+      return res.json({
+        success: true,
+        message: "Package already has this status. No changes made.",
+        data: pkg,
+        unchanged: true,
+        pointsAwarded: 0,
+      });
+    }
+
+    applyPackageStatusDetails(pkg, status, req.user, {
+      source: "Packages",
+    });
 
         await pkg.save();
 
@@ -835,7 +866,11 @@ const bulkUpdatePackageStatus = async (req, res) => {
     for (const pkg of packages) {
             const previousStatus = pkg.status;
 
-      applyPackageStatusDetails(pkg, status, req.user);
+            if (pkg.status === status) continue;
+
+      applyPackageStatusDetails(pkg, status, req.user, {
+        source: "Packages bulk update",
+      });
 
             await pkg.save();
 

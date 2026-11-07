@@ -42,6 +42,20 @@ const PackageEditHistorySchema = new mongoose.Schema(
   }
 );
 
+const PackageStatusHistorySchema = new mongoose.Schema(
+  {
+    previousStatus: { type: String, default: "" },
+    newStatus: { type: String, required: true },
+    changedAt: { type: Date, required: true },
+    changedByUserId: { type: String, default: "" },
+    changedByName: { type: String, default: "" },
+    changedByRole: { type: String, default: "" },
+    source: { type: String, default: "Staff action" },
+    reason: { type: String, default: "", maxlength: 1000 },
+  },
+  { _id: true }
+);
+
 const PackageSchema = new mongoose.Schema(
   {
     trackingNumber: {
@@ -242,6 +256,11 @@ const PackageSchema = new mongoose.Schema(
         type: String,
         default: "JMD",
       },
+    },
+
+        statusHistory: {
+      type: [PackageStatusHistorySchema],
+      default: [],
     },
 
     statusUpdatedAt: {

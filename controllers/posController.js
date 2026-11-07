@@ -332,7 +332,10 @@ const confirmPaidInvoicePickup = async (req, res) => {
           continue;
         }
 
-        applyPackageStatusDetails(pkg, "Delivered", req.user);
+        applyPackageStatusDetails(pkg, "Delivered", req.user, {
+  source: "POS paid-invoice pickup",
+  reason: `Pickup confirmed for invoice ${invoice.invoiceNumber}`,
+});
         await pkg.save({ session });
 
         await syncCustomerPurchaseFromPackage({
@@ -663,7 +666,10 @@ const cashOutInvoice = async (req, res) => {
           }
 
           for (const pkg of packagesToDeliver) {
-            applyPackageStatusDetails(pkg, "Delivered", req.user);
+            applyPackageStatusDetails(pkg, "Delivered", req.user, {
+  source: "POS checkout",
+  reason: `Handover confirmed for invoice ${invoice.invoiceNumber}`,
+});
             await pkg.save({ session });
 
             await syncCustomerPurchaseFromPackage({
