@@ -64,6 +64,20 @@ const accountsPayableSchema = new mongoose.Schema(
       index: true,
     },
 
+        creationRequestId: {
+      type: String,
+      default: undefined,
+      immutable: true,
+    },
+
+    creationRequestHash: {
+      type: String,
+      default: "",
+      immutable: true,
+      select: false,
+    },
+
+
         freightInvoiceNumber: {
       type: String,
       default: "",
@@ -196,5 +210,17 @@ const accountsPayableSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+accountsPayableSchema.index(
+  { creationRequestId: 1 },
+  {
+    name: "unique_payable_creation_request",
+    unique: true,
+    partialFilterExpression: {
+      creationRequestId: { $type: "string" },
+    },
+  }
+);
+
 
 module.exports = mongoose.model("AccountsPayable", accountsPayableSchema);

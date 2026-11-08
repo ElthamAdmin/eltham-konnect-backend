@@ -143,10 +143,12 @@ const postVendorBill = async ({
   expenseAccountCode,
   amount,
   user,
+  session = null,
 }) => {
   const billAmount = roundMoney(amount || payable.amount || 0);
 
-  return postJournalEntry({
+    return postJournalEntry({
+    session,
     entryDate: normalizePostingDate(payable.payableDate),
     memo: `Vendor bill from ${payable.vendorName}`,
     reference: payable.payableNumber,
@@ -167,10 +169,12 @@ const payVendorBill = async ({
   paymentDate,
   paymentReference,
   user,
+  session = null,
 }) => {
   const paymentAmount = roundMoney(amount || payable.balanceDue || 0);
 
-  return postJournalEntry({
+    return postJournalEntry({
+    session,
     entryDate: normalizePostingDate(paymentDate),
     memo: `Payment to ${payable.vendorName} for ${payable.payableNumber}`,
     reference: paymentReference || payable.payableNumber,
