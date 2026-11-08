@@ -386,118 +386,300 @@ const allocateInvoicePaymentToPurchases = async ({
   receivedBy = "",
   session = null,
 }) => {
-  if (
-    !invoice ||
-    !Array.isArray(invoice.customerPurchases) ||
-    invoice.customerPurchases.length === 0
-  ) {
+  const failAllocation = (message) => {
+    const error = new Error(message);
+    error.statusCode = 409;
+    throw error;
+  };
+
+  const money = (value, label) => {
+    const number = Number(value);
+
+    if (!Number.isFinite(number) || number < 0) {
+      failAllocation(`${label} must be a valid non-negative amount.`);
+    }
+
+    return roundMoney(number);
+  };
+
+  if (!invoice) {
+    failAllocation("Invoice is required for purchase payment allocation.");
+  }
+
+  const invoiceLines = invoice.customerPurchases || [];
+
+  if (invoiceLines.length === 0) {
+    if (
+      ["Customer Purchases", "Combined"].includes(invoice.invoiceSource)
+    ) {
+      failAllocation(
+        "This invoice has no customer-purchase allocations. Review it before recording payment."
+      );
+    }
+
     return {
       totalAllocated: 0,
+      unallocatedAmount: roundMoney(paymentAmount),
       allocations: [],
     };
   }
 
-  let remainingPayment = roundMoney(paymentAmount);
-  const allocations = [];
+  if (!session || !session.inTransaction()) {
+    failAllocation(
+      "Customer-purchase payments must run inside the payment transaction."
+    );
+  }
 
-  for (const invoiceLine of invoice.customerPurchases) {
-    if (remainingPayment <= 0) break;
+  if (invoice.invoiceSource !== "Customer Purchases") {
+    failAllocation(
+      "Combined invoice payments require a separate allocation review."
+    );
+  }
 
-        const purchase = await CustomerPurchase.findOne({
-      purchaseNumber: invoiceLine.purchaseNumber,
-      invoiceNumber: invoice.invoiceNumber,
-    }).session(session);
+  const amount = money(paymentAmount, "Payment amount");
 
-        if (
-      !purchase ||
-      purchase.customerEkonId !== invoice.customerEkonId
-    ) {
-      throw new Error(
-        `Purchase allocation link is invalid for ${invoiceLine.purchaseNumber}.`
+  if (amount <= 0) {
+    failAllocation("Payment amount must be greater than zero.");
+  }
+
+  const journalNumber = String(
+    paymentJournalEntryNumber || ""
+  ).trim();
+
+  if (!journalNumber) {
+    failAllocation(
+      "A posted payment journal number is required."
+    );
+  }
+
+  const parsedPaymentDate = new Date(paymentDate);
+
+  if (Number.isNaN(parsedPaymentDate.getTime())) {
+    failAllocation("Payment date is invalid.");
+  }
+
+  const seen = new Set();
+  const prepared = [];
+
+  let totalAllocated = 0;
+  let totalRecovered = 0;
+  let totalOutstanding = 0;
+
+  for (const line of invoiceLines) {
+    const purchaseNumber = String(
+      line.purchaseNumber || ""
+    ).trim();
+
+    if (!purchaseNumber || seen.has(purchaseNumber)) {
+      failAllocation(
+        "The invoice contains a missing or duplicate purchase allocation."
       );
     }
 
-    const purchaseOutstanding = roundMoney(
-      purchase.outstandingAmount
+    seen.add(purchaseNumber);
+
+    const purchase = await CustomerPurchase.findOne({
+      purchaseNumber,
+      invoiceNumber: invoice.invoiceNumber,
+      customerEkonId: invoice.customerEkonId,
+    }).session(session);
+
+    if (!purchase) {
+      failAllocation(
+        `Purchase allocation link is invalid for ${purchaseNumber}.`
+      );
+    }
+
+    if (
+      ["Cancelled", "Refunded", "Reversed"].includes(purchase.status) ||
+      ["Refunded", "Written Off"].includes(purchase.recoveryStatus)
+    ) {
+      failAllocation(
+        `Purchase ${purchaseNumber} cannot receive this payment in its current status.`
+      );
+    }
+
+    const histories = (purchase.invoiceHistory || []).filter(
+      (entry) => entry.invoiceNumber === invoice.invoiceNumber
     );
 
-    if (purchaseOutstanding <= 0) continue;
+    if (histories.length !== 1) {
+      failAllocation(
+        `Purchase ${purchaseNumber} needs exactly one matching invoice-history entry.`
+      );
+    }
+
+    const history = histories[0];
+
+    const allocated = money(
+      line.allocatedInvoiceAmount,
+      `${purchaseNumber} invoice allocation`
+    );
+
+    const recovered = money(
+      line.recoveredAmount,
+      `${purchaseNumber} recovered amount`
+    );
+
+    const outstanding = money(
+      line.outstandingAmount,
+      `${purchaseNumber} outstanding amount`
+    );
+
+    if (
+      allocated !== roundMoney(recovered + outstanding) ||
+      money(
+        purchase.totalCustomerCharge,
+        `${purchaseNumber} total charge`
+      ) !== allocated ||
+      money(
+        purchase.recoveredAmount,
+        `${purchaseNumber} purchase recovery`
+      ) !== recovered ||
+      money(
+        purchase.outstandingAmount,
+        `${purchaseNumber} purchase balance`
+      ) !== outstanding ||
+      money(
+        history.allocatedInvoiceAmount,
+        `${purchaseNumber} history allocation`
+      ) !== allocated ||
+      money(
+        history.recoveredAmount,
+        `${purchaseNumber} history recovery`
+      ) !== recovered ||
+      money(
+        history.outstandingAmount,
+        `${purchaseNumber} history balance`
+      ) !== outstanding
+    ) {
+      failAllocation(
+        `Purchase ${purchaseNumber}, its invoice allocation and recovery history do not agree. No payment allocation was saved.`
+      );
+    }
+
+    const paymentAllocations = purchase.paymentAllocations || [];
+
+    if (
+      paymentAllocations.some(
+        (entry) =>
+          String(entry.journalEntryNumber || "").trim() ===
+          journalNumber
+      )
+    ) {
+      failAllocation(
+        `Payment journal ${journalNumber} has already been allocated to this invoice.`
+      );
+    }
+
+    prepared.push({
+      line,
+      purchase,
+      history,
+      recovered,
+      outstanding,
+    });
+
+    totalAllocated = roundMoney(totalAllocated + allocated);
+    totalRecovered = roundMoney(totalRecovered + recovered);
+    totalOutstanding = roundMoney(
+      totalOutstanding + outstanding
+    );
+  }
+
+  const invoiceTotal = money(
+    invoice.finalTotal,
+    "Invoice total"
+  );
+
+  const invoicePaid = money(
+    invoice.amountPaid,
+    "Invoice cash received"
+  );
+
+  const invoiceBalance = money(
+    invoice.balanceDue,
+    "Invoice balance"
+  );
+
+  /*
+   * The calling payment service may update invoice cash totals
+   * immediately before or immediately after this helper.
+   * Accept either complete state, never a mixture of both.
+   */
+  const beforePayment =
+    invoicePaid === totalRecovered &&
+    invoiceBalance === totalOutstanding;
+
+  const afterPayment =
+    invoicePaid === roundMoney(totalRecovered + amount) &&
+    invoiceBalance === roundMoney(totalOutstanding - amount);
+
+  if (
+    invoiceTotal !== totalAllocated ||
+    (!beforePayment && !afterPayment) ||
+    amount > totalOutstanding
+  ) {
+    failAllocation(
+      "The payment does not agree with the invoice and purchase balances. Review the allocation before retrying."
+    );
+  }
+
+  let remainingPayment = amount;
+  const allocations = [];
+
+  for (const entry of prepared) {
+    if (remainingPayment === 0) break;
+    if (entry.outstanding === 0) continue;
+
+    const {
+      line,
+      purchase,
+      history,
+      recovered,
+      outstanding,
+    } = entry;
 
     const allocatedAmount = roundMoney(
-      Math.min(
-        purchaseOutstanding,
-        remainingPayment
-      )
+      Math.min(outstanding, remainingPayment)
     );
 
-    purchase.recoveredAmount = roundMoney(
-      Number(purchase.recoveredAmount || 0) +
-        allocatedAmount
+    const nextRecovered = roundMoney(
+      recovered + allocatedAmount
     );
 
-    purchase.outstandingAmount = roundMoney(
-      Math.max(
-        0,
-        purchaseOutstanding - allocatedAmount
-      )
+    const nextOutstanding = roundMoney(
+      outstanding - allocatedAmount
     );
 
-    purchase.paymentAllocations =
-      purchase.paymentAllocations || [];
+    purchase.recoveredAmount = nextRecovered;
+    purchase.outstandingAmount = nextOutstanding;
+
+    purchase.recoveryStatus =
+      nextOutstanding === 0 ? "Paid" : "Partially Paid";
+
+    purchase.status =
+      nextOutstanding === 0
+        ? "Recovered"
+        : "Partially Recovered";
 
     purchase.paymentAllocations.push({
       invoiceNumber: invoice.invoiceNumber,
-      paymentDate,
+      paymentDate: parsedPaymentDate,
       paymentAmount: allocatedAmount,
-      journalEntryNumber:
-        paymentJournalEntryNumber,
+      journalEntryNumber: journalNumber,
       receivedBy,
-      remainingBalance:
-        purchase.outstandingAmount,
+      remainingBalance: nextOutstanding,
     });
 
-    if (purchase.outstandingAmount <= 0) {
-      purchase.recoveryStatus = "Paid";
-      purchase.status = "Recovered";
-    } else {
-      purchase.recoveryStatus = "Partially Paid";
-      purchase.status = "Partially Recovered";
-    }
+    history.recoveredAmount = nextRecovered;
+    history.outstandingAmount = nextOutstanding;
+    history.status = purchase.recoveryStatus;
 
-    const historyEntry = (
-      purchase.invoiceHistory || []
-    )
-      .slice()
-      .reverse()
-      .find(
-        (entry) =>
-          entry.invoiceNumber === invoice.invoiceNumber
-      );
+    line.recoveredAmount = nextRecovered;
+    line.outstandingAmount = nextOutstanding;
 
-    if (historyEntry) {
-      historyEntry.recoveredAmount = roundMoney(
-        Number(historyEntry.recoveredAmount || 0) +
-          allocatedAmount
-      );
-
-      historyEntry.outstandingAmount =
-        purchase.outstandingAmount;
-
-      historyEntry.status =
-        purchase.outstandingAmount <= 0
-          ? "Paid"
-          : "Partially Paid";
-    }
-
-    await purchase.save(session ? { session } : {});
-
-    invoiceLine.recoveredAmount = roundMoney(
-      Number(invoiceLine.recoveredAmount || 0) +
-        allocatedAmount
-    );
-
-    invoiceLine.outstandingAmount =
-      purchase.outstandingAmount;
+    await purchase.save({ session });
 
     remainingPayment = roundMoney(
       remainingPayment - allocatedAmount
@@ -506,20 +688,22 @@ const allocateInvoicePaymentToPurchases = async ({
     allocations.push({
       purchaseNumber: purchase.purchaseNumber,
       allocatedAmount,
-      remainingBalance:
-        purchase.outstandingAmount,
-      recoveryStatus:
-        purchase.recoveryStatus,
+      remainingBalance: nextOutstanding,
+      recoveryStatus: purchase.recoveryStatus,
     });
   }
 
-    await invoice.save({ session });
+  if (remainingPayment !== 0) {
+    failAllocation(
+      "The complete payment could not be allocated. The payment transaction must be rolled back."
+    );
+  }
+
+  await invoice.save({ session });
 
   return {
-    totalAllocated: roundMoney(
-      Number(paymentAmount || 0) - remainingPayment
-    ),
-    unallocatedAmount: remainingPayment,
+    totalAllocated: amount,
+    unallocatedAmount: 0,
     allocations,
   };
 };
