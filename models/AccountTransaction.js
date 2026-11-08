@@ -81,6 +81,13 @@ const accountTransactionSchema = new mongoose.Schema(
       index: true,
     },
 
+        freightInvoiceNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+
     ledgerReference: {
       type: String,
       default: "",

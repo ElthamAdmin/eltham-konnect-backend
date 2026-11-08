@@ -25,6 +25,9 @@ const chargeSchema = new mongoose.Schema(
 
 const paymentSchema = new mongoose.Schema(
   {
+        sourceExpenseNumber: { type: String, default: "" },
+    originalJournalEntryNumber: { type: String, default: "" },
+    linkingReason: { type: String, default: "" },
     requestId: { type: String, required: true },
     requestHash: { type: String, required: true },
     paymentDate: { type: String, required: true },

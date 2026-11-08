@@ -215,6 +215,32 @@ const ExpenseSchema = new mongoose.Schema({
     type: String,
     default: "",
   },
+    freightInvoiceNumber: {
+    type: String,
+    default: "",
+    index: true,
+  },
+
+  freightLinkJournalEntryNumber: {
+    type: String,
+    default: "",
+  },
+
+  freightLinkedAt: {
+    type: Date,
+    default: null,
+  },
+
+  freightLinkedBy: {
+    type: String,
+    default: "",
+  },
+
+  freightLinkReason: {
+    type: String,
+    default: "",
+  },
+
   createdAt: {
     type: Date,
     default: Date.now,

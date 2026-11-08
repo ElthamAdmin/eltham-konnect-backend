@@ -13,6 +13,12 @@ const {
   openFreightAttachment,
 } = require("../controllers/freightInvoiceController");
 
+const {
+  previewFreightExpenseLink,
+  linkFreightExpense,
+} = require("../controllers/freightExpenseLinkController");
+
+
 const router = express.Router();
 
 const allowedTypes = new Set([
@@ -58,6 +64,15 @@ router.use(protect, requirePermission("finance"));
 
 router.get("/", getFreightInvoices);
 router.post("/", receiveAttachment, createFreightInvoice);
+router.post(
+  "/:freightInvoiceNumber/existing-expense/preview",
+  previewFreightExpenseLink
+);
+
+router.post(
+  "/:freightInvoiceNumber/existing-expense/link",
+  linkFreightExpense
+);
 
 router.post(
   "/:freightInvoiceNumber/payments",
