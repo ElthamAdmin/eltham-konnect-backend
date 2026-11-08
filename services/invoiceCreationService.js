@@ -328,6 +328,20 @@ const createFreightInvoice = async ({ body, user, allReady = false }) =>
 
 const createRecoveryInvoice = async ({ body, user }) =>
   mongoose.connection.transaction(async (session) => {
+    const requestedPoints = Number(body.pointsToRedeem ?? 0);
+    const redeemedPoints = Number(body.pointsRedeemed ?? 0);
+
+    if (
+      !Number.isFinite(requestedPoints) ||
+      requestedPoints !== 0 ||
+      !Number.isFinite(redeemedPoints) ||
+      redeemedPoints !== 0
+    ) {
+      fail(
+        "EK points cannot be redeemed on Shopping Assistance invoices."
+      );
+    }
+
     if (body.packageIds?.length) {
       fail("Invoice ordinary packages and Shopping Assistance purchases separately.");
     }
@@ -406,7 +420,8 @@ const createRecoveryInvoice = async ({ body, user }) =>
         invoiceNumber: `INV-${crypto.randomUUID()}`,
         customerEkonId: customer.ekonId,
         customerName: customer.name,
-        invoiceSource: "Customer Purchases",
+                invoiceSource: "Customer Purchases",
+        pointsRedeemed: 0,
         packages: invoicePackageLines,
         packageCount: invoicePackageLines.length,
         customerPurchases: invoicePurchaseLines,
