@@ -58,6 +58,26 @@ const PreAlertSchema = new mongoose.Schema(
       default: "",
     },
 
+        invoiceStorageProvider: {
+      type: String,
+      default: "",
+    },
+
+    invoiceCloudinaryPublicId: {
+      type: String,
+      default: "",
+    },
+
+    invoiceMimeType: {
+      type: String,
+      default: "",
+    },
+
+    invoiceFileSize: {
+      type: Number,
+      default: 0,
+    },
+
     status: {
       type: String,
       default: "Submitted",

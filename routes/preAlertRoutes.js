@@ -1,13 +1,12 @@
 const express = require("express");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
 
 const router = express.Router();
 
 const {
   getPreAlerts,
   createPreAlert,
+  openPreAlertInvoice,
 } = require("../controllers/preAlertController");
 
 const { protect } = require("../middleware/authMiddleware");
@@ -16,70 +15,72 @@ const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
-const preAlertsUploadDir = path.join(__dirname, "..", "uploads", "prealerts");
-
-if (!fs.existsSync(preAlertsUploadDir)) {
-  fs.mkdirSync(preAlertsUploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, preAlertsUploadDir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || "");
-    const safeTracking = String(req.body.trackingNumber || "prealert")
-      .replace(/[^a-zA-Z0-9-_]/g, "")
-      .slice(0, 40);
-
-    cb(null, `prealert-${safeTracking}-${Date.now()}${ext}`);
-  },
-});
-
-const fileFilter = (req, file, cb) => {
-  const allowedMimeTypes = [
-    "application/pdf",
-    "image/jpeg",
-    "image/jpg",
-    "image/png",
-    "image/webp",
-  ];
-
-  if (allowedMimeTypes.includes(file.mimetype)) {
-    return cb(null, true);
-  }
-
-  return cb(new Error("Only PDF, JPG, JPEG, PNG, and WEBP files are allowed"));
-};
+const allowedTypes = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
 
 const upload = multer({
-  storage,
-  fileFilter,
+  storage: multer.memoryStorage(),
+
   limits: {
     fileSize: 10 * 1024 * 1024,
+    files: 1,
+    fields: 6,
+    fieldSize: 32 * 1024,
+  },
+
+  fileFilter: (req, file, cb) => {
+    const mimeType = String(file.mimetype || "").toLowerCase();
+
+    if (!allowedTypes.has(mimeType)) {
+      return cb(
+        new Error("Only PDF, JPG, JPEG, PNG and WEBP invoices are allowed.")
+      );
+    }
+
+    return cb(null, true);
   },
 });
 
-// Customer portal: retrieve only the authenticated customer's pre-alerts
+const receiveInvoice = (req, res, next) => {
+  upload.single("invoiceFile")(req, res, (error) => {
+    if (!error) return next();
+
+    return res.status(400).json({
+      success: false,
+      message:
+        error.code === "LIMIT_FILE_SIZE"
+          ? "The invoice must be 10 MB or smaller."
+          : error.message || "The invoice upload could not be processed.",
+    });
+  });
+};
+
+router.get("/my", protectCustomer, getPreAlerts);
+
 router.get(
-  "/my",
+  "/my/:preAlertNumber/invoice",
   protectCustomer,
-  getPreAlerts
+  openPreAlertInvoice
 );
 
-// Customer portal: submit a new pre-alert
 router.post(
   "/",
   protectCustomer,
-  upload.single("invoiceFile"),
+  receiveInvoice,
   createPreAlert
 );
 
-// EKOS staff: retrieve all customer pre-alerts
 router.get(
-  "/",
+  "/staff/:preAlertNumber/invoice",
   protect,
-  getPreAlerts
+  openPreAlertInvoice
 );
+
+router.get("/", protect, getPreAlerts);
 
 module.exports = router;
