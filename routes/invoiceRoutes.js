@@ -2,7 +2,6 @@ const express = require("express");
 const router = express.Router();
 
 const {
-  createInvoice,
   generateMultipleInvoice,
   generateCustomerPurchaseInvoice,
   getInvoices,
@@ -11,12 +10,12 @@ const {
   markInvoicePaid,
   updateInvoiceChargesAdjustment,
   applyInvoicePointsAdjustment,
-  reconcilePaidInvoicePackages,
 } = require("../controllers/invoiceController");
 
 const {
   protect,
   requirePermission,
+  requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
 const {
@@ -28,46 +27,42 @@ const {
   protectCustomer,
 } = require("../middleware/customerAuthMiddleware");
 
-router.post(
-  "/storage/:packageId",
-  protect,
-  requirePermission("invoices"),
-  generateStorageInvoice
-);
-
 router.get("/my", protectCustomer, getMyInvoices);
-router.get("/", protect, getInvoices);
-router.post(
-  "/generate-multiple",
+
+router.get(
+  "/",
   protect,
-  generateMultipleInvoice
+  requireAnyPermission(["invoices", "finance", "pos"]),
+  getInvoices
 );
 
-router.post(
-  "/generate-customer-purchases",
-  protect,
-  generateCustomerPurchaseInvoice
-);
+router.use(protect, requirePermission("invoices"));
 
-router.put(
-  "/:invoiceNumber/payment-link",
-  protect,
-  updateInvoicePaymentLink
-);
+router.post("/storage/:packageId", generateStorageInvoice);
+router.post("/generate-multiple", generateMultipleInvoice);
+router.post("/generate-customer-purchases", generateCustomerPurchaseInvoice);
+
+router.put("/:invoiceNumber/payment-link", updateInvoicePaymentLink);
+
 router.put(
   "/:invoiceNumber/apply-points",
-  protect,
   blockStorageInvoiceAdjustment,
   applyInvoicePointsAdjustment
 );
 
 router.put(
   "/:invoiceNumber/charges",
-  protect,
   blockStorageInvoiceAdjustment,
   updateInvoiceChargesAdjustment
 );
-router.put("/pay/:invoiceNumber", protect, markInvoicePaid);
-router.put("/reconcile/paid-packages", protect, reconcilePaidInvoicePackages);
+
+router.put("/pay/:invoiceNumber", markInvoicePaid);
+
+router.put("/reconcile/paid-packages", (req, res) => {
+  return res.status(409).json({
+    success: false,
+    message: "Historical package reconciliation is disabled.",
+  });
+});
 
 module.exports = router;

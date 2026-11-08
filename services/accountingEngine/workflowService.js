@@ -67,7 +67,7 @@ const normalizePostingDate = (dateValue) => {
   return formatDateInJamaica(date);
 };
 
-const postCustomerInvoice = async ({ invoice, user }) => {
+const postCustomerInvoice = async ({ invoice, user, session = null }) => {
   const amount = roundMoney(invoice.finalTotal || invoice.balanceDue || 0);
 
   return postJournalEntry({
@@ -76,6 +76,7 @@ const postCustomerInvoice = async ({ invoice, user }) => {
     reference: invoice.invoiceNumber,
     sourceModule: "Invoices",
     createdBy: getUserName(user),
+        session,
     lines: templates.buildCustomerInvoiceLines({ amount }),
   });
 };
@@ -525,8 +526,10 @@ const postCustomerPurchaseRecoveryInvoice = async ({
   otherServiceRevenue,
   invoiceDate,
   user,
+    session = null,
 }) => {
   return postJournalEntry({
+        session,
     entryDate: normalizePostingDate(
       invoiceDate || new Date()
     ),

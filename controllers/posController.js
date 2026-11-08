@@ -28,6 +28,7 @@ const {
 
 const {
   syncCustomerPurchaseFromPackage,
+  allocateInvoicePaymentToPurchases,
 } = require("../services/customerPurchaseIntegrationService");
 
 
@@ -718,6 +719,33 @@ const cashOutInvoice = async (req, res) => {
             },
           ],
         });
+
+                if (invoiceType === "Shipping") {
+          invoice.paymentHistory = invoice.paymentHistory || [];
+
+          invoice.paymentHistory.push({
+            paymentDate: new Date(),
+            amount: paymentApplied,
+            paymentMethod,
+            receivingAccountNumber: receivingAccount.accountNumber,
+            receivingAccountName: receivingAccount.accountName,
+            journalEntryNumber: journalEntry.entryNumber,
+            receivedBy: getUserName(req),
+          });
+
+          await invoice.save({ session });
+
+          if (invoice.customerPurchases?.length) {
+            await allocateInvoicePaymentToPurchases({
+              session,
+              invoice,
+              paymentAmount: paymentApplied,
+              paymentJournalEntryNumber: journalEntry.entryNumber,
+              paymentDate: new Date(),
+              receivedBy: getUserName(req),
+            });
+          }
+        }
 
         const [financeTransaction] =
           await AccountTransaction.create(

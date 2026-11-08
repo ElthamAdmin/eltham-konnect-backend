@@ -137,6 +137,7 @@ const syncCustomerPurchaseFromPackage = async ({
 const getRecoveryInvoiceData = async ({
   customerEkonId,
   purchaseNumbers,
+    session = null,
 }) => {
   if (
     !Array.isArray(purchaseNumbers) ||
@@ -149,8 +150,8 @@ const getRecoveryInvoiceData = async ({
 
   const purchases = await CustomerPurchase.find({
     purchaseNumber: { $in: purchaseNumbers },
-    customerEkonId,
-  });
+        customerEkonId,
+  }).session(session);
 
   if (purchases.length !== purchaseNumbers.length) {
     throw new Error(
@@ -264,8 +265,8 @@ const getRecoveryInvoiceData = async ({
 
   const packages = packageIds.length
     ? await Package.find({
-        _id: { $in: packageIds },
-      })
+                _id: { $in: packageIds },
+      }).session(session)
     : [];
 
   const invoicePurchaseLines = purchases.map((purchase) => ({
@@ -326,51 +327,55 @@ const markPurchasesInvoiced = async ({
   invoice,
   journalEntryNumber = "",
   user = null,
+  session = null,
 }) => {
   const now = new Date();
-  const userName = getUserName(user);
 
   for (const purchase of purchases) {
-    const invoiceLine = (
-      invoice.customerPurchases || []
-    ).find(
-      (line) =>
-        line.purchaseNumber === purchase.purchaseNumber
+    const line = (invoice.customerPurchases || []).find(
+      (item) => item.purchaseNumber === purchase.purchaseNumber
     );
 
-    const allocatedInvoiceAmount = roundMoney(
-      invoiceLine?.allocatedInvoiceAmount ||
-        purchase.totalCustomerCharge ||
-        0
-    );
+    if (!line) {
+      throw new Error(
+        `Invoice line missing for purchase ${purchase.purchaseNumber}.`
+      );
+    }
+
+    const amount = roundMoney(line.allocatedInvoiceAmount);
+
+    if (!Number.isFinite(amount) || amount < 0) {
+      throw new Error("Invalid purchase invoice allocation.");
+    }
+
+    if (purchase.invoiceNumber) {
+      throw new Error(
+        `Purchase ${purchase.purchaseNumber} is already invoiced.`
+      );
+    }
 
     purchase.invoiceNumber = invoice.invoiceNumber;
     purchase.invoiceReady = false;
     purchase.invoicedAt = now;
-    purchase.invoiceJournalEntryNumber =
-      journalEntryNumber;
+    purchase.invoiceJournalEntryNumber = journalEntryNumber;
     purchase.recoveryStatus = "Invoiced";
     purchase.status = "Invoiced";
-    purchase.outstandingAmount =
-      allocatedInvoiceAmount;
-    purchase.updatedBy = userName;
-
-    purchase.invoiceHistory =
-      purchase.invoiceHistory || [];
+    purchase.outstandingAmount = amount;
+    purchase.updatedBy = getUserName(user);
+    purchase.invoiceHistory = purchase.invoiceHistory || [];
 
     purchase.invoiceHistory.push({
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: now,
-      allocatedInvoiceAmount,
+      allocatedInvoiceAmount: amount,
       recoveredAmount: 0,
-      outstandingAmount:
-        allocatedInvoiceAmount,
+      outstandingAmount: amount,
       journalEntryNumber,
       status: "Invoiced",
     });
 
-  await invoice.save(session ? { session } : {});
-}
+    await purchase.save({ session });
+  }
 };
 
 const allocateInvoicePaymentToPurchases = async ({
@@ -403,7 +408,14 @@ const allocateInvoicePaymentToPurchases = async ({
       invoiceNumber: invoice.invoiceNumber,
     }).session(session);
 
-    if (!purchase) continue;
+        if (
+      !purchase ||
+      purchase.customerEkonId !== invoice.customerEkonId
+    ) {
+      throw new Error(
+        `Purchase allocation link is invalid for ${invoiceLine.purchaseNumber}.`
+      );
+    }
 
     const purchaseOutstanding = roundMoney(
       purchase.outstandingAmount
@@ -501,7 +513,7 @@ const allocateInvoicePaymentToPurchases = async ({
     });
   }
 
-  await invoice.save();
+    await invoice.save({ session });
 
   return {
     totalAllocated: roundMoney(
