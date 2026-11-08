@@ -10,35 +10,22 @@ const SYSTEM_AR_ACCOUNT_CODE = "1100";
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
-const getAgeBucket = (invoice) => {
-  const dateValue = invoice.dueDate || invoice.createdAt;
-  const dueDate = new Date(dateValue);
-  if (Number.isNaN(dueDate.getTime())) return "Unknown";
+const {
+  getAgeBucket,
+  getInvoiceExpectedBalance,
+  getInvoiceReportBalance,
+  getPostedWriteOffAmount,
+  daysPastDue,
+  dateOnly,
+  jamaicaToday,
+} = require("./arBalanceService");
 
-  const today = new Date();
-  const diffDays = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-
-  if (diffDays <= 0) return "Current";
-  if (diffDays <= 30) return "1-30";
-  if (diffDays <= 60) return "31-60";
-  if (diffDays <= 90) return "61-90";
-  return "90+";
-};
-
-const getOpenInvoices = async () => {
-  return Invoice.find({
+const getOpenInvoices = async () =>
+  Invoice.find({
     status: { $in: ["Unpaid", "Partially Paid"] },
+    balanceDue: { $gt: 0 },
   }).sort({ createdAt: 1 });
-};
 
-const getInvoiceExpectedBalance = (invoice) =>
-  roundMoney(Number(invoice.finalTotal || 0) - Number(invoice.amountPaid || 0));
-
-const getInvoiceReportBalance = (invoice) => {
-  const storedBalance = roundMoney(invoice.balanceDue);
-  if (storedBalance > 0) return storedBalance;
-  return getInvoiceExpectedBalance(invoice);
-};
 
 const buildAgingReport = async () => {
   const invoices = await getOpenInvoices();
@@ -87,37 +74,36 @@ const buildAgingReport = async () => {
 const buildCustomerStatement = async (customerEkonId) => {
   const customer = await Customer.findOne({ ekonId: customerEkonId });
 
-  if (!customer) throw new Error("Customer not found.");
+  if (!customer) {
+    const error = new Error("Customer not found.");
+    error.statusCode = 404;
+    throw error;
+  }
 
   const invoices = await Invoice.find({ customerEkonId }).sort({
     createdAt: 1,
     invoiceNumber: 1,
   });
 
-  const rows = invoices.map((invoice) => ({
-    invoiceNumber: invoice.invoiceNumber,
-    invoiceDate: invoice.createdAt,
-    dueDate: invoice.dueDate || invoice.createdAt,
-    status: invoice.status,
-    finalTotal: roundMoney(invoice.finalTotal),
-    amountPaid: roundMoney(invoice.amountPaid),
-    balanceDue: getInvoiceReportBalance(invoice),
-    paymentHistory: invoice.paymentHistory || [],
-  }));
+  const rows = invoices.map((invoice) => {
+    const excluded = ["Draft", "Cancelled", "Refunded"].includes(invoice.status);
 
-  const totalInvoiced = roundMoney(
-    rows.reduce((sum, row) => sum + Number(row.finalTotal || 0), 0)
-  );
+    return {
+      invoiceNumber: invoice.invoiceNumber,
+      invoiceDate: invoice.createdAt,
+      dueDate: invoice.dueDate || invoice.createdAt,
+      status: invoice.status,
+      excludedFromTotals: excluded,
+      finalTotal: roundMoney(invoice.finalTotal),
+      amountPaid: roundMoney(invoice.amountPaid),
+      writeOffAmount: getPostedWriteOffAmount(invoice),
+      recoveredAfterWriteOff: roundMoney(invoice.writeOffRecoveredAmount),
+      balanceDue: getInvoiceReportBalance(invoice),
+      paymentHistory: invoice.paymentHistory || [],
+    };
+  });
 
-  const totalPaid = roundMoney(
-    rows.reduce((sum, row) => sum + Number(row.amountPaid || 0), 0)
-  );
-
-  const totalOutstanding = roundMoney(
-    rows
-      .filter((row) => ["Unpaid", "Partially Paid"].includes(row.status))
-      .reduce((sum, row) => sum + Number(row.balanceDue || 0), 0)
-  );
+  const included = rows.filter((row) => !row.excludedFromTotals);
 
   return {
     customer: {
@@ -128,13 +114,34 @@ const buildCustomerStatement = async (customerEkonId) => {
       branch: customer.branch,
     },
     totals: {
-      totalInvoiced,
-      totalPaid,
-      totalOutstanding,
+      totalInvoiced: roundMoney(
+        included.reduce((sum, row) => sum + row.finalTotal, 0)
+      ),
+      totalPaid: roundMoney(
+        included.reduce((sum, row) => sum + row.amountPaid, 0)
+      ),
+      totalWrittenOff: roundMoney(
+        included.reduce((sum, row) => sum + row.writeOffAmount, 0)
+      ),
+      totalRecoveredAfterWriteOff: roundMoney(
+        included.reduce((sum, row) => sum + row.recoveredAfterWriteOff, 0)
+      ),
+      totalOutstanding: roundMoney(
+        included
+          .filter((row) => ["Unpaid", "Partially Paid"].includes(row.status))
+          .reduce((sum, row) => sum + row.balanceDue, 0)
+      ),
     },
     rows,
+    notes: [
+      "Draft, Cancelled and Refunded invoices are excluded from these totals.",
+      "Write-offs are not cash payments.",
+      "Recoveries after write-off are shown separately.",
+      "This report does not repair historical records.",
+    ],
   };
 };
+
 
 const reconcileARSubledgerToGL = async () => {
   const invoices = await getOpenInvoices();
@@ -328,7 +335,7 @@ const buildARDiagnosticAudit = async () => {
       issueTypes.push("OPEN_INVOICE_WITH_NO_AR_LEDGER");
     }
 
-    if (row.status === "Paid" && row.reportBalanceDue !== 0) {
+        if (row.status === "Paid" && row.storedBalanceDue !== 0) {
       issueTypes.push("PAID_INVOICE_WITH_BALANCE");
     }
 
@@ -477,8 +484,8 @@ const buildCollectionsDashboard = async () => {
 
   const rows = aging.rows || [];
 
-  const overdueRows = rows.filter((row) =>
-    ["31-60", "61-90", "90+"].includes(row.bucket)
+    const overdueRows = rows.filter((row) =>
+    ["1-30", "31-60", "61-90", "90+"].includes(row.bucket)
   );
 
   const topDebtors = [...rows]
@@ -517,14 +524,13 @@ const buildCollectionsDashboard = async () => {
     overdueRows.some((row) => row.customerEkonId === customer.customerEkonId)
   );
 
-  const currentAmount = roundMoney(
-    Number(aging.buckets.Current || 0) + Number(aging.buckets["1-30"] || 0)
-  );
+    const currentAmount = roundMoney(aging.buckets.Current || 0);
 
-  const overdueAmount = roundMoney(
+    const overdueAmount = roundMoney(
+    Number(aging.buckets["1-30"] || 0) +
     Number(aging.buckets["31-60"] || 0) +
-      Number(aging.buckets["61-90"] || 0) +
-      Number(aging.buckets["90+"] || 0)
+    Number(aging.buckets["61-90"] || 0) +
+    Number(aging.buckets["90+"] || 0)
   );
 
   const totalOutstanding = roundMoney(aging.totalOutstanding);
@@ -551,15 +557,8 @@ const buildCollectionsDashboard = async () => {
   };
 };
 
-const getDaysOutstanding = (value) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 0;
+const getDaysOutstanding = (value) => daysPastDue(value) ?? 0;
 
-  return Math.max(
-    0,
-    Math.floor((Date.now() - date.getTime()) / (1000 * 60 * 60 * 24))
-  );
-};
 
 const getCustomerRiskLevel = ({ oldestInvoiceDays = 0, outstandingBalance = 0 }) => {
   if (oldestInvoiceDays >= 90 || outstandingBalance >= 50000) return "Critical";
@@ -873,15 +872,8 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
 };
 
 const isSameOrBeforeToday = (value) => {
-  if (!value) return false;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return false;
-
-  const today = new Date();
-  today.setHours(23, 59, 59, 999);
-
-  return date <= today;
+  const date = dateOnly(value);
+  return Boolean(date && date <= jamaicaToday());
 };
 
 const getCollectionPriorityScore = ({
@@ -1110,34 +1102,13 @@ const buildReminderQueue = async () => {
   };
 };
 
-const logInvoiceReminder = async ({ invoiceNumber, reminderType, channel, user }) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
+const logInvoiceReminder = (details) => logReminderAction(details);
 
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  const createdBy = user?.fullName || user?.name || user?.email || "System User";
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note: `${reminderType || "Payment Reminder"} sent via ${channel || "Manual"}.`,
-    createdBy,
-  });
-
-  invoice.lastCollectionContact = new Date();
-
-  if (invoice.collectionsStatus === "Normal") {
-    invoice.collectionsStatus = "Reminder Sent";
-  }
-
-  await invoice.save();
-
-  return invoice;
-};
 
 const buildCollectionPerformanceKPIs = async () => {
-  const invoices = await Invoice.find().sort({ createdAt: 1 });
+    const invoices = await Invoice.find({
+    status: { $nin: ["Draft", "Cancelled", "Refunded"] },
+  }).sort({ createdAt: 1 });
   const customers = await Customer.find();
 
   const customerBranchMap = {};
@@ -1436,240 +1407,16 @@ const totalRecovered = roundMoney(
   };
 };
 
-const requestInvoiceWriteOff = async ({
-  invoiceNumber,
-  reason,
-  notes,
-  amount,
-  user,
-}) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
+const {
+  requestInvoiceWriteOff,
+  approveInvoiceWriteOff,
+  rejectInvoiceWriteOff,
+  recordWriteOffRecovery,
+  addInvoiceCollectionNote,
+  logInvoiceReminder: logReminderAction,
+  updateInvoiceCollectionWorkflow,
+} = require("./arCollectionActionService");
 
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  const balanceDue = getInvoiceReportBalance(invoice);
-  const writeOffAmount = roundMoney(amount || balanceDue);
-
-  if (writeOffAmount <= 0) {
-    throw new Error("Write-off amount must be greater than zero.");
-  }
-
-  if (writeOffAmount > balanceDue) {
-    throw new Error("Write-off amount cannot exceed invoice balance due.");
-  }
-
-  const requestedBy = user?.fullName || user?.name || user?.email || "System User";
-
-  invoice.writeOffStatus = "Pending Approval";
-  invoice.writeOffReason = reason || "Other";
-  invoice.writeOffNotes = notes || "";
-  invoice.writeOffAmount = writeOffAmount;
-  invoice.writeOffRequestedBy = requestedBy;
-  invoice.writeOffRequestedAt = new Date();
-  invoice.collectionsStatus = "Legal Review";
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note: `Write-off requested for JMD ${writeOffAmount.toLocaleString()}. Reason: ${invoice.writeOffReason}. ${notes || ""}`,
-    createdBy: requestedBy,
-  });
-
-  await invoice.save();
-  return invoice;
-};
-
-const approveInvoiceWriteOff = async ({ invoiceNumber, user }) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
-
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  if (invoice.writeOffStatus !== "Pending Approval") {
-    throw new Error("Only pending write-offs can be approved.");
-  }
-
-  const writeOffAmount = roundMoney(invoice.writeOffAmount);
-  const balanceDue = getInvoiceReportBalance(invoice);
-
-  if (writeOffAmount <= 0) {
-    throw new Error("Write-off amount must be greater than zero.");
-  }
-
-  if (writeOffAmount > balanceDue) {
-    throw new Error("Write-off amount cannot exceed invoice balance due.");
-  }
-
-  const approvedBy =
-    user?.fullName || user?.name || user?.email || "System User";
-
-  await ensureSystemAccounts();
-
-  /*
-   * Protect against duplicate journal posting if a previous request posted
-   * the journal but failed before updating the invoice.
-   */
-  const existingLedgerLine = await GeneralLedgerTransaction.findOne({
-    reference: invoiceNumber,
-    sourceModule: "Accounts Receivable",
-    accountCode: SYSTEM_AR_ACCOUNT_CODE,
-  }).sort({ createdAt: -1 });
-
-  let postedJournalEntryNumber = existingLedgerLine?.entryNumber || "";
-
-  if (!postedJournalEntryNumber) {
-    const journalEntry = await postBadDebtWriteOff({
-      invoice,
-      amount: writeOffAmount,
-      postingDate: new Date(),
-      user,
-    });
-
-    postedJournalEntryNumber = journalEntry.entryNumber;
-  }
-
-  const remainingBalance = roundMoney(balanceDue - writeOffAmount);
-  const isFullyWrittenOff = remainingBalance === 0;
-
-  invoice.writeOffStatus = "Written Off";
-  invoice.writeOffApprovedBy = approvedBy;
-  invoice.writeOffApprovedAt = new Date();
-  invoice.writeOffJournalEntryNumber = postedJournalEntryNumber;
-
-  invoice.balanceDue = remainingBalance;
-
-  if (isFullyWrittenOff) {
-    invoice.status = "Written Off";
-    invoice.collectionsStatus = "Written Off";
-  } else {
-    invoice.status = "Partially Paid";
-    invoice.collectionsStatus = "Collections";
-  }
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note:
-      `Write-off approved for JMD ${writeOffAmount.toLocaleString()}. ` +
-      `Journal Entry: ${postedJournalEntryNumber}.`,
-    createdBy: approvedBy,
-  });
-
-  await invoice.save();
-
-  return invoice;
-};
-
-const rejectInvoiceWriteOff = async ({ invoiceNumber, notes, user }) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
-
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  const rejectedBy = user?.fullName || user?.name || user?.email || "System User";
-
-  invoice.writeOffStatus = "Rejected";
-  invoice.writeOffNotes = notes || invoice.writeOffNotes || "";
-  invoice.collectionsStatus = "Collections";
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note: `Write-off rejected. ${notes || ""}`,
-    createdBy: rejectedBy,
-  });
-
-  await invoice.save();
-  return invoice;
-};
-
-const recordWriteOffRecovery = async ({
-  invoiceNumber,
-  amount,
-  recoveryJournalEntryNumber,
-  user,
-}) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
-
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  const recoveredAmount = roundMoney(amount);
-
-  if (recoveredAmount <= 0) {
-    throw new Error("Recovery amount must be greater than zero.");
-  }
-
-  const recordedBy = user?.fullName || user?.name || user?.email || "System User";
-
-  invoice.writeOffRecoveredAmount = roundMoney(
-    Number(invoice.writeOffRecoveredAmount || 0) + recoveredAmount
-  );
-  invoice.writeOffRecoveredAt = new Date();
-  invoice.recoveryJournalEntryNumber = recoveryJournalEntryNumber || "";
-  invoice.writeOffStatus = "Recovered";
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note: `Bad debt recovery recorded for JMD ${recoveredAmount.toLocaleString()}.`,
-    createdBy: recordedBy,
-  });
-
-  await invoice.save();
-  return invoice;
-};
-
-const addInvoiceCollectionNote = async ({
-  invoiceNumber,
-  note,
-  user,
-}) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
-
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  invoice.collectionNotes = invoice.collectionNotes || [];
-  invoice.collectionNotes.push({
-    note,
-    createdBy: user?.fullName || user?.name || user?.email || "System User",
-  });
-
-  invoice.lastCollectionContact = new Date();
-  await invoice.save();
-
-  return invoice;
-};
-
-const updateInvoiceCollectionWorkflow = async ({
-  invoiceNumber,
-  collectionsStatus,
-  assignedCollector,
-  nextFollowUpDate,
-  promiseToPayDate,
-  promiseToPayAmount,
-  promiseToPayStatus,
-}) => {
-  const invoice = await Invoice.findOne({ invoiceNumber });
-
-  if (!invoice) {
-    throw new Error("Invoice not found.");
-  }
-
-  if (collectionsStatus !== undefined) invoice.collectionsStatus = collectionsStatus;
-  if (assignedCollector !== undefined) invoice.assignedCollector = assignedCollector;
-  if (nextFollowUpDate !== undefined) invoice.nextFollowUpDate = nextFollowUpDate || null;
-  if (promiseToPayDate !== undefined) invoice.promiseToPayDate = promiseToPayDate || null;
-  if (promiseToPayAmount !== undefined) invoice.promiseToPayAmount = roundMoney(promiseToPayAmount);
-  if (promiseToPayStatus !== undefined) invoice.promiseToPayStatus = promiseToPayStatus;
-
-  await invoice.save();
-
-  return invoice;
-};
 
 module.exports = {
   buildAgingReport,

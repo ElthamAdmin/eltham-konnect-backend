@@ -1,5 +1,8 @@
 const crypto = require("crypto");
 const mongoose = require("mongoose");
+const {
+  assertCollectibleBalance,
+} = require("../services/arBalanceService");
 const POSCashDrawer = require("../models/POSCashDrawer");
 const POSTransaction = require("../models/POSTransaction");
 const Invoice = require("../models/Invoice");
@@ -539,9 +542,10 @@ const cashOutInvoice = async (req, res) => {
           );
         }
 
-        const outstandingBeforePayment = roundMoney(
-          finalTotal - existingPaid
-        );
+                const outstandingBeforePayment =
+          invoiceType === "Shipping"
+            ? assertCollectibleBalance(invoice)
+            : roundMoney(finalTotal - existingPaid);
 
         if (outstandingBeforePayment <= 0) {
           fail("This invoice has no outstanding balance.");
@@ -577,8 +581,8 @@ const cashOutInvoice = async (req, res) => {
           existingPaid + paymentApplied
         );
 
-        const newBalanceDue = roundMoney(
-          finalTotal - newAmountPaid
+                const newBalanceDue = roundMoney(
+          outstandingBeforePayment - paymentApplied
         );
 
         invoice.amountPaid = newAmountPaid;

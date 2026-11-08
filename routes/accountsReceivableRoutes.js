@@ -1,7 +1,12 @@
 const express = require("express");
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
+
+router.use(protect, requirePermission("finance"));
 
 const {
   getARAging,

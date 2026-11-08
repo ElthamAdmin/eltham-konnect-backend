@@ -24,7 +24,7 @@ const getARAging = async (req, res) => {
     res.json({ success: true, data: report });
   } catch (error) {
     console.error("AR aging error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not generate AR aging report",
       error: error.message,
@@ -40,7 +40,7 @@ const getCustomerStatement = async (req, res) => {
     res.json({ success: true, data: statement });
   } catch (error) {
     console.error("Customer statement error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not generate customer statement",
       error: error.message,
@@ -54,7 +54,7 @@ const getARReconciliation = async (req, res) => {
     res.json({ success: true, data: reconciliation });
   } catch (error) {
     console.error("AR reconciliation error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not reconcile AR",
       error: error.message,
@@ -68,7 +68,7 @@ const getARDiagnosticAudit = async (req, res) => {
     res.json({ success: true, data: audit });
   } catch (error) {
     console.error("AR diagnostic audit error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not run AR diagnostic audit",
       error: error.message,
@@ -82,7 +82,7 @@ const getCollectionsDashboard = async (req, res) => {
     res.json({ success: true, data: dashboard });
   } catch (error) {
     console.error("Collections dashboard error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load collections dashboard",
       error: error.message,
@@ -96,7 +96,7 @@ const getCollectionsWorkQueue = async (req, res) => {
     res.json({ success: true, data: queue });
   } catch (error) {
     console.error("Collections work queue error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load collections work queue",
       error: error.message,
@@ -110,7 +110,7 @@ const getReminderQueue = async (req, res) => {
     res.json({ success: true, data: reminders });
   } catch (error) {
     console.error("Reminder queue error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load reminder queue",
       error: error.message,
@@ -137,9 +137,9 @@ const sendInvoiceReminder = async (req, res) => {
     });
   } catch (error) {
     console.error("Send reminder error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not log reminder",
+            message: error.message || "Could not log reminder",
       error: error.message,
     });
   }
@@ -151,7 +151,7 @@ const getCollectionPerformanceKPIs = async (req, res) => {
     res.json({ success: true, data: performance });
   } catch (error) {
     console.error("Collection performance KPI error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load collection performance KPIs",
       error: error.message,
@@ -165,7 +165,7 @@ const getWriteOffDashboard = async (req, res) => {
     res.json({ success: true, data: dashboard });
   } catch (error) {
     console.error("Write-off dashboard error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load write-off dashboard",
       error: error.message,
@@ -187,9 +187,9 @@ const requestWriteOff = async (req, res) => {
     res.json({ success: true, message: "Write-off requested successfully", data: invoice });
   } catch (error) {
     console.error("Request write-off error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not request write-off",
+            message: error.message || "Could not request write-off",
       error: error.message,
     });
   }
@@ -212,7 +212,7 @@ const approveWriteOff = async (req, res) => {
   } catch (error) {
     console.error("Approve write-off error:", error);
 
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message:
         error.message ||
@@ -234,9 +234,9 @@ const rejectWriteOff = async (req, res) => {
     res.json({ success: true, message: "Write-off rejected successfully", data: invoice });
   } catch (error) {
     console.error("Reject write-off error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not reject write-off",
+            message: error.message || "Could not reject write-off",
       error: error.message,
     });
   }
@@ -255,9 +255,9 @@ const recordRecovery = async (req, res) => {
     res.json({ success: true, message: "Recovery recorded successfully", data: invoice });
   } catch (error) {
     console.error("Record recovery error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not record recovery",
+            message: error.message || "Could not record recovery",
       error: error.message,
     });
   }
@@ -271,7 +271,7 @@ const getCustomerCollectionsProfile = async (req, res) => {
     res.json({ success: true, data: profile });
   } catch (error) {
     console.error("Customer collections profile error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load customer collections profile",
       error: error.message,
@@ -304,9 +304,9 @@ const addCollectionNote = async (req, res) => {
     });
   } catch (error) {
     console.error("Add collection note error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not add collection note",
+            message: error.message || "Could not add collection note",
       error: error.message,
     });
   }
@@ -318,6 +318,7 @@ const updateCollectionWorkflow = async (req, res) => {
 
     const invoice = await updateInvoiceCollectionWorkflow({
       invoiceNumber,
+            user: req.user,
       collectionsStatus: req.body.collectionsStatus,
       assignedCollector: req.body.assignedCollector,
       nextFollowUpDate: req.body.nextFollowUpDate,
@@ -333,9 +334,9 @@ const updateCollectionWorkflow = async (req, res) => {
     });
   } catch (error) {
     console.error("Update collection workflow error:", error);
-    res.status(500).json({
+    res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not update collection workflow",
+            message: error.message || "Could not update collection workflow",
       error: error.message,
     });
   }
