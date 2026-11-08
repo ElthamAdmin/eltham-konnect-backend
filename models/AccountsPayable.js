@@ -64,6 +64,13 @@ const accountsPayableSchema = new mongoose.Schema(
       index: true,
     },
 
+        freightInvoiceNumber: {
+      type: String,
+      default: "",
+      index: true,
+    },
+
+
     vendorCode: {
       type: String,
       required: true,

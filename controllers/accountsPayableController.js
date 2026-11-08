@@ -143,6 +143,15 @@ const createAccountsPayable = async (req, res) => {
       });
     }
 
+        if (vendor.vendorType === "Freight Forwarder") {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Record freight-forwarder invoices through Financial → Freight Forwarder Invoices.",
+      });
+    }
+
+
     const postingAccountCode = expenseAccountCode || "6000";
 
     const expenseAccount = await ChartOfAccount.findOne({
@@ -237,6 +246,15 @@ const markAccountsPayablePaid = async (req, res) => {
         message: "Accounts payable record not found",
       });
     }
+
+        if (payable.freightInvoiceNumber) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Record this payment through Financial → Freight Forwarder Invoices so the original currency balance and payment proof remain aligned.",
+      });
+    }
+
 
     if (["Paid", "Void"].includes(payable.status)) {
       return res.status(400).json({

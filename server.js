@@ -83,6 +83,7 @@ const taxCenterRoutes = require("./routes/taxCenterRoutes");
 const budgetRoutes = require("./routes/budgetRoutes");
 const accountingPeriodManagementRoutes = require("./routes/accountingPeriodManagementRoutes");
 const accountsPayableRoutes = require("./routes/accountsPayableRoutes");
+const freightInvoiceRoutes = require("./routes/freightInvoiceRoutes");
 const accountsReceivableRoutes = require("./routes/accountsReceivableRoutes");
 const bankingRoutes = require("./routes/bankingRoutes");
 const debtManagerRoutes = require("./routes/debtManagerRoutes");
@@ -312,6 +313,7 @@ app.use(
   require("./routes/corporateProfileRoutes")
 );
 app.use("/api/accounts-payable", accountsPayableRoutes);
+app.use("/api/freight-invoices", freightInvoiceRoutes);
 app.use("/api/accounts-receivable", accountsReceivableRoutes);
 app.use("/api/banking", bankingRoutes);
 app.use("/api/debt-manager", debtManagerRoutes);
