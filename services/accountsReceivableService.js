@@ -1104,6 +1104,46 @@ const buildReminderQueue = async () => {
 
 const logInvoiceReminder = (details) => logReminderAction(details);
 
+const OFFICIAL_AR_BRANCHES = [
+  "Eltham Park Mainstore",
+  "Brown's Town Square",
+];
+
+const normalizeARBranch = (value) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/\s+/g, " ");
+
+  if (
+    normalized === "eltham park" ||
+    normalized === "eltham park mainstore" ||
+    normalized === "eltham park main store"
+  ) {
+    return "Eltham Park Mainstore";
+  }
+
+  if (normalized === "Brown's Town Square") {
+    return "Brown's Town Square";
+  }
+
+  return "Unassigned";
+};
+
+const emptyARBranchTotals = (branch) => ({
+  branch,
+  invoiceCount: 0,
+  openInvoices: 0,
+  paidInvoices: 0,
+  totalInvoiced: 0,
+  collectedAmount: 0,
+  outstandingBalance: 0,
+  over30: 0,
+  over60: 0,
+  over90: 0,
+});
+
 
 const buildCollectionPerformanceKPIs = async () => {
     const invoices = await Invoice.find({
@@ -1112,8 +1152,8 @@ const buildCollectionPerformanceKPIs = async () => {
   const customers = await Customer.find();
 
   const customerBranchMap = {};
-  customers.forEach((customer) => {
-    customerBranchMap[customer.ekonId] = customer.branch || "Unassigned";
+    customers.forEach((customer) => {
+    customerBranchMap[customer.ekonId] = normalizeARBranch(customer.branch);
   });
 
   const openInvoices = invoices.filter((invoice) =>
@@ -1156,8 +1196,14 @@ const buildCollectionPerformanceKPIs = async () => {
     );
   }, 0);
 
-  const collectorMap = {};
-  const branchMap = {};
+    const collectorMap = {};
+
+  const branchMap = Object.fromEntries(
+    OFFICIAL_AR_BRANCHES.map((branch) => [
+      branch,
+      emptyARBranchTotals(branch),
+    ])
+  );
 
   invoices.forEach((invoice) => {
     const collector = invoice.assignedCollector || "Unassigned";
@@ -1274,13 +1320,29 @@ const buildCollectionPerformanceKPIs = async () => {
     };
   });
 
-  const branches = Object.values(branchMap).map((branch) => ({
-    ...branch,
-    collectionRate:
-      branch.totalInvoiced > 0
-        ? roundMoney((branch.collectedAmount / branch.totalInvoiced) * 100)
-        : 0,
-  }));
+    const branches = OFFICIAL_AR_BRANCHES.map((branchName) => {
+    const branch = branchMap[branchName];
+
+    return {
+      ...branch,
+      collectionRate:
+        branch.totalInvoiced > 0
+          ? roundMoney(
+              (branch.collectedAmount / branch.totalInvoiced) * 100
+            )
+          : 0,
+    };
+  });
+
+  const branchAssignmentIssues = {
+    invoiceCount: branchMap.Unassigned?.invoiceCount || 0,
+    collectedAmount: roundMoney(
+      branchMap.Unassigned?.collectedAmount || 0
+    ),
+    outstandingBalance: roundMoney(
+      branchMap.Unassigned?.outstandingBalance || 0
+    ),
+  };
 
   const collectionRate =
     totalInvoiced > 0 ? roundMoney((totalCollected / totalInvoiced) * 100) : 0;
@@ -1313,6 +1375,7 @@ const buildCollectionPerformanceKPIs = async () => {
       collectorCount: collectors.length,
       branchCount: branches.length,
     },
+        branchAssignmentIssues,
     collectors: collectors.sort(
       (a, b) => Number(b.performanceScore || 0) - Number(a.performanceScore || 0)
     ),
