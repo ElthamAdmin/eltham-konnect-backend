@@ -16,6 +16,11 @@ const {
 
 const { roundMoney } = require("./accountingEngine/money");
 
+const {
+  assertCollectibleBalance,
+  getPostedWriteOffAmount,
+} = require("./arBalanceService");
+
 const fail = (message, statusCode = 409) => {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -69,13 +74,28 @@ const updateInvoiceCharges = async ({
       );
     }
 
+        assertCollectibleBalance(invoice);
+    const writeOffAmount = getPostedWriteOffAmount(invoice);
+
+    if (
+      invoice.customerPurchases?.length ||
+      ["Customer Purchases", "Combined"].includes(invoice.invoiceSource)
+    ) {
+      fail(
+        "Customer-purchase invoice adjustments require a coordinated purchase-allocation update."
+      );
+    }
+
+
     const original = await JournalEntry.findOne({
       entryNumber: invoice.journalEntryNumber,
       status: "Posted",
     }).session(session);
 
-    if (
+        if (
       !original ||
+      original.reversalEntryNumber ||
+      original.reversedAt ||
       original.reference !== invoice.invoiceNumber
     ) {
       fail(
@@ -91,7 +111,12 @@ const updateInvoiceCharges = async ({
     }).session(session);
 
     if (
-      adjustments.some((entry) => entry.status !== "Posted")
+            adjustments.some(
+        (entry) =>
+          entry.status !== "Posted" ||
+          entry.reversalEntryNumber ||
+          entry.reversedAt
+      )
     ) {
       fail("An earlier invoice adjustment journal needs review.");
     }
@@ -188,13 +213,13 @@ const updateInvoiceCharges = async ({
       roundMoney(invoice.customerPurchaseRecoveryAmount)
     );
 
-    if (
+        if (
       newTotal < 0 ||
-      newTotal < paid ||
+      newTotal < roundMoney(paid + writeOffAmount) ||
       newTotal < goodsRecovery
     ) {
       fail(
-        "The edited total cannot be below zero, payments already received, or the cost of goods purchased for the customer."
+        "The edited total cannot be below zero, cash payments plus posted write-offs, or the customer-purchase goods amount."
       );
     }
 
@@ -320,7 +345,9 @@ const updateInvoiceCharges = async ({
     }
 
     invoice.finalTotal = newTotal;
-    invoice.balanceDue = roundMoney(newTotal - paid);
+        invoice.balanceDue = roundMoney(
+      newTotal - paid - writeOffAmount
+    );
 
     invoice.status =
       invoice.balanceDue === 0

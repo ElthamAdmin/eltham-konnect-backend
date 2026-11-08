@@ -18,6 +18,11 @@ const {
 
 const { roundMoney } = require("./accountingEngine/money");
 
+const {
+  assertCollectibleBalance,
+  getPostedWriteOffAmount,
+} = require("./arBalanceService");
+
 const fail = (message, statusCode = 409) => {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -68,6 +73,19 @@ const applyInvoicePoints = async ({
       );
     }
 
+        const collectibleBalance = assertCollectibleBalance(invoice);
+    const writeOffAmount = getPostedWriteOffAmount(invoice);
+
+    if (
+      invoice.customerPurchases?.length ||
+      ["Customer Purchases", "Combined"].includes(invoice.invoiceSource)
+    ) {
+      fail(
+        "Customer-purchase invoice adjustments require a coordinated purchase-allocation update."
+      );
+    }
+
+
     const customer = await Customer.findOne({
       ekonId: invoice.customerEkonId,
     }).session(session);
@@ -92,8 +110,10 @@ const applyInvoicePoints = async ({
       status: "Posted",
     }).session(session);
 
-    if (
+        if (
       !original ||
+      original.reversalEntryNumber ||
+      original.reversedAt ||
       original.reference !== invoice.invoiceNumber
     ) {
       fail(
@@ -109,7 +129,12 @@ const applyInvoicePoints = async ({
     }).session(session);
 
     if (
-      adjustments.some((entry) => entry.status !== "Posted")
+            adjustments.some(
+        (entry) =>
+          entry.status !== "Posted" ||
+          entry.reversalEntryNumber ||
+          entry.reversedAt
+      )
     ) {
       fail(
         "A previous points journal needs review before another redemption."
@@ -197,10 +222,10 @@ const applyInvoicePoints = async ({
       roundMoney(invoice.customerPurchaseRecoveryAmount)
     );
 
-    const redeemAmount = Math.floor(
+        const redeemAmount = Math.floor(
       Math.min(
         requested,
-        oldTotal - paid,
+        collectibleBalance,
         availableRevenue,
         Math.max(0, oldTotal - goodsRecovery)
       )
@@ -275,8 +300,8 @@ const applyInvoicePoints = async ({
       oldTotal - redeemAmount
     );
 
-    invoice.balanceDue = roundMoney(
-      invoice.finalTotal - paid
+        invoice.balanceDue = roundMoney(
+      invoice.finalTotal - paid - writeOffAmount
     );
 
     invoice.status =
