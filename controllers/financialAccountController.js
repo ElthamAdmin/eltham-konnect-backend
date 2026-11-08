@@ -1,10 +1,6 @@
+const mongoose = require("mongoose");
 const FinancialAccount = require("../models/FinancialAccount");
 const ChartOfAccount = require("../models/ChartOfAccount");
-const {
-  postJournalEntry,
-  ensureSystemAccounts,
-  SYSTEM_ACCOUNTS,
-} = require("../utils/generalLedgerPoster");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -34,72 +30,39 @@ const createLinkedChartAccount = async ({
   accountNumber,
   accountName,
   accountType,
-  openingBalance,
+  session,
 }) => {
-  const existing = await ChartOfAccount.findOne({ accountCode: accountNumber });
-  if (existing) return existing;
-
-  return ChartOfAccount.create({
+  const existing = await ChartOfAccount.findOne({
     accountCode: accountNumber,
-    accountName,
-    accountCategory: getAccountCategory(accountType),
-    accountType,
-    openingBalance: roundMoney(openingBalance),
-currentBalance: roundMoney(openingBalance),
-    normalBalance: getNormalBalance(accountType),
-    description: `Linked financial account for ${accountName}`,
-    isSystemAccount: false,
-    allowManualEntries: false,
-    status: "Active",
-  });
-};
+  }).session(session);
 
-const postOpeningBalance = async ({
-  account,
-  openingBalance,
-  createdBy = "System User",
-}) => {
-  const amount = roundMoney(openingBalance);
-  if (amount <= 0) return;
+  if (existing) {
+    throw new Error(
+      "Generated account code already exists. Please retry."
+    );
+  }
 
-  const isCreditCard = account.accountType === "Credit Card";
+  const [account] = await ChartOfAccount.create(
+    [
+      {
+        accountCode: accountNumber,
+        accountName,
+        accountCategory: getAccountCategory(accountType),
+        accountType,
+        openingBalance: 0,
+        currentBalance: 0,
+        normalBalance: getNormalBalance(accountType),
+        description:
+          `Linked financial account for ${accountName}`,
+        isSystemAccount: false,
+        allowManualEntries: false,
+        status: "Active",
+      },
+    ],
+    { session }
+  );
 
-  await postJournalEntry({
-    entryDate: new Date().toISOString().slice(0, 10),
-    memo: `Opening balance for ${account.accountName}`,
-    reference: account.accountNumber,
-    sourceModule: "Financial Accounts",
-    createdBy,
-    lines: isCreditCard
-      ? [
-          {
-            accountCode: SYSTEM_ACCOUNTS.OWNER_CAPITAL,
-            debit: amount,
-            credit: 0,
-            description: `Opening balance offset for ${account.accountName}`,
-          },
-          {
-            accountCode: account.linkedChartAccountCode,
-            debit: 0,
-            credit: amount,
-            description: `Opening credit card balance for ${account.accountName}`,
-          },
-        ]
-      : [
-          {
-            accountCode: account.linkedChartAccountCode,
-            debit: amount,
-            credit: 0,
-            description: `Opening asset balance for ${account.accountName}`,
-          },
-          {
-            accountCode: SYSTEM_ACCOUNTS.OWNER_CAPITAL,
-            debit: 0,
-            credit: amount,
-            description: `Opening balance offset for ${account.accountName}`,
-          },
-        ],
-  });
+  return account;
 };
 
 const createAccount = async (req, res) => {
@@ -136,85 +99,133 @@ const createAccount = async (req, res) => {
       });
     }
 
-    await ensureSystemAccounts();
+    const requestedOpening = Number(openingBalance ?? 0);
+    const requestedCurrent = Number(
+      req.body.currentBalance ?? 0
+    );
 
-    const accountCurrency = String(currency || "JMD").toUpperCase();
+    if (
+      !Number.isFinite(requestedOpening) ||
+      requestedOpening !== 0 ||
+      !Number.isFinite(requestedCurrent) ||
+      requestedCurrent !== 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Create the account with zero balance. Opening balances require a separate reviewed journal.",
+      });
+    }
+
+    const accountCurrency = String(
+      currency || "JMD"
+    ).toUpperCase();
+
     const accountExchangeRate =
-      accountCurrency === "JMD" ? 1 : Number(exchangeRate || 1);
+      accountCurrency === "JMD"
+        ? 1
+        : Number(exchangeRate || 1);
 
-    const numericOpeningBalance = roundMoney(openingBalance);
-
-    const baseCurrencyOpeningBalance = calculateBaseCurrencyAmount({
-      amount: numericOpeningBalance,
-      currency: accountCurrency,
-      exchangeRate: accountExchangeRate,
-    });
+    if (
+      !Number.isFinite(accountExchangeRate) ||
+      accountExchangeRate <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Enter a positive exchange rate.",
+      });
+    }
 
     const accountNumber = `ACC-${Date.now()}`;
 
-    await createLinkedChartAccount({
-      accountNumber,
-      accountName,
-      accountType,
-      openingBalance: baseCurrencyOpeningBalance,
-    });
-
     const finalPurpose =
       accountPurpose ||
-      (accountType === "Credit Card"
-        ? "Credit Card"
-        : accountCurrency !== "JMD"
-        ? "Savings"
-        : "Operating");
+      (
+        accountType === "Credit Card"
+          ? "Credit Card"
+          : accountCurrency !== "JMD"
+            ? "Savings"
+            : "Operating"
+      );
 
-    const account = await FinancialAccount.create({
-      accountNumber,
-      accountName,
-      accountType,
-      linkedChartAccountCode: accountNumber,
-      bankName,
-      openingBalance: numericOpeningBalance,
-      currentBalance: numericOpeningBalance,
-      currency: accountCurrency,
-      exchangeRate: accountExchangeRate,
-      baseCurrency: "JMD",
-      baseCurrencyOpeningBalance,
-      baseCurrencyBalance: baseCurrencyOpeningBalance,
+    const account = await mongoose.connection.transaction(
+      async (session) => {
+        await createLinkedChartAccount({
+          accountNumber,
+          accountName,
+          accountType,
+          session,
+        });
 
-      accountPurpose: finalPurpose,
-      financialInstitution: financialInstitution || bankName || "",
-      branchName: branchName || "",
-      accountNickname: accountNickname || "",
-      isDefaultDepositAccount: isDefaultDepositAccount === true,
-      isDefaultExpenseAccount: isDefaultExpenseAccount === true,
-      isDefaultPayrollAccount: isDefaultPayrollAccount === true,
-      isDefaultCustomerReceiptAccount: isDefaultCustomerReceiptAccount === true,
-      isBusinessSavings: isBusinessSavings === true || finalPurpose === "Savings",
+        const [createdAccount] = await FinancialAccount.create(
+          [
+            {
+              accountNumber,
+              accountName,
+              accountType,
+              linkedChartAccountCode: accountNumber,
+              bankName,
 
-      creditLimit: roundMoney(creditLimit),
-      availableCredit: roundMoney(availableCredit),
-      statementDate: Number(statementDate || 0),
-      paymentDueDate: Number(paymentDueDate || 0),
-      minimumPayment: roundMoney(minimumPayment),
-      interestRate: Number(interestRate || 0),
-      lastStatementBalance: roundMoney(lastStatementBalance),
-    });
+              openingBalance: 0,
+              currentBalance: 0,
 
-    await postOpeningBalance({
-      account,
-      openingBalance: baseCurrencyOpeningBalance,
-      createdBy: req.user?.fullName || "System User",
-    });
+              currency: accountCurrency,
+              exchangeRate: accountExchangeRate,
+              baseCurrency: "JMD",
+              baseCurrencyOpeningBalance: 0,
+              baseCurrencyBalance: 0,
 
-    res.json({
+              accountPurpose: finalPurpose,
+
+              financialInstitution:
+                financialInstitution || bankName || "",
+
+              branchName: branchName || "",
+              accountNickname: accountNickname || "",
+
+              isDefaultDepositAccount:
+                isDefaultDepositAccount === true,
+
+              isDefaultExpenseAccount:
+                isDefaultExpenseAccount === true,
+
+              isDefaultPayrollAccount:
+                isDefaultPayrollAccount === true,
+
+              isDefaultCustomerReceiptAccount:
+                isDefaultCustomerReceiptAccount === true,
+
+              isBusinessSavings:
+                isBusinessSavings === true ||
+                finalPurpose === "Savings",
+
+              creditLimit: roundMoney(creditLimit),
+              availableCredit: roundMoney(availableCredit),
+              statementDate: Number(statementDate || 0),
+              paymentDueDate: Number(paymentDueDate || 0),
+              minimumPayment: roundMoney(minimumPayment),
+              interestRate: Number(interestRate || 0),
+              lastStatementBalance:
+                roundMoney(lastStatementBalance),
+            },
+          ],
+          { session }
+        );
+
+        return createdAccount;
+      }
+    );
+
+    return res.json({
       success: true,
-      message: "Financial account created and linked to accounting ledger",
+      message:
+        "Financial account created and linked at zero balance. Opening balances require a separate reviewed journal.",
       data: account,
     });
   } catch (error) {
     console.error("Create financial account error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Could not create account",
       error: error.message,
@@ -354,6 +365,24 @@ const updateAccount = async (req, res) => {
       });
     }
 
+        if (
+      (
+        accountType !== undefined &&
+        accountType !== account.accountType
+      ) ||
+      (
+        currency !== undefined &&
+        String(currency).trim().toUpperCase() !==
+          String(account.currency || "JMD").toUpperCase()
+      )
+    ) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "Changing account type or currency requires a separate reviewed conversion. Other account settings can still be edited.",
+      });
+    }
+
     if (accountName !== undefined) account.accountName = accountName;
     if (accountType !== undefined) account.accountType = accountType;
     if (bankName !== undefined) account.bankName = bankName;
@@ -397,25 +426,24 @@ const updateAccount = async (req, res) => {
       account.lastStatementBalance = roundMoney(lastStatementBalance);
     }
 
-const linkedChartAccount =
-  await ChartOfAccount.findOne({
-    accountCode: account.linkedChartAccountCode,
-  });
-
-const ledgerBalance =
-  linkedChartAccount?.currentBalance || 0;
-
-account.currentBalance = ledgerBalance;
-
-account.baseCurrencyBalance =
-  calculateBaseCurrencyAmount({
-    amount: ledgerBalance,
-    currency: account.currency,
-    exchangeRate: account.exchangeRate,
-  });
-
     if (!account.linkedChartAccountCode) {
-      account.linkedChartAccountCode = account.accountNumber;
+      return res.status(409).json({
+        success: false,
+        message:
+          "This account has no chart link and requires review before editing.",
+      });
+    }
+
+    const linkedChartAccount = await ChartOfAccount.findOne({
+      accountCode: account.linkedChartAccountCode,
+    });
+
+    if (!linkedChartAccount) {
+      return res.status(409).json({
+        success: false,
+        message:
+          "The linked chart account is missing. Review the account before editing.",
+      });
     }
 
     await account.save();

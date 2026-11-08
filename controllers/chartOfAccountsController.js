@@ -1,13 +1,8 @@
 const ChartOfAccount = require("../models/ChartOfAccount");
 const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
-const { ensureSystemAccounts } = require("../utils/generalLedgerPoster");
-const {
-  rebuildAllAccountBalancesFromLedger,
-} = require("../services/accountingEngine");
 
 const getAccounts = async (req, res) => {
   try {
-    await ensureSystemAccounts();
 
     const accounts = await ChartOfAccount.find({
       status: "Active",
@@ -43,10 +38,33 @@ const createAccount = async (req, res) => {
       description,
     } = req.body;
 
-    if (!accountCode || !accountName || !accountCategory || !normalBalance) {
+    if (
+      !accountCode ||
+      !accountName ||
+      !accountCategory ||
+      !normalBalance
+    ) {
       return res.status(400).json({
         success: false,
         message: "Required fields are missing",
+      });
+    }
+
+    const requestedOpening = Number(openingBalance ?? 0);
+    const requestedCurrent = Number(
+      req.body.currentBalance ?? 0
+    );
+
+    if (
+      !Number.isFinite(requestedOpening) ||
+      requestedOpening !== 0 ||
+      !Number.isFinite(requestedCurrent) ||
+      requestedCurrent !== 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Create the account with zero balance. Opening balances require a separate reviewed journal.",
       });
     }
 
@@ -67,25 +85,27 @@ const createAccount = async (req, res) => {
       accountCategory,
       accountType,
       parentAccountCode,
-      openingBalance: Number(openingBalance || 0),
-      currentBalance: Number(openingBalance || 0),
+      openingBalance: 0,
+      currentBalance: 0,
       normalBalance,
       description,
     });
 
-    await rebuildAllAccountBalancesFromLedger();
-
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: "Account created successfully",
+      message:
+        "Account created at zero balance. Opening balances require a separate reviewed journal.",
       data: account,
     });
   } catch (error) {
     console.error("Error creating account:", error);
 
-    res.status(500).json({
+    return res.status(error.code === 11000 ? 409 : 500).json({
       success: false,
-      message: "Failed to create account",
+      message:
+        error.code === 11000
+          ? "Account code already exists"
+          : "Failed to create account",
       error: error.message,
     });
   }
@@ -93,9 +113,7 @@ const createAccount = async (req, res) => {
 
 const getChartHealth = async (req, res) => {
   try {
-    await ensureSystemAccounts();
-
-    const accounts = await ChartOfAccount.find();
+       const accounts = await ChartOfAccount.find();
 
     const inactiveAccounts = accounts.filter((account) => account.status === "Inactive");
     const systemAccounts = accounts.filter((account) => account.isSystemAccount);
@@ -149,7 +167,6 @@ const getChartHealth = async (req, res) => {
 
 const getAccountTree = async (req, res) => {
   try {
-    await ensureSystemAccounts();
 
     const accounts = await ChartOfAccount.find({ status: "Active" }).sort({
       accountCode: 1,

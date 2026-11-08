@@ -74,6 +74,24 @@ const attachUserIfPresent = async (req, res, next) => {
   return next();
 };
 
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required",
+    });
+  }
+
+  if (req.user.role !== "Admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Only an administrator can perform this action.",
+    });
+  }
+
+  return next();
+};
+
 const hasPermission = (user, permission) => {
   if (!user) return false;
   if (user.role === "Admin") return true;
@@ -113,6 +131,7 @@ const requireAnyPermission = (permissions = []) => (req, res, next) => {
 module.exports = {
   protect,
   attachUserIfPresent,
+  requireAdmin,
   hasPermission,
   requirePermission,
   requireAnyPermission,

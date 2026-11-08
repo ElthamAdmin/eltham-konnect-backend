@@ -9,12 +9,15 @@ const {
   getAccountTree,
 } = require("../controllers/chartOfAccountsController");
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requireAdmin,
+} = require("../middleware/authMiddleware");
 
 router.get("/", protect, getAccounts);
 router.get("/health", protect, getChartHealth);
 router.get("/tree", protect, getAccountTree);
 
-router.post("/", protect, createAccount);
+router.post("/", protect, requireAdmin, createAccount);
 
 module.exports = router;
