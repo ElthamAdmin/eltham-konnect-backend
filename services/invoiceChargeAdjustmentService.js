@@ -4,6 +4,9 @@ const Invoice = require("../models/Invoice");
 const Package = require("../models/Package");
 const JournalEntry = require("../models/JournalEntry");
 const CustomerNotification = require("../models/CustomerNotification");
+const {
+  allocatePurchaseInvoiceCharges,
+} = require("./purchaseInvoiceChargeAllocationService");
 const { writeAuditLog } = require("../utils/auditLogger");
 
 const {
@@ -77,12 +80,15 @@ const updateInvoiceCharges = async ({
         assertCollectibleBalance(invoice);
     const writeOffAmount = getPostedWriteOffAmount(invoice);
 
-    if (
-      invoice.customerPurchases?.length ||
-      ["Customer Purchases", "Combined"].includes(invoice.invoiceSource)
+        if (
+      invoice.invoiceSource === "Combined" ||
+      (
+        invoice.customerPurchases?.length &&
+        invoice.invoiceSource !== "Customer Purchases"
+      )
     ) {
       fail(
-        "Customer-purchase invoice adjustments require a coordinated purchase-allocation update."
+        "Combined or incorrectly linked purchase invoices require a separate allocation review."
       );
     }
 
@@ -317,6 +323,16 @@ const updateInvoiceCharges = async ({
           req?.user?.email ||
           "System User",
         lines,
+      });
+    }
+
+        if (purchaseInvoice) {
+      await allocatePurchaseInvoiceCharges({
+        invoice,
+        next,
+        newTotal,
+        session,
+        user: req?.user,
       });
     }
 
