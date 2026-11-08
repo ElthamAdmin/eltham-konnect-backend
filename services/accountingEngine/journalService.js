@@ -262,145 +262,163 @@ const postJournalEntry = async ({
   }
 };
 
-const postApprovedJournalEntry = async ({ entryNumber, postedBy = "System User" }) => {
-  const session = await mongoose.startSession();
+const postApprovedJournalEntry = async ({
+  entryNumber,
+  postedBy = "System User",
+  session: providedSession = null,
+  skipFinancialSyncForCodes = [],
+}) => {
+  if (providedSession && !providedSession.inTransaction()) {
+    throw new Error(
+      "The supplied journal session must have an active transaction."
+    );
+  }
 
-  try {
-    let postedEntry = null;
+  const postWithinSession = async (session) => {
+    const entry = await JournalEntry.findOne({
+      entryNumber,
+    }).session(session);
 
-        const createdLedgerNumbers = [];
+    if (!entry) {
+      throw new Error("Journal entry not found.");
+    }
 
-    await session.withTransaction(async () => {
-      const entry = await JournalEntry.findOne({ entryNumber }).session(session);
+    if (
+      entry.status !== "Approved" ||
+      !entry.approvedBy ||
+      !entry.approvedAt
+    ) {
+      throw new Error(
+        "Only an approved journal with approval details can be posted."
+      );
+    }
 
-      if (!entry) {
-        throw new Error("Journal entry not found.");
-      }
+    if (entry.locked) {
+      throw new Error("Journal entry is locked.");
+    }
 
-      if (!["Approved", "Pending Approval", "Draft"].includes(entry.status)) {
-        throw new Error(`Journal entry cannot be posted from status ${entry.status}.`);
-      }
+    const existingLedger = await GeneralLedgerTransaction.findOne({
+      entryNumber,
+    }).session(session);
 
-      if (entry.locked) {
-        throw new Error("Journal entry is locked and cannot be posted again.");
-      }
+    if (existingLedger) {
+      throw new Error(
+        "Ledger lines already exist for this journal. Review before posting."
+      );
+    }
 
-      const { totalDebit, totalCredit } = validateJournalLines(entry.lines || []);
+    const { totalDebit, totalCredit } = validateJournalLines(
+      entry.lines || []
+    );
 
-      await validateAccountingPeriodOpen(entry.entryDate);
+    await validateAccountingPeriodOpen(
+      entry.entryDate,
+      session
+    );
 
-      const preparedLines = [];
+    const createdLedgerNumbers = [];
+    const postedAt = new Date();
 
-      for (const line of entry.lines || []) {
-        const account = await ChartOfAccount.findOne({
-          accountCode: line.accountCode,
-          status: "Active",
-        }).session(session);
+    for (const line of entry.lines || []) {
+      const account = await ChartOfAccount.findOne({
+        accountCode: line.accountCode,
+        status: "Active",
+      }).session(session);
 
-        if (!account) {
-          throw new Error(`Active chart account ${line.accountCode} not found.`);
-        }
-
-        const debit = roundMoney(line.debit);
-        const credit = roundMoney(line.credit);
-
-        const updatedBalance = calculateUpdatedBalance({
-          currentBalance: account.currentBalance,
-          normalBalance: account.normalBalance,
-          debit,
-          credit,
-        });
-
-        account.currentBalance = updatedBalance;
-        await account.save({ session });
-
-        preparedLines.push({
-          accountCode: account.accountCode,
-          accountName: account.accountName,
-          accountCategory: account.accountCategory,
-          normalBalance: account.normalBalance,
-          debit,
-          credit,
-          runningBalance: updatedBalance,
-          entityId: entry.entityId || null,
-entityCode: entry.entityCode || "",
-entitySnapshot: entry.entitySnapshot || null,
-reportingPeriodKey:
-  entry.reportingPeriodKey || "",
-          description: line.description || "",
-        });
-      }
-
-      for (const line of preparedLines) {
-        const ledgerNumber = generateLedgerNumber();
-        createdLedgerNumbers.push(ledgerNumber);
-
-        await GeneralLedgerTransaction.create(
-          [
-            {
-              ledgerNumber,
-              entryNumber: entry.entryNumber,
-              entryDate: entry.entryDate,
-              accountCode: line.accountCode,
-              accountName: line.accountName,
-              accountCategory: line.accountCategory,
-              normalBalance: line.normalBalance,
-              debit: line.debit,
-              credit: line.credit,
-              runningBalance: line.runningBalance,
-              reference: entry.reference,
-              sourceModule: entry.sourceModule,
-              entityId: entry.entityId || null,
-entityCode: entry.entityCode || "",
-entitySnapshot: entry.entitySnapshot || null,
-reportingPeriodKey:
-  entry.reportingPeriodKey || "",
-              memo: entry.memo,
-              description: line.description,
-              postedBy,
-              postedAt: new Date(),
-              locked: true,
-            },
-          ],
-          { session }
+      if (!account) {
+        throw new Error(
+          `Active chart account ${line.accountCode} not found.`
         );
-
-        await syncFinancialAccountsForChartAccount(line.accountCode, session);
       }
 
-      entry.totalDebit = totalDebit;
-      entry.totalCredit = totalCredit;
-      entry.status = "Posted";
-      entry.postedBy = postedBy;
-      entry.postedAt = new Date();
-      entry.locked = true;
+      const debit = roundMoney(line.debit);
+      const credit = roundMoney(line.credit);
 
-      postedEntry = await entry.save({ session });
-    });
+      account.currentBalance = calculateUpdatedBalance({
+        currentBalance: account.currentBalance,
+        normalBalance: account.normalBalance,
+        debit,
+        credit,
+      });
+
+      await account.save({ session });
+
+      const ledgerNumber = generateLedgerNumber();
+      createdLedgerNumbers.push(ledgerNumber);
+
+      await GeneralLedgerTransaction.create(
+        [
+          {
+            ledgerNumber,
+            entryNumber: entry.entryNumber,
+            entryDate: entry.entryDate,
+            accountCode: account.accountCode,
+            accountName: account.accountName,
+            accountCategory: account.accountCategory,
+            normalBalance: account.normalBalance,
+            debit,
+            credit,
+            runningBalance: account.currentBalance,
+            reference: entry.reference,
+            sourceModule: entry.sourceModule,
+            entityId: entry.entityId || null,
+            entityCode: entry.entityCode || "",
+            entitySnapshot: entry.entitySnapshot || null,
+            reportingPeriodKey: entry.reportingPeriodKey || "",
+            branch: entry.branch || "",
+            memo: entry.memo,
+            description: line.description || "",
+            sourceDocumentType: entry.sourceDocumentType || "",
+            sourceDocumentNumber: entry.sourceDocumentNumber || "",
+            sourceDocumentId: entry.sourceDocumentId || "",
+            postedBy,
+            postedAt,
+            locked: true,
+          },
+        ],
+        { session }
+      );
+
+      if (!skipFinancialSyncForCodes.includes(account.accountCode)) {
+        await syncFinancialAccountsForChartAccount(
+          account.accountCode,
+          session
+        );
+      }
+    }
+
+    entry.totalDebit = totalDebit;
+    entry.totalCredit = totalCredit;
+    entry.status = "Posted";
+    entry.postedBy = postedBy;
+    entry.postedAt = postedAt;
+    entry.locked = true;
+
+    const result = await entry.save({ session });
 
     await writeFinanceAuditLog({
+      session,
       action: "APPROVED_JOURNAL_POSTED",
-      description: `Approved journal entry ${postedEntry.entryNumber} posted`,
+      description:
+        `Approved journal entry ${entryNumber} posted`,
       targetType: "JournalEntry",
-      targetId: postedEntry.entryNumber,
-      postingDate: postedEntry.entryDate,
-      journalEntry: postedEntry,
+      targetId: entryNumber,
+      postingDate: entry.entryDate,
+      journalEntry: result,
       performedByName: postedBy,
       metadata: {
-        memo: postedEntry.memo,
-        reference: postedEntry.reference,
-        sourceModule: postedEntry.sourceModule,
-        totalDebit: postedEntry.totalDebit,
-        totalCredit: postedEntry.totalCredit,
         ledgerNumbers: createdLedgerNumbers,
-        lineCount: postedEntry.lines?.length || 0,
+        totalDebit,
+        totalCredit,
       },
     });
 
-    return postedEntry;
-  } finally {
-    session.endSession();
-  }
+    return result;
+  };
+
+  return providedSession
+    ? postWithinSession(providedSession)
+    : mongoose.connection.transaction(postWithinSession);
 };
 
 module.exports = {

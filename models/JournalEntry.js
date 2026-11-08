@@ -35,6 +35,41 @@ const journalEntrySchema = new mongoose.Schema(
       unique: true,
     },
 
+        entryKind: {
+      type: String,
+      enum: ["", "Manual", "Opening Balance", "Manual Reversal"],
+      default: "",
+    },
+
+    manualRequestId: {
+      type: String,
+      default: undefined,
+      immutable: true,
+    },
+
+    manualRequestHash: {
+      type: String,
+      default: "",
+      immutable: true,
+    },
+
+    openingAccountCode: {
+      type: String,
+      default: undefined,
+      immutable: true,
+    },
+
+    openingDetails: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+      immutable: true,
+    },
+
+    branch: {
+      type: String,
+      default: "",
+    },
+
     entryDate: {
       type: String,
       required: true,
@@ -176,6 +211,28 @@ locked: {
   },
   {
     timestamps: true,
+  }
+);
+
+journalEntrySchema.index(
+  { manualRequestId: 1 },
+  {
+    name: "unique_reviewed_journal_request",
+    unique: true,
+    partialFilterExpression: {
+      manualRequestId: { $type: "string" },
+    },
+  }
+);
+
+journalEntrySchema.index(
+  { openingAccountCode: 1 },
+  {
+    name: "unique_account_opening_entry",
+    unique: true,
+    partialFilterExpression: {
+      openingAccountCode: { $type: "string" },
+    },
   }
 );
 
