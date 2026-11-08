@@ -15,6 +15,8 @@ const {
   receiveCustomerPurchase,
   prepareCustomerPurchaseRecovery,
   refundCustomerPurchaseRecord,
+    getCustomerPurchaseRefunds,
+  payCustomerPurchaseCredit,
 } = require("../controllers/customerPurchaseController");
 
 /*
@@ -85,6 +87,18 @@ router.patch(
   "/:purchaseNumber/refund",
   protect,
   refundCustomerPurchaseRecord
+);
+
+router.get(
+  "/:purchaseNumber/refunds",
+  protect,
+  getCustomerPurchaseRefunds
+);
+
+router.post(
+  "/:purchaseNumber/refunds/:refundNumber/payouts",
+  protect,
+  payCustomerPurchaseCredit
 );
 
 module.exports = router;

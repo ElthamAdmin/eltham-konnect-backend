@@ -1,4 +1,10 @@
 const CustomerPurchase = require("../models/CustomerPurchase");
+const CustomerPurchaseRefund = require("../models/CustomerPurchaseRefund");
+
+const {
+  recordMerchantRefund,
+  payPurchaseCredit,
+} = require("../services/customerPurchaseRefundService");
 const Customer = require("../models/Customer");
 const Package = require("../models/Package");
 const FinancialAccount = require("../models/FinancialAccount");
@@ -1378,10 +1384,34 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
 
     const beforeValues = purchase.toObject();
 
-    purchase.itemRecoveryAmount = roundMoney(
+        const nextItemRecovery = Number(
       itemRecoveryAmount !== undefined
         ? itemRecoveryAmount
-        : purchase.baseCurrencyAmount
+        : purchase.itemRecoveryAmount
+    );
+
+    const remainingGoodsCost = roundMoney(
+      Number(purchase.baseCurrencyAmount || 0) -
+        Number(purchase.refundedAmount || 0)
+    );
+
+    if (
+      !Number.isFinite(nextItemRecovery) ||
+      nextItemRecovery < 0 ||
+      (
+        Number(purchase.refundedAmount || 0) > 0 &&
+        roundMoney(nextItemRecovery) > remainingGoodsCost
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Recoverable goods cannot include an amount already refunded by the merchant.",
+      });
+    }
+
+    purchase.itemRecoveryAmount = roundMoney(
+      nextItemRecovery
     );
 
     purchase.shoppingAssistanceFee = roundMoney(
@@ -1492,223 +1522,80 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
 
 const refundCustomerPurchaseRecord = async (req, res) => {
   try {
-    const { purchaseNumber } = req.params;
-    const {
-      refundAmount,
-      refundDate,
-      notes = "",
-    } = req.body;
-
-    const numericRefundAmount = roundMoney(refundAmount);
-
-    if (numericRefundAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Refund amount must be greater than zero.",
-      });
-    }
-
-    const purchase = await CustomerPurchase.findOne({
-      purchaseNumber,
-    });
-
-    if (!purchase) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer purchase not found.",
-      });
-    }
-
-    if (!purchase.journalEntryNumber) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "An unposted purchase does not require an accounting refund.",
-      });
-    }
-
-    if (
-      ["Cancelled", "Reversed"].includes(purchase.status)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "This purchase cannot be refunded.",
-      });
-    }
-
-    const remainingRefundable = roundMoney(
-      Number(purchase.baseCurrencyAmount || 0) -
-        Number(purchase.refundedAmount || 0)
-    );
-
-    if (numericRefundAmount > remainingRefundable) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Refund amount exceeds the remaining refundable purchase amount.",
-      });
-    }
-
-    const paymentAccount =
-      await FinancialAccount.findOne({
-        accountNumber:
-          purchase.paymentAccountNumber,
-        status: "Active",
-      });
-
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Original payment account was not found.",
-      });
-    }
-
-    const beforeValues = purchase.toObject();
-
-    const journalEntry = await refundCustomerPurchase({
-      purchase,
-      paymentAccount,
-      refundAmount: numericRefundAmount,
-      refundDate:
-        refundDate || getJamaicaDateString(),
-      user: req.user,
-    });
-
-    const accountTransaction =
-      await AccountTransaction.create({
-        transactionNumber:
-          generateTransactionNumber(),
-        accountNumber:
-          paymentAccount.accountNumber,
-        accountName: paymentAccount.accountName,
-        linkedChartAccountCode:
-          paymentAccount.linkedChartAccountCode,
-        journalEntryNumber:
-          journalEntry.entryNumber,
-        ledgerReference: journalEntry.entryNumber,
-        transactionType: "Customer Purchase Refund",
-        amount: numericRefundAmount,
-        paymentMethod:
-          paymentAccount.accountType === "Credit Card"
-            ? "Credit Card Refund"
-            : `${paymentAccount.accountType} Refund`,
-        reference: purchase.purchaseNumber,
-        notes:
-          notes ||
-          `Refund received from ${purchase.merchant}`,
-        transactionDate: new Date(
-          refundDate || new Date()
-        ),
-        customerPurchaseNumber:
-          purchase.purchaseNumber,
-        customerEkonId:
-          purchase.customerEkonId,
-        customerName: purchase.customerName,
-        merchant: purchase.merchant,
-        transactionCurrency:
-          purchase.baseCurrency,
-        exchangeRate: purchase.exchangeRate,
-      });
-
-    purchase.refundedAmount = roundMoney(
-      Number(purchase.refundedAmount || 0) +
-        numericRefundAmount
-    );
-
-    purchase.refundJournalEntryNumber =
-      journalEntry.entryNumber;
-
-    purchase.itemRecoveryAmount = Math.max(
-      0,
-      roundMoney(
-        Number(purchase.itemRecoveryAmount || 0) -
-          numericRefundAmount
-      )
-    );
-
-    const recoveryTotals = calculateRecoveryTotals({
-      itemRecoveryAmount:
-        purchase.itemRecoveryAmount,
-      shoppingAssistanceFee:
-        purchase.shoppingAssistanceFee,
-      weightCharge: purchase.weightCharge,
-      shippingCharge: purchase.shippingCharge,
-      customsDuty: purchase.customsDuty,
-      deliveryFee: purchase.deliveryFee,
-      otherCharges: purchase.otherCharges,
-      recoveredAmount: purchase.recoveredAmount,
-    });
-
-    purchase.totalCustomerCharge =
-      recoveryTotals.totalCustomerCharge;
-    purchase.outstandingAmount =
-      recoveryTotals.outstandingAmount;
-
-    if (
-      purchase.refundedAmount >=
-      purchase.baseCurrencyAmount
-    ) {
-      purchase.status = "Refunded";
-      purchase.recoveryStatus = "Refunded";
-      purchase.outstandingAmount = 0;
-    }
-
-    purchase.updatedBy = getUserName(req.user);
-
-    if (notes) {
-      purchase.notes = [purchase.notes, notes]
-        .filter(Boolean)
-        .join("\n");
-    }
-
-    await purchase.save();
-
-    await writeFinanceAuditLog({
+    const result = await recordMerchantRefund({
+      purchaseNumber: req.params.purchaseNumber,
+      body: req.body || {},
       req,
-      action: "CUSTOMER_PURCHASE_REFUNDED",
-      description: `Refund posted for customer purchase ${purchase.purchaseNumber}`,
-      targetType: "CustomerPurchase",
-      targetId: purchase.purchaseNumber,
-      postingDate:
-        refundDate || getJamaicaDateString(),
-      journalEntry,
-      accountNumber:
-        paymentAccount.accountNumber,
-      accountName: paymentAccount.accountName,
-      performedByName: getUserName(req.user),
-      beforeValues,
-      afterValues: purchase.toObject(),
-      metadata: {
-        refundAmount: numericRefundAmount,
-        totalRefunded: purchase.refundedAmount,
-        accountTransactionNumber:
-          accountTransaction.transactionNumber,
-        recoveryStatus:
-          purchase.recoveryStatus,
-      },
     });
 
     res.json({
       success: true,
-      message:
-        "Customer purchase refund posted successfully.",
-      data: purchase,
-      journalEntryNumber:
-        journalEntry.entryNumber,
-      accountTransactionNumber:
-        accountTransaction.transactionNumber,
+      message: result.replayed
+        ? "This merchant refund was already recorded."
+        : "Merchant refund recorded successfully.",
+      data: result.refund,
+      replayed: result.replayed,
     });
   } catch (error) {
-    console.error("Customer purchase refund error:", error);
+    console.error("Merchant refund error:", error);
+
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm the merchant refund. Check refund history before retrying.",
+    });
+  }
+};
+
+const getCustomerPurchaseRefunds = async (req, res) => {
+  try {
+    const records = await CustomerPurchaseRefund.find({
+      purchaseNumber: req.params.purchaseNumber,
+    })
+      .select("-requestHash")
+      .sort({ createdAt: -1, _id: -1 });
+
+    res.json({
+      success: true,
+      data: records,
+    });
+  } catch (error) {
+    console.error("Purchase refund history error:", error);
 
     res.status(500).json({
       success: false,
       message:
-        "Could not post customer purchase refund.",
-      error: error.message,
+        "Could not load merchant refunds and customer credits.",
+    });
+  }
+};
+
+const payCustomerPurchaseCredit = async (req, res) => {
+  try {
+    const result = await payPurchaseCredit({
+      purchaseNumber: req.params.purchaseNumber,
+      refundNumber: req.params.refundNumber,
+      body: req.body || {},
+      req,
+    });
+
+    res.json({
+      success: true,
+      message: result.replayed
+        ? "This customer payout was already recorded."
+        : "Customer credit payout recorded successfully.",
+      data: result.refund,
+      replayed: result.replayed,
+    });
+  } catch (error) {
+    console.error("Customer credit payout error:", error);
+
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm the customer payout. Check refund history before retrying.",
     });
   }
 };
@@ -1724,4 +1611,6 @@ module.exports = {
   receiveCustomerPurchase,
   prepareCustomerPurchaseRecovery,
   refundCustomerPurchaseRecord,
+  getCustomerPurchaseRefunds,
+  payCustomerPurchaseCredit,
 };
