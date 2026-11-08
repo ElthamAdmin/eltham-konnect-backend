@@ -1113,7 +1113,7 @@ const normalizeARBranch = (value) => {
   const normalized = String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/[’']/g, "")
+    .replace(/['’‘`]/g, "")
     .replace(/\s+/g, " ");
 
   if (
@@ -1124,12 +1124,13 @@ const normalizeARBranch = (value) => {
     return "Eltham Park Mainstore";
   }
 
-  if (normalized === "Brown's Town Square") {
+  if (normalized === "browns town square") {
     return "Brown's Town Square";
   }
 
   return "Unassigned";
 };
+
 
 const emptyARBranchTotals = (branch) => ({
   branch,
