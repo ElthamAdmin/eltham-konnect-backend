@@ -1,57 +1,99 @@
-const Payroll = require("../models/Payroll");
 const {
   buildOperationalDashboard,
 } = require("../services/operationalDashboardService");
 
 const {
-  trialBalanceService,
-  balanceSheetService,
-  profitLossService,
-  cashFlowService,
   dashboardService,
   rebuildAllAccountBalancesFromLedger,
 } = require("../services/accountingEngine");
 
-const roundMoney = (value) =>
-  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const {
+  buildFinanceReport,
+} = require("../services/financeReportService");
+
+const {
+  buildReportBundle,
+} = require("../services/accountingEngine/reportingService");
+
+/*
+|--------------------------------------------------------------------------
+| Operational Dashboard
+|--------------------------------------------------------------------------
+*/
 
 const getOperationalDashboard = async (req, res) => {
   try {
-        const data = await buildOperationalDashboard({
+    const data = await buildOperationalDashboard({
       from: req.query.from,
       to: req.query.to,
       branch: req.query.branch,
     });
 
-    return res.json({ success: true, data });
-  } catch (error) {
-    console.error("Error getting operational dashboard:", error);
-
-    return res.status(error.status === 400 ? 400 : 500).json({
-      success: false,
-      message:
-        error.status === 400
-          ? error.message
-          : "Failed to retrieve operational dashboard.",
+    return res.json({
+      success: true,
+      data,
     });
+  } catch (error) {
+    console.error(
+      "Error getting operational dashboard:",
+      error
+    );
+
+    return res
+      .status(error.status === 400 ? 400 : 500)
+      .json({
+        success: false,
+        message:
+          error.status === 400
+            ? error.message
+            : "Failed to retrieve operational dashboard.",
+      });
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| Reporting Error Response
+|--------------------------------------------------------------------------
+*/
+
+const sendReportingError = (res, error, message) => {
+  const status = error.statusCode === 400 ? 400 : 500;
+
+  return res.status(status).json({
+    success: false,
+    message: status === 400 ? error.message : message,
+  });
+};
+
+/*
+|--------------------------------------------------------------------------
+| Finance Summary
+|--------------------------------------------------------------------------
+*/
+
 const getFinanceSummary = async (req, res) => {
   try {
-    const { from = "", to = "" } = req.query;
+    const summary =
+      await dashboardService.buildDashboardSummary(
+        req.query
+      );
 
-    const summary = await dashboardService.buildDashboardSummary({ from, to });
-
-    res.json({
+    return res.json({
       success: true,
       data: {
         ...summary,
 
+        // Preserve existing response names.
         totalRevenue: summary.kpis.totalRevenue,
-        outstandingRevenue: summary.kpis.outstandingReceivables,
+        outstandingRevenue:
+          summary.kpis.outstandingReceivables,
         totalExpenses: summary.kpis.totalExpenses,
-        totalPayroll: 0,
+
+        // Already included in totalExpenses.
+        totalPayroll:
+          summary.profitAndLoss.payrollExpense,
+
         paidInvoices: summary.kpis.paidInvoiceCount,
         unpaidInvoices: summary.kpis.unpaidInvoiceCount,
         cashOnHand: summary.kpis.cashBalance,
@@ -60,167 +102,104 @@ const getFinanceSummary = async (req, res) => {
     });
   } catch (error) {
     console.error("Error getting finance summary:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve finance summary",
-      error: error.message,
-    });
+
+    return sendReportingError(
+      res,
+      error,
+      "Failed to retrieve finance summary."
+    );
   }
 };
+
+/*
+|--------------------------------------------------------------------------
+| Financial Reports
+|--------------------------------------------------------------------------
+*/
 
 const getFinancialReports = async (req, res) => {
   try {
-    const { from = "", to = "" } = req.query;
+    const data = await buildFinanceReport(req.query);
 
-    const [trialBalance, balanceSheet, profitAndLoss, cashFlow] =
-      await Promise.all([
-        trialBalanceService.buildTrialBalance({ from, to }),
-        balanceSheetService.buildBalanceSheet({ from, to }),
-        profitLossService.buildProfitAndLoss({ from, to }),
-        cashFlowService.buildCashFlow({ from, to }),
-      ]);
-
-    const expenseByCategory = [
-      ...profitAndLoss.costOfSales.accounts,
-      ...profitAndLoss.operatingExpenses.accounts,
-    ].map((item) => ({
-      category: item.accountName,
-      amount: item.amount,
-    }));
-
-    const payroll = await Payroll.find();
-
-    const statutoryTotals = {
-      nisEmployee: roundMoney(payroll.reduce((s, p) => s + Number(p.nisEmployee || 0), 0)),
-      nhtEmployee: roundMoney(payroll.reduce((s, p) => s + Number(p.nhtEmployee || 0), 0)),
-      educationTax: roundMoney(payroll.reduce((s, p) => s + Number(p.educationTax || 0), 0)),
-      incomeTax: roundMoney(payroll.reduce((s, p) => s + Number(p.incomeTax || 0), 0)),
-      pensionEmployee: roundMoney(payroll.reduce((s, p) => s + Number(p.pensionEmployee || 0), 0)),
-      totalDeductions: roundMoney(payroll.reduce((s, p) => s + Number(p.totalDeductions || p.deductions || 0), 0)),
-    };
-
-    res.json({
+    return res.json({
       success: true,
-      data: {
-        filters: { from, to },
-        reportMeta: {
-          generatedAt: new Date().toISOString(),
-          reportTitle: "EKOS Accounting Engine Reports",
-          sourceOfTruth: "General Ledger via Accounting Engine",
-        },
-
-        trialBalance,
-        balanceSheet,
-        profitAndLoss,
-        cashFlow,
-
-        profitAndLossLegacy: profitAndLoss,
-
-        expenseByCategory,
-        statutoryTotals,
-
-        monthlyTrend: [],
-
-        profitAndLoss: {
-          ...profitAndLoss,
-          revenue: profitAndLoss.revenue.total,
-          costOfSales: profitAndLoss.costOfSales.total,
-          grossProfit: profitAndLoss.grossProfit,
-          operatingExpenses: profitAndLoss.operatingExpenses.total,
-          payrollExpense: expenseByCategory
-            .filter((e) => String(e.category).toLowerCase().includes("payroll"))
-            .reduce((s, e) => s + Number(e.amount || 0), 0),
-          totalExpenses: roundMoney(
-            profitAndLoss.costOfSales.total +
-              profitAndLoss.operatingExpenses.total
-          ),
-          netProfit: profitAndLoss.netProfit,
-        },
-      },
+      data,
     });
   } catch (error) {
-    console.error("Error getting financial reports:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve financial reports",
-      error: error.message,
-    });
+    console.error(
+      "Error getting financial reports:",
+      error
+    );
+
+    return sendReportingError(
+      res,
+      error,
+      "Failed to retrieve financial reports."
+    );
   }
 };
+
+/*
+|--------------------------------------------------------------------------
+| Monthly Revenue, Expenses and Profit
+|--------------------------------------------------------------------------
+*/
 
 const getMonthlyIncomeVsExpenses = async (req, res) => {
   try {
-    const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
+    const report = await buildReportBundle(req.query);
 
-    const ledgerTransactions = await GeneralLedgerTransaction.find().sort({
-      entryDate: 1,
-      createdAt: 1,
-    });
-
-    const monthMap = {};
-
-    ledgerTransactions.forEach((item) => {
-      const date = new Date(item.entryDate || item.createdAt);
-      if (Number.isNaN(date.getTime())) return;
-
-      const monthKey = date.toISOString().slice(0, 7);
-
-      if (!monthMap[monthKey]) {
-        monthMap[monthKey] = {
-          month: monthKey,
-          income: 0,
-          expenses: 0,
-        };
-      }
-
-      if (item.accountCategory === "Revenue") {
-        monthMap[monthKey].income = roundMoney(
-          monthMap[monthKey].income +
-            Number(item.credit || 0) -
-            Number(item.debit || 0)
-        );
-      }
-
-      if (
-        item.accountCategory === "Expense" ||
-        item.accountCategory === "Cost of Sales"
-      ) {
-        monthMap[monthKey].expenses = roundMoney(
-          monthMap[monthKey].expenses +
-            Number(item.debit || 0) -
-            Number(item.credit || 0)
-        );
-      }
-    });
-
-    res.json({
+    return res.json({
       success: true,
-      data: Object.values(monthMap).sort((a, b) =>
-        a.month.localeCompare(b.month)
-      ),
+      data: report.monthlyTrend,
+      filters: report.filters,
+
+      reportMeta: {
+        generatedAt: new Date().toISOString(),
+        sourceOfTruth: "Recorded General Ledger, JMD",
+        expenseBasis:
+          "Cost of Sales plus all expense accounts; payroll is included once.",
+        issues: report.diagnostics.issues,
+      },
     });
   } catch (error) {
-    console.error("Error getting monthly income vs expenses:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve monthly chart data",
-      error: error.message,
-    });
+    console.error(
+      "Error getting monthly income vs expenses:",
+      error
+    );
+
+    return sendReportingError(
+      res,
+      error,
+      "Failed to retrieve monthly chart data."
+    );
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| Existing Balance Rebuild
+|--------------------------------------------------------------------------
+*/
+
 const rebuildFinanceBalances = async (req, res) => {
   try {
-    const rebuiltAccounts = await rebuildAllAccountBalancesFromLedger();
+    const rebuiltAccounts =
+      await rebuildAllAccountBalancesFromLedger();
 
     res.json({
       success: true,
-      message: "Finance balances rebuilt successfully from General Ledger.",
+      message:
+        "Finance balances rebuilt successfully from General Ledger.",
       totalAccountsRebuilt: rebuiltAccounts.length,
       data: rebuiltAccounts,
     });
   } catch (error) {
-    console.error("Error rebuilding finance balances:", error);
+    console.error(
+      "Error rebuilding finance balances:",
+      error
+    );
+
     res.status(500).json({
       success: false,
       message: "Failed to rebuild finance balances",
