@@ -5,8 +5,12 @@ const { writeAuditLog } = require("../utils/auditLogger");
 
 const { postExpensePayment } = require("../services/accountingService");
 const {
-  accountMappingService,
-} = require("../services/accountingEngine");
+  resolveExpenseCategory,
+} = require("../services/expenseCategoryService");
+
+const {
+  getExpenseCategories,
+} = require("./expenseCategoryController");
 
 const budgetEngine = require("../services/budgetEngine");
 
@@ -31,25 +35,6 @@ const getReceiptFileExists = (receiptUrl = "") => {
   );
 
   return fs.existsSync(filePath);
-};
-
-const getExpenseCategories = async (req, res) => {
-  try {
-    const categories = accountMappingService.getExpenseCategories();
-
-    res.json({
-      success: true,
-      message: "Expense categories retrieved successfully",
-      data: categories,
-    });
-  } catch (error) {
-    console.error("Error getting expense categories:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to retrieve expense categories",
-      error: error.message,
-    });
-  }
 };
 
 const getExpenses = async (req, res) => {
@@ -114,7 +99,10 @@ const createExpense = async (req, res) => {
 
     const numericAmount = roundMoney(amount);
 
-    if (numericAmount <= 0) {
+    if (
+  !Number.isFinite(numericAmount) ||
+  numericAmount <= 0
+) {
       return res.status(400).json({
         success: false,
         message: "Expense amount must be greater than zero",
@@ -160,7 +148,7 @@ const createExpense = async (req, res) => {
     }
 
         const categoryMeta =
-      accountMappingService.getExpenseCategoryMeta(category);
+  await resolveExpenseCategory(category);
 
     const expenseAccountCode = categoryMeta.accountCode;
 
@@ -168,8 +156,8 @@ const createExpense = async (req, res) => {
       expenseAccountCode,
       paymentAccount: selectedFinancialAccount,
       amount: numericAmount,
-      description: `${category}: ${description}`,
-      reference: category,
+      description: `${categoryMeta.category}: ${description}`,
+reference: categoryMeta.category,
       expenseDate: date,
       transactionDate: date,
       user: req.user,
@@ -182,7 +170,7 @@ const createExpense = async (req, res) => {
         const newExpense = await Expense.create({
       expenseNumber: `EXP-${Date.now()}`,
       date,
-      category,
+      category: categoryMeta.category,
       expenseClassification: categoryMeta.classification,
       expenseGroup: categoryMeta.group,
       linkedChartAccountCode: categoryMeta.accountCode,
@@ -211,7 +199,7 @@ const createExpense = async (req, res) => {
             ? "Credit Card Charge"
             : "Expense Payment",
         amount: numericAmount,
-        reference: category,
+        reference: categoryMeta.category,
         notes: description,
         transactionDate: new Date(date),
       });
@@ -250,7 +238,7 @@ const createExpense = async (req, res) => {
         try {
       await budgetEngine.applyActualToBudgets({
         accountCode: categoryMeta.accountCode,
-        category,
+        category: categoryMeta.category,
         amount: numericAmount,
         branch: newExpense.branch,
         costCenter: newExpense.costCenter,
@@ -267,13 +255,20 @@ const createExpense = async (req, res) => {
       journalEntryNumber: journalEntry.entryNumber,
     });
   } catch (error) {
-    console.error("Error creating expense:", error);
-        res.status(500).json({
-      success: false,
-      message: error.message || "Failed to create expense",
-      error: error.message,
-    });
-  }
+  console.error("Error creating expense:", error);
+
+  const statusCode = [400, 404, 409].includes(
+    error.statusCode
+  )
+    ? error.statusCode
+    : 500;
+
+  return res.status(statusCode).json({
+    success: false,
+    message:
+      error.message || "Failed to create expense",
+  });
+}
 };
 
 module.exports = {

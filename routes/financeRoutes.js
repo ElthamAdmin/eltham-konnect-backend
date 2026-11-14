@@ -3,10 +3,16 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const {
-    getExpenseCategories,
   getExpenses,
   createExpense,
 } = require("../controllers/expenseController");
+
+const {
+  getExpenseCategories,
+  getExpenseCategoryAccounts,
+  createExpenseCategory,
+  updateExpenseCategory,
+} = require("../controllers/expenseCategoryController");
 
 const {
   auditTrialBalance,
@@ -93,7 +99,29 @@ router.delete(
   protect,
   deleteDraftAdjustmentBatch
 );
-router.get("/expense-categories", protect, getExpenseCategories);
+router.get(
+  "/expense-categories/posting-accounts",
+  protect,
+  getExpenseCategoryAccounts
+);
+
+router.get(
+  "/expense-categories",
+  protect,
+  getExpenseCategories
+);
+
+router.post(
+  "/expense-categories",
+  protect,
+  createExpenseCategory
+);
+
+router.put(
+  "/expense-categories/:categoryId",
+  protect,
+  updateExpenseCategory
+);
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);
 
