@@ -90,6 +90,26 @@ const createExpense = async (req, res) => {
       costCenter,
     } = req.body;
 
+    // This endpoint records completed expense payments only.
+// An omitted status retains the existing Paid default.
+if (status !== undefined && status !== "Paid") {
+  return res.status(400).json({
+    success: false,
+    message:
+      "Add Expense records paid expenses only. Record unpaid supplier bills through Accounts Payable.",
+  });
+}
+
+if (
+  typeof paidFromAccountNumber !== "string" ||
+  !paidFromAccountNumber.trim()
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select the account used to pay this expense.",
+  });
+}
+
     if (!date || !category || !description || !amount) {
       return res.status(400).json({
         success: false,
@@ -114,7 +134,7 @@ const createExpense = async (req, res) => {
 
     if (paidFromAccountNumber) {
       selectedFinancialAccount = await FinancialAccount.findOne({
-        accountNumber: paidFromAccountNumber,
+        accountNumber: paidFromAccountNumber.trim(),
       });
 
       if (!selectedFinancialAccount) {
@@ -180,8 +200,8 @@ reference: categoryMeta.category,
       costCenter: costCenter || "General",
       description,
       amount: numericAmount,
-      status: status || "Paid",
-      paidFromAccountNumber: paidFromAccountNumber || "",
+      status: "Paid",
+paidFromAccountNumber: paidFromAccountNumber.trim(),
       paidFromAccountName,
       receiptUrl,
     });
