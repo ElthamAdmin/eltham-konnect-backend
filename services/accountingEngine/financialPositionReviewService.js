@@ -40,6 +40,7 @@ const moneyValue = (value) => {
 const buildFinancialPositionReview = async ({
   effectiveDate,
   actualBalances = [],
+  session = null,
 } = {}) => {
   if (
     typeof effectiveDate !== "string" ||
@@ -97,7 +98,8 @@ const buildFinancialPositionReview = async ({
    * Include inactive accounts so historical balances
    * are not silently omitted.
    */
-  const accounts = await FinancialAccount.find()
+    const accounts = await FinancialAccount.find()
+    .session(session)
     .sort({ accountNumber: 1 })
     .lean();
 
@@ -121,17 +123,22 @@ const buildFinancialPositionReview = async ({
     ),
   ];
 
-  const [chartAccounts, ledger] = codes.length
-    ? await Promise.all([
-        ChartOfAccount.find({
-          accountCode: { $in: codes },
-        }).lean(),
+    let chartAccounts = [];
+  let ledger = [];
 
-        GeneralLedgerTransaction.find({
-          accountCode: { $in: codes },
-        }).lean(),
-      ])
-    : [[], []];
+  if (codes.length) {
+    chartAccounts = await ChartOfAccount.find({
+      accountCode: { $in: codes },
+    })
+      .session(session)
+      .lean();
+
+    ledger = await GeneralLedgerTransaction.find({
+      accountCode: { $in: codes },
+    })
+      .session(session)
+      .lean();
+  }
 
   const chartMap = new Map(
     chartAccounts.map((account) => [

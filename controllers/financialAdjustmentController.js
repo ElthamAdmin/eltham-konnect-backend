@@ -1,41 +1,85 @@
-const financialAdjustmentService = require("../services/accountingEngine/financialAdjustmentService");
+const service = require("../services/accountingEngine/financialAdjustmentService");
 
 const {
   buildFinancialPositionReview,
 } = require("../services/accountingEngine/financialPositionReviewService");
 
-const sendAdjustmentError = (res, error, message) => {
-  console.error(message, error);
+const BusinessEntity = require("../models/BusinessEntity");
+const ChartOfAccount = require("../models/ChartOfAccount");
+const FinancialAccount = require("../models/FinancialAccount");
 
-  const statusCode = [400, 403, 404, 409].includes(
-    error.statusCode
-  )
-    ? error.statusCode
-    : 500;
+const requireAdmin = (req, res) => {
+  if (!req.user || req.user.role !== "Admin") {
+    res.status(403).json({
+      success: false,
+      message: "Owner/Admin access is required.",
+    });
 
-  return res.status(statusCode).json({
+    return false;
+  }
+
+  return true;
+};
+
+const sendError = (res, error, fallback) => {
+  console.error(fallback, error);
+
+  const status =
+    error.code === 11000 || error.name === "VersionError"
+      ? 409
+      : [400, 403, 404, 409].includes(error.statusCode)
+      ? error.statusCode
+      : 500;
+
+  const message =
+    error.code === 11000
+      ? "A conflicting record already exists. Reload and inspect the batch before retrying."
+      : error.name === "VersionError"
+      ? "The batch changed. Reload before continuing."
+      : status === 500
+      ? fallback
+      : error.message;
+
+  return res.status(status).json({
     success: false,
-    message:
-      statusCode === 500 ? message : error.message,
+    message,
   });
 };
 
-/*
-|--------------------------------------------------------------------------
-| Read-Only Financial Position Review
-|--------------------------------------------------------------------------
-*/
+const action = (
+  message,
+  operation,
+  status = 200
+) => async (req, res) => {
+  if (!requireAdmin(req, res)) return;
+
+  try {
+    const data = await operation(req);
+
+    return res.status(status).json({
+      success: true,
+      message,
+      data,
+    });
+  } catch (error) {
+    return sendError(
+      res,
+      error,
+      "Could not complete the financial adjustment request."
+    );
+  }
+};
 
 const previewFinancialPosition = async (req, res) => {
-  try {
-    const input = req.body || {};
+  if (!requireAdmin(req, res)) return;
 
+  try {
     const review = await buildFinancialPositionReview({
-      effectiveDate: input.effectiveDate,
+      effectiveDate: req.body?.effectiveDate,
       actualBalances:
-        input.actualBalances === undefined
+        req.body?.actualBalances === undefined
           ? []
-          : input.actualBalances,
+          : req.body.actualBalances,
     });
 
     return res.json({
@@ -54,97 +98,154 @@ const previewFinancialPosition = async (req, res) => {
       },
     });
   } catch (error) {
-    return sendAdjustmentError(
+    return sendError(
       res,
       error,
-      "Could not review financial position."
+      "Could not preview the financial position."
     );
   }
 };
 
-/*
-|--------------------------------------------------------------------------
-| Legacy Posting Paused During Read-Only Review
-|--------------------------------------------------------------------------
-|
-| Controlled correction approval and posting will be
-| connected separately. These handlers do not call the
-| legacy automatic equity-offset posting functions.
-|
-*/
+const getFinancialAdjustmentOptions = action(
+  "Adjustment options retrieved.",
+  async () => {
+    const linkedCodes = await FinancialAccount.distinct(
+      "linkedChartAccountCode"
+    );
 
-const createAdjustmentBatch = async (req, res) =>
-  res.status(409).json({
-    success: false,
-    code: "ADJUSTMENT_REVIEW_ONLY",
-    message:
-      "Position Adjustments is currently review-only. Batch creation will be enabled when the controlled correction and approval workflow is ready. No adjustment was created.",
-  });
+    const entities = await BusinessEntity.find({
+      lifecycleStatus: "Active",
+    })
+      .select(
+        "entityCode legalName entityType effectiveFrom effectiveTo"
+      )
+      .sort({ entityCode: 1 })
+      .lean();
 
-const postAdjustmentBatch = async (req, res) =>
-  res.status(409).json({
-    success: false,
-    code: "ADJUSTMENT_REVIEW_ONLY",
-    message:
-      "Legacy adjustment posting is unavailable during the reconciliation review. Existing drafts need review under the controlled approval workflow. No journal was posted.",
-  });
+    const offsetAccounts = await ChartOfAccount.find({
+      status: "Active",
+      allowManualEntries: true,
 
-/*
-|--------------------------------------------------------------------------
-| Existing Batch History
-|--------------------------------------------------------------------------
-*/
+      accountCode: {
+        $nin: linkedCodes.filter(Boolean),
+      },
+    })
+      .select(
+        "accountCode accountName accountCategory normalBalance"
+      )
+      .sort({ accountCode: 1 })
+      .lean();
 
-const getAdjustmentBatches = async (req, res) => {
-  try {
-    const batches =
-      await financialAdjustmentService.getAdjustmentBatches();
+        return {
+      entities,
+      offsetAccounts,
+      postingEnabled:
+        process.env.FINANCIAL_ADJUSTMENT_POSTING_ENABLED === "true",
+    };
+  }
+);
 
-    return res.json({
-      success: true,
-      data: batches,
+const getAdjustmentBatches = action(
+  "Adjustment batches retrieved.",
+  () => service.getAdjustmentBatches()
+);
+
+const createAdjustmentBatch = action(
+  "Adjustment draft created. No journal was posted.",
+  (req) =>
+    service.createAdjustmentBatch({
+      effectiveDate: req.body?.effectiveDate,
+      description: req.body?.description,
+      adjustmentReason: req.body?.adjustmentReason,
+      businessEntityCode: req.body?.businessEntityCode,
+      evidenceReferences: req.body?.evidenceReferences,
+      actualBalances: req.body?.actualBalances,
+      user: req.user,
+    }),
+  201
+);
+
+const submitAdjustmentBatch = action(
+  "Adjustment batch submitted for review.",
+  (req) =>
+    service.submitAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+      user: req.user,
+    })
+);
+
+const approveAdjustmentBatch = action(
+  "Adjustment batch approved. No journal was posted.",
+  (req) =>
+    service.approveAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+      expectedContentHash: req.body?.expectedContentHash,
+      evidenceReviewed: req.body?.evidenceReviewed,
+      ownershipReview: req.body?.ownershipReview,
+      notes: req.body?.notes,
+      user: req.user,
+    })
+);
+
+const rejectAdjustmentBatch = action(
+  "Adjustment batch rejected.",
+  (req) =>
+    service.rejectAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+      reason: req.body?.reason,
+      user: req.user,
+    })
+);
+
+const cancelAdjustmentBatch = action(
+  "Adjustment draft cancelled; history retained.",
+  (req) =>
+    service.cancelAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+      reason: req.body?.reason,
+      user: req.user,
+    })
+);
+
+const postAdjustmentBatch = action(
+  "Adjustment posting request completed.",
+  (req) => {
+    if (
+      process.env.FINANCIAL_ADJUSTMENT_POSTING_ENABLED !==
+      "true"
+    ) {
+      const error = new Error(
+        "Adjustment posting is not enabled. Draft preparation and review remain available."
+      );
+
+      error.statusCode = 409;
+      throw error;
+    }
+
+    return service.postAdjustmentBatch({
+      batchNumber: req.params.batchNumber,
+      expectedApprovedContentHash:
+        req.body?.expectedApprovedContentHash,
+      user: req.user,
+      req,
     });
-  } catch (error) {
-    return sendAdjustmentError(
-      res,
-      error,
-      "Could not load adjustment batches."
-    );
   }
-};
+);
 
-/*
-|--------------------------------------------------------------------------
-| Existing Draft Deletion
-|--------------------------------------------------------------------------
-*/
-
-const deleteDraftAdjustmentBatch = async (req, res) => {
-  try {
-    const batch =
-      await financialAdjustmentService.deleteDraftAdjustmentBatch({
-        batchNumber: req.params.batchNumber,
-      });
-
-    return res.json({
-      success: true,
-      message:
-        "Draft adjustment batch deleted successfully.",
-      data: batch,
-    });
-  } catch (error) {
-    return sendAdjustmentError(
-      res,
-      error,
-      "Could not delete adjustment batch."
-    );
-  }
-};
+const deleteDraftAdjustmentBatch = action(
+  "",
+  () => service.deleteDraftAdjustmentBatch()
+);
 
 module.exports = {
   previewFinancialPosition,
-  createAdjustmentBatch,
-  postAdjustmentBatch,
+  getFinancialAdjustmentOptions,
   getAdjustmentBatches,
+  createAdjustmentBatch,
+  submitAdjustmentBatch,
+  approveAdjustmentBatch,
+  rejectAdjustmentBatch,
+  cancelAdjustmentBatch,
+  postAdjustmentBatch,
   deleteDraftAdjustmentBatch,
 };

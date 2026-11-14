@@ -20,11 +20,15 @@ const {
 
 const {
   previewFinancialPosition,
+  getFinancialAdjustmentOptions,
   createAdjustmentBatch,
+  submitAdjustmentBatch,
+  approveAdjustmentBatch,
+  rejectAdjustmentBatch,
+  cancelAdjustmentBatch,
   postAdjustmentBatch,
   getAdjustmentBatches,
-    deleteDraftAdjustmentBatch,
-
+  deleteDraftAdjustmentBatch,
 } = require("../controllers/financialAdjustmentController");
 
 const router = express.Router();
@@ -148,5 +152,40 @@ router.put(
 );
 router.get("/expenses", protect, getExpenses);
 router.post("/expenses", protect, upload.single("receipt"), createExpense);
+
+router.get(
+  "/financial-position/options",
+  protect,
+  requireFinanceAdmin,
+  getFinancialAdjustmentOptions
+);
+
+router.post(
+  "/adjustment-batches/:batchNumber/submit",
+  protect,
+  requireFinanceAdmin,
+  submitAdjustmentBatch
+);
+
+router.post(
+  "/adjustment-batches/:batchNumber/approve",
+  protect,
+  requireFinanceAdmin,
+  approveAdjustmentBatch
+);
+
+router.post(
+  "/adjustment-batches/:batchNumber/reject",
+  protect,
+  requireFinanceAdmin,
+  rejectAdjustmentBatch
+);
+
+router.post(
+  "/adjustment-batches/:batchNumber/cancel",
+  protect,
+  requireFinanceAdmin,
+  cancelAdjustmentBatch
+);
 
 module.exports = router;

@@ -122,6 +122,13 @@ const accountTransactionSchema = new mongoose.Schema(
       index: true,
     },
 
+        transactionDirection: {
+      type: String,
+      enum: ["", "Deposit", "Withdrawal"],
+      default: "",
+      index: true,
+    },
+
     amount: {
       type: Number,
       required: true,

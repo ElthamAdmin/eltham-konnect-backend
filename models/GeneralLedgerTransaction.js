@@ -64,6 +64,14 @@ const generalLedgerTransactionSchema = new mongoose.Schema(
       default: "",
     },
 
+        adjustmentBatchNumber: {
+      type: String,
+      default: undefined,
+      trim: true,
+      immutable: true,
+      index: true,
+    },
+
     entityId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "BusinessEntity",

@@ -29,8 +29,32 @@ const isDepositTransaction = (transactionType = "") =>
     "Interest Income",
   ].includes(transactionType);
 
-const getTransactionDirection = (transactionType = "") =>
-  isDepositTransaction(transactionType) ? "Deposit" : "Withdrawal";
+const getTransactionDirection = (transaction = {}) => {
+  if (transaction.transactionType === "Adjustment") {
+    if (
+      ["Deposit", "Withdrawal"].includes(
+        transaction.transactionDirection
+      )
+    ) {
+      return transaction.transactionDirection;
+    }
+
+    const error = new Error(
+      `Adjustment ${
+        transaction.transactionNumber || ""
+      } has no recorded direction. Review its journal before reconciliation.`
+    );
+
+    error.statusCode = 409;
+    error.code = "ADJUSTMENT_DIRECTION_REVIEW_REQUIRED";
+
+    throw error;
+  }
+
+  return isDepositTransaction(transaction.transactionType)
+    ? "Deposit"
+    : "Withdrawal";
+};
 
 const buildAccountLedgerMap = async (accounts) => {
   const linkedCodes = accounts
@@ -87,7 +111,7 @@ const calculateReconciliationTotals = ({
 
   const reconciliationItems = transactions.map((transaction) => {
     const amount = roundMoney(transaction.amount || 0);
-    const direction = getTransactionDirection(transaction.transactionType);
+    const direction = getTransactionDirection(transaction);
     const cleared = clearedSet.has(transaction.transactionNumber);
 
     if (cleared) {
@@ -347,7 +371,7 @@ const autoMatchBankStatement = async (req, res) => {
             roundMoney(transaction.amount) === roundMoney(line.amount);
 
           const sameDirection =
-            getTransactionDirection(transaction.transactionType) ===
+            getTransactionDirection(transaction) ===
             line.transactionDirection;
 
           const withinDateRange =
@@ -417,7 +441,7 @@ const autoMatchBankStatement = async (req, res) => {
   } catch (error) {
     console.error("Bank statement auto-match error:", error);
 
-    res.status(500).json({
+        res.status(error.statusCode === 409 ? 409 : 500).json({
       success: false,
       message: "Could not auto-match bank statement.",
       error: error.message,
@@ -645,7 +669,7 @@ const searchLedgerTransactionsForMatch = async (req, res) => {
     const filteredTransactions = transactionDirection
       ? transactions.filter(
           (transaction) =>
-            getTransactionDirection(transaction.transactionType) ===
+            getTransactionDirection(transaction) ===
             transactionDirection
         )
       : transactions;
@@ -657,7 +681,7 @@ const searchLedgerTransactionsForMatch = async (req, res) => {
   } catch (error) {
     console.error("Ledger match search error:", error);
 
-    res.status(500).json({
+        res.status(error.statusCode === 409 ? 409 : 500).json({
       success: false,
       message: "Could not search ledger transactions.",
       error: error.message,
@@ -714,7 +738,7 @@ const splitMatchStatementLine = async (req, res) => {
 
     const invalidDirection = ledgerTransactions.find(
       (transaction) =>
-        getTransactionDirection(transaction.transactionType) !==
+        getTransactionDirection(transaction) !==
         statementLine.transactionDirection
     );
 
@@ -783,7 +807,7 @@ const splitMatchStatementLine = async (req, res) => {
   } catch (error) {
     console.error("Split statement match error:", error);
 
-    res.status(500).json({
+        res.status(error.statusCode === 409 ? 409 : 500).json({
       success: false,
       message: "Could not split match statement line.",
       error: error.message,
@@ -930,7 +954,8 @@ const createReconciliationAdjustment = async (req, res) => {
       linkedChartAccountCode: account.linkedChartAccountCode,
       journalEntryNumber: journalEntry.entryNumber,
       ledgerReference: journalEntry.entryNumber,
-      transactionType,
+            transactionType,
+      transactionDirection: statementLine.transactionDirection,
       amount: numericAmount,
       reference: adjustmentType,
       notes: description || `Reconciliation adjustment - ${adjustmentType}`,
@@ -967,7 +992,7 @@ const createReconciliationAdjustment = async (req, res) => {
   } catch (error) {
     console.error("Reconciliation adjustment error:", error);
 
-    res.status(500).json({
+        res.status(error.statusCode === 409 ? 409 : 500).json({
       success: false,
       message: "Could not create reconciliation adjustment.",
       error: error.message,

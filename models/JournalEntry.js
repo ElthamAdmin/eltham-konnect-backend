@@ -85,6 +85,13 @@ const journalEntrySchema = new mongoose.Schema(
       default: "",
     },
 
+        adjustmentBatchNumber: {
+      type: String,
+      default: undefined,
+      trim: true,
+      immutable: true,
+    },
+
     entityId: {
   type: mongoose.Schema.Types.ObjectId,
   ref: "BusinessEntity",
@@ -232,6 +239,17 @@ journalEntrySchema.index(
     unique: true,
     partialFilterExpression: {
       openingAccountCode: { $type: "string" },
+    },
+  }
+);
+
+journalEntrySchema.index(
+  { adjustmentBatchNumber: 1 },
+  {
+    name: "unique_financial_adjustment_batch_journal",
+    unique: true,
+    partialFilterExpression: {
+      adjustmentBatchNumber: { $type: "string" },
     },
   }
 );
