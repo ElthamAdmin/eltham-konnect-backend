@@ -39,6 +39,10 @@ const {
 
 const { protect } = require("../middleware/authMiddleware");
 
+const {
+  requireFinanceAdmin,
+} = require("../middleware/financeAdminMiddleware");
+
 const expenseReceiptsDir = path.join(__dirname, "..", "uploads", "expense-receipts");
 
 if (!fs.existsSync(expenseReceiptsDir)) {
@@ -85,18 +89,38 @@ router.get("/monthly-chart", protect, getMonthlyIncomeVsExpenses);
 router.post("/rebuild-balances", protect, rebuildFinanceBalances);
 router.get("/audit/trial-balance", protect, auditTrialBalance);
 
-router.post("/financial-position/preview", protect, previewFinancialPosition);
-router.get("/adjustment-batches", protect, getAdjustmentBatches);
-router.post("/adjustment-batches", protect, createAdjustmentBatch);
+router.post(
+  "/financial-position/preview",
+  protect,
+  requireFinanceAdmin,
+  previewFinancialPosition
+);
+
+router.get(
+  "/adjustment-batches",
+  protect,
+  requireFinanceAdmin,
+  getAdjustmentBatches
+);
+
+router.post(
+  "/adjustment-batches",
+  protect,
+  requireFinanceAdmin,
+  createAdjustmentBatch
+);
+
 router.post(
   "/adjustment-batches/:batchNumber/post",
   protect,
+  requireFinanceAdmin,
   postAdjustmentBatch
 );
 
 router.delete(
   "/adjustment-batches/:batchNumber",
   protect,
+  requireFinanceAdmin,
   deleteDraftAdjustmentBatch
 );
 router.get(

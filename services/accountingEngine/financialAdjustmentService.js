@@ -7,6 +7,9 @@ const { postJournalEntry } = require("./journalService");
 const { SYSTEM_ACCOUNTS } = require("./accountingConstants");
 const { roundMoney } = require("./money");
 const { writeFinanceAuditLog } = require("../../utils/financeAuditHelper");
+const {
+  buildFinancialPositionReview,
+} = require("./financialPositionReviewService");
 
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
@@ -92,74 +95,16 @@ const ensureLinkedChartAccount = async (financialAccount) => {
   return chartAccount;
 };
 
-const buildPositionPreview = async ({ actualBalances = [] }) => {
-  const actualMap = {};
-  actualBalances.forEach((item) => {
-    actualMap[item.accountNumber] = item;
+const buildPositionPreview = async ({
+  effectiveDate,
+  actualBalances = [],
+} = {}) => {
+  const review = await buildFinancialPositionReview({
+    effectiveDate,
+    actualBalances,
   });
 
-  const accounts = await FinancialAccount.find({ status: "Active" }).sort({
-    accountName: 1,
-  });
-
-    for (const account of accounts) {
-    await ensureLinkedChartAccount(account);
-  }
-
-  const linkedCodes = accounts
-    .map((account) => account.linkedChartAccountCode || account.accountNumber)
-    .filter(Boolean);
-
-  const chartAccounts = await ChartOfAccount.find({
-    accountCode: { $in: linkedCodes },
-  });
-
-  const chartMap = {};
-  chartAccounts.forEach((account) => {
-    chartMap[account.accountCode] = account;
-  });
-
-  return accounts.map((account) => {
-    const chartAccount = chartMap[account.linkedChartAccountCode];
-
-    const currency = String(account.currency || "JMD").toUpperCase();
-    const exchangeRate = Number(account.exchangeRate || 1);
-
-    const ledgerBaseBalance = roundMoney(chartAccount?.currentBalance || 0);
-
-    const ledgerBalance =
-      currency === "JMD"
-        ? ledgerBaseBalance
-        : roundMoney(account.currentBalance || 0);
-
-    const actualInput = actualMap[account.accountNumber];
-
-    const actualBalance =
-      actualInput?.actualBalance !== undefined
-        ? roundMoney(actualInput.actualBalance)
-        : ledgerBalance;
-
-    const actualBaseBalance = calculateBaseAmount({
-      amount: actualBalance,
-      currency,
-      exchangeRate,
-    });
-
-    return {
-      accountNumber: account.accountNumber,
-      accountName: account.accountName,
-      accountType: account.accountType,
-      linkedChartAccountCode: account.linkedChartAccountCode,
-      currency,
-      exchangeRate,
-      ledgerBalance,
-      actualBalance,
-      ledgerBaseBalance,
-      actualBaseBalance,
-      difference: roundMoney(actualBaseBalance - ledgerBaseBalance),
-      notes: actualInput?.notes || "",
-    };
-  });
+  return review.rows;
 };
 
 const createAdjustmentBatch = async ({

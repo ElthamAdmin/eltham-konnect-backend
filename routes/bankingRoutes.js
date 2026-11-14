@@ -2,7 +2,13 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+} = require("../middleware/authMiddleware");
+
+const {
+  requireFinanceAdmin,
+} = require("../middleware/financeAdminMiddleware");
 
 const {
   getBankingDashboard,
@@ -16,125 +22,113 @@ const {
   autoMatchBankStatement,
   getImportedStatements,
   startReconciliationWizard,
-loadReconciliationWorkspace,
+  loadReconciliationWorkspace,
   acceptStatementMatch,
   rejectStatementMatch,
-    searchLedgerTransactionsForMatch,
-      splitMatchStatementLine,
-        createReconciliationAdjustment,
+  searchLedgerTransactionsForMatch,
+  splitMatchStatementLine,
+  createReconciliationAdjustment,
 } = require("../controllers/bankingController");
 
 /*
 |--------------------------------------------------------------------------
-| Banking Dashboard
+| Banking Dashboard and Register
 |--------------------------------------------------------------------------
 */
 
 router.get("/", protect, getBankingDashboard);
 
-/*
-|--------------------------------------------------------------------------
-| Bank Register
-|--------------------------------------------------------------------------
-*/
-
-router.get("/register/:accountNumber", protect, getBankRegister);
+router.get(
+  "/register/:accountNumber",
+  protect,
+  getBankRegister
+);
 
 /*
 |--------------------------------------------------------------------------
-| Bank Reconciliation
+| Owner/Admin-Only Reconciliation
 |--------------------------------------------------------------------------
 */
 
-router.get("/reconciliation", protect, getReconciliations);
+router.use(
+  "/reconciliation",
+  protect,
+  requireFinanceAdmin
+);
+
+router.get(
+  "/reconciliation",
+  getReconciliations
+);
 
 router.get(
   "/reconciliation/:reconciliationNumber",
-  protect,
   getReconciliationByNumber
 );
 
 router.post(
   "/reconciliation",
-  protect,
   createBankReconciliation
 );
 
 router.put(
   "/reconciliation/:reconciliationNumber/finalize",
-  protect,
   finalizeBankReconciliation
 );
 
 router.put(
   "/reconciliation/:reconciliationNumber/reopen",
-  protect,
   reopenBankReconciliation
 );
 
-/*
-|--------------------------------------------------------------------------
-| Bank Statement Import
-|--------------------------------------------------------------------------
-*/
-
 router.post(
   "/reconciliation/import",
-  protect,
   importBankStatement
 );
 
 router.post(
   "/reconciliation/wizard/start",
-  protect,
   startReconciliationWizard
 );
 
 router.get(
   "/reconciliation/workspace/:importNumber",
-  protect,
   loadReconciliationWorkspace
 );
 
 router.post(
   "/reconciliation/auto-match",
-  protect,
   autoMatchBankStatement
 );
 
 router.get(
   "/reconciliation/import/history",
-  protect,
   getImportedStatements
 );
 
 router.post(
   "/reconciliation/import/accept-match",
-  protect,
   acceptStatementMatch
 );
 
 router.post(
   "/reconciliation/import/reject-match",
-  protect,
   rejectStatementMatch
 );
 
 router.get(
   "/reconciliation/import/search-ledger",
-  protect,
   searchLedgerTransactionsForMatch
 );
 
 router.post(
   "/reconciliation/import/split-match",
-  protect,
   splitMatchStatementLine
 );
 
 router.post(
   "/reconciliation/import/adjustment",
-  protect,
   createReconciliationAdjustment
 );
+
 module.exports = router;

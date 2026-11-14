@@ -1,109 +1,143 @@
 const financialAdjustmentService = require("../services/accountingEngine/financialAdjustmentService");
 
+const {
+  buildFinancialPositionReview,
+} = require("../services/accountingEngine/financialPositionReviewService");
+
+const sendAdjustmentError = (res, error, message) => {
+  console.error(message, error);
+
+  const statusCode = [400, 403, 404, 409].includes(
+    error.statusCode
+  )
+    ? error.statusCode
+    : 500;
+
+  return res.status(statusCode).json({
+    success: false,
+    message:
+      statusCode === 500 ? message : error.message,
+  });
+};
+
+/*
+|--------------------------------------------------------------------------
+| Read-Only Financial Position Review
+|--------------------------------------------------------------------------
+*/
+
 const previewFinancialPosition = async (req, res) => {
   try {
-    const preview = await financialAdjustmentService.buildPositionPreview({
-      actualBalances: req.body.actualBalances || [],
+    const input = req.body || {};
+
+    const review = await buildFinancialPositionReview({
+      effectiveDate: input.effectiveDate,
+      actualBalances:
+        input.actualBalances === undefined
+          ? []
+          : input.actualBalances,
     });
 
-    res.json({
+    return res.json({
       success: true,
-      data: preview,
+      data: review.rows,
+
+      reviewMeta: {
+        effectiveDate: review.effectiveDate,
+        generatedAt: review.generatedAt,
+        readOnly: review.readOnly,
+        canPost: review.canPost,
+        balanceBasis: review.balanceBasis,
+        entityBasis: review.entityBasis,
+        accountBasis: review.accountBasis,
+        accountsWithIssues: review.accountsWithIssues,
+      },
     });
   } catch (error) {
-    console.error("Preview financial position error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not preview financial position adjustments",
-      error: error.message,
-    });
+    return sendAdjustmentError(
+      res,
+      error,
+      "Could not review financial position."
+    );
   }
 };
 
-const createAdjustmentBatch = async (req, res) => {
-  try {
-    const batch = await financialAdjustmentService.createAdjustmentBatch({
-      effectiveDate: req.body.effectiveDate,
-      description: req.body.description,
-      adjustmentReason: req.body.adjustmentReason,
-      actualBalances: req.body.actualBalances || [],
-      user: req.user,
-    });
+/*
+|--------------------------------------------------------------------------
+| Legacy Posting Paused During Read-Only Review
+|--------------------------------------------------------------------------
+|
+| Controlled correction approval and posting will be
+| connected separately. These handlers do not call the
+| legacy automatic equity-offset posting functions.
+|
+*/
 
-    res.status(201).json({
-      success: true,
-      message: "Financial adjustment batch created successfully",
-      data: batch,
-    });
-  } catch (error) {
-    console.error("Create adjustment batch error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not create adjustment batch",
-      error: error.message,
-    });
-  }
-};
+const createAdjustmentBatch = async (req, res) =>
+  res.status(409).json({
+    success: false,
+    code: "ADJUSTMENT_REVIEW_ONLY",
+    message:
+      "Position Adjustments is currently review-only. Batch creation will be enabled when the controlled correction and approval workflow is ready. No adjustment was created.",
+  });
 
-const postAdjustmentBatch = async (req, res) => {
-  try {
-    const result = await financialAdjustmentService.postAdjustmentBatch({
-      batchNumber: req.params.batchNumber,
-      user: req.user,
-      req,
-    });
+const postAdjustmentBatch = async (req, res) =>
+  res.status(409).json({
+    success: false,
+    code: "ADJUSTMENT_REVIEW_ONLY",
+    message:
+      "Legacy adjustment posting is unavailable during the reconciliation review. Existing drafts need review under the controlled approval workflow. No journal was posted.",
+  });
 
-    res.json({
-      success: true,
-      message: "Financial adjustment batch posted successfully",
-      data: result,
-    });
-  } catch (error) {
-    console.error("Post adjustment batch error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not post adjustment batch",
-      error: error.message,
-    });
-  }
-};
+/*
+|--------------------------------------------------------------------------
+| Existing Batch History
+|--------------------------------------------------------------------------
+*/
 
 const getAdjustmentBatches = async (req, res) => {
   try {
-    const batches = await financialAdjustmentService.getAdjustmentBatches();
+    const batches =
+      await financialAdjustmentService.getAdjustmentBatches();
 
-    res.json({
+    return res.json({
       success: true,
       data: batches,
     });
   } catch (error) {
-    console.error("Get adjustment batches error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not load adjustment batches",
-      error: error.message,
-    });
+    return sendAdjustmentError(
+      res,
+      error,
+      "Could not load adjustment batches."
+    );
   }
 };
 
+/*
+|--------------------------------------------------------------------------
+| Existing Draft Deletion
+|--------------------------------------------------------------------------
+*/
+
 const deleteDraftAdjustmentBatch = async (req, res) => {
   try {
-    const batch = await financialAdjustmentService.deleteDraftAdjustmentBatch({
-      batchNumber: req.params.batchNumber,
-    });
+    const batch =
+      await financialAdjustmentService.deleteDraftAdjustmentBatch({
+        batchNumber: req.params.batchNumber,
+      });
 
-    res.json({
+    return res.json({
       success: true,
-      message: "Draft adjustment batch deleted successfully",
+      message:
+        "Draft adjustment batch deleted successfully.",
       data: batch,
     });
   } catch (error) {
-    console.error("Delete adjustment batch error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not delete adjustment batch",
-      error: error.message,
-    });
+    return sendAdjustmentError(
+      res,
+      error,
+      "Could not delete adjustment batch."
+    );
   }
 };
 
