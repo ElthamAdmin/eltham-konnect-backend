@@ -474,6 +474,7 @@ const postCustomerPurchase = async ({
   purchase,
   paymentAccount,
   user,
+  session = null,
 }) => {
   const baseCurrencyAmount = roundMoney(
     purchase.baseCurrencyAmount ||
@@ -481,7 +482,8 @@ const postCustomerPurchase = async ({
         Number(purchase.exchangeRate || 1)
   );
 
-  return postJournalEntry({
+    return postJournalEntry({
+    session,
     entryDate: normalizePostingDate(purchase.purchaseDate),
     memo: `Customer purchase for ${purchase.customerName} from ${purchase.merchant}`,
     reference: purchase.purchaseNumber,

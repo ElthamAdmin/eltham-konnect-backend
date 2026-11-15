@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const CustomerPurchase = require("../models/CustomerPurchase");
 const CustomerPurchaseRefund = require("../models/CustomerPurchaseRefund");
 
@@ -345,6 +346,12 @@ const getCustomerPurchaseDashboard = async (req, res) => {
 };
 
 const createCustomerPurchase = async (req, res) => {
+  const reject = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
   try {
     const {
       customerEkonId,
@@ -362,296 +369,418 @@ const createCustomerPurchase = async (req, res) => {
       receiptUrl,
       orderConfirmationUrl,
       notes,
-    } = req.body;
+    } = req.body || {};
 
     if (
       !customerEkonId ||
       !purchaseDate ||
-      !merchant ||
-      !purchaseAmount ||
+      !String(merchant || "").trim() ||
       !paymentAccountNumber
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Customer, purchase date, merchant, purchase amount, and payment account are required.",
-      });
+      reject(
+        "Customer, purchase date, merchant and payment account are required."
+      );
     }
 
     const numericPurchaseAmount = roundMoney(purchaseAmount);
-    const numericExchangeRate = roundMoney(exchangeRate || 1);
+    const numericExchangeRate = roundMoney(exchangeRate);
 
-    if (numericPurchaseAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Purchase amount must be greater than zero.",
-      });
+    if (
+      !Number.isFinite(Number(purchaseAmount)) ||
+      !Number.isFinite(numericPurchaseAmount) ||
+      numericPurchaseAmount <= 0
+    ) {
+      reject(
+        "Purchase amount must be a finite amount greater than zero."
+      );
     }
 
-    if (numericExchangeRate <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Exchange rate must be greater than zero.",
-      });
+    if (
+      !Number.isFinite(Number(exchangeRate)) ||
+      !Number.isFinite(numericExchangeRate) ||
+      numericExchangeRate <= 0
+    ) {
+      reject(
+        "Exchange rate must be a finite number greater than zero."
+      );
     }
 
-    const [customer, paymentAccount] = await Promise.all([
-      Customer.findOne({
-        ekonId: customerEkonId,
-        status: { $ne: "Deleted" },
-      }),
-      FinancialAccount.findOne({
-        accountNumber: paymentAccountNumber,
-        status: "Active",
-      }),
-    ]);
+    const currency = String(purchaseCurrency)
+      .trim()
+      .toUpperCase();
 
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Active customer not found.",
-      });
+    if (!["JMD", "USD"].includes(currency)) {
+      reject("Select JMD or USD as the purchase currency.");
     }
 
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message: "Active payment account not found.",
-      });
+    const parsedDate = new Date(
+      `${purchaseDate}T00:00:00.000Z`
+    );
+
+    if (
+      typeof purchaseDate !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate) ||
+      !Number.isFinite(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== purchaseDate
+    ) {
+      reject(
+        "Purchase date must be a valid YYYY-MM-DD date."
+      );
     }
 
-    if (!paymentAccount.linkedChartAccountCode) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "The selected payment account is not linked to the Chart of Accounts.",
-      });
+    if (!Array.isArray(items)) {
+      reject("Purchase items must be a list.");
     }
 
-    const normalizedOrderNumber = String(orderNumber || "").trim();
+    const preparedItems = items
+      .map((item) => {
+        if (
+          !item ||
+          typeof item !== "object" ||
+          Array.isArray(item)
+        ) {
+          reject("Each purchase item must be an object.");
+        }
 
-    if (normalizedOrderNumber) {
-      const duplicateOrder = await CustomerPurchase.findOne({
-        merchant: {
-          $regex: `^${escapeRegex(String(merchant).trim())}$`,
-          $options: "i",
-        },
-        orderNumber: normalizedOrderNumber,
-        status: { $nin: ["Cancelled", "Reversed"] },
-      });
+        const itemName = String(item.itemName || "").trim();
 
-      if (duplicateOrder) {
-        return res.status(400).json({
-          success: false,
-          message: `A customer purchase already exists for merchant ${merchant} and order ${normalizedOrderNumber}.`,
-          purchaseNumber: duplicateOrder.purchaseNumber,
-        });
-      }
-    }
+        if (!itemName) return null;
+
+        const quantity = Number(item.quantity ?? 1);
+        const unitPrice = roundMoney(item.unitPrice ?? 0);
+
+        const totalAmount = roundMoney(
+          item.totalAmount ?? quantity * unitPrice
+        );
+
+        if (
+          !Number.isFinite(quantity) ||
+          quantity < 1 ||
+          !Number.isFinite(unitPrice) ||
+          unitPrice < 0 ||
+          !Number.isFinite(totalAmount) ||
+          totalAmount < 0
+        ) {
+          reject(
+            "Item quantities must be at least one, and item prices and totals must be finite, nonnegative amounts."
+          );
+        }
+
+        return {
+          itemName,
+          description: String(item.description || "").trim(),
+          quantity,
+          unitPrice,
+          totalAmount,
+          size: String(item.size || "").trim(),
+          colour: String(item.colour || "").trim(),
+          productUrl: String(item.productUrl || "").trim(),
+        };
+      })
+      .filter(Boolean);
+
+    const normalizedMerchant = String(merchant).trim();
+    const normalizedOrderNumber =
+      String(orderNumber || "").trim();
 
     const baseCurrencyAmount = calculateBaseCurrencyAmount({
       purchaseAmount: numericPurchaseAmount,
-      purchaseCurrency,
+      purchaseCurrency: currency,
       exchangeRate: numericExchangeRate,
     });
 
-    const purchaseNumber = generatePurchaseNumber();
+    if (
+      !Number.isFinite(baseCurrencyAmount) ||
+      baseCurrencyAmount <= 0 ||
+      !Number.isSafeInteger(
+        Math.round(baseCurrencyAmount * 100)
+      )
+    ) {
+      reject(
+        "The JMD purchase amount is invalid or exceeds the supported amount range."
+      );
+    }
+
     const performedBy = getUserName(req.user);
+    const purchaseNumber = generatePurchaseNumber();
 
-    const preparedItems = Array.isArray(items)
-      ? items
-          .map((item) => {
-            const quantity = Math.max(1, Number(item.quantity || 1));
-            const unitPrice = roundMoney(item.unitPrice);
-            const totalAmount = roundMoney(
-              item.totalAmount || quantity * unitPrice
+    const result = await mongoose.connection.transaction(
+      async (session) => {
+        const customer = await Customer.findOne({
+          ekonId: customerEkonId,
+          status: { $ne: "Deleted" },
+        }).session(session);
+
+        if (!customer) {
+          reject("Customer not found or deleted.", 404);
+        }
+
+        const paymentAccount = await FinancialAccount.findOne({
+          accountNumber: paymentAccountNumber,
+          status: "Active",
+        }).session(session);
+
+        if (!paymentAccount) {
+          reject("Active payment account not found.", 404);
+        }
+
+        if (!paymentAccount.linkedChartAccountCode) {
+          reject(
+            "The selected payment account is not linked to the Chart of Accounts."
+          );
+        }
+
+        if (normalizedOrderNumber) {
+          const duplicateOrder = await CustomerPurchase.findOne({
+            merchant: {
+              $regex: `^${escapeRegex(normalizedMerchant)}$`,
+              $options: "i",
+            },
+            orderNumber: normalizedOrderNumber,
+            status: { $nin: ["Cancelled", "Reversed"] },
+          }).session(session);
+
+          if (duplicateOrder) {
+            reject(
+              `Purchase ${duplicateOrder.purchaseNumber} already uses this merchant and order number.`,
+              409
             );
+          }
+        }
 
-            return {
-              itemName: String(item.itemName || "").trim(),
-              description: String(item.description || "").trim(),
-              quantity,
-              unitPrice,
-              totalAmount,
-              size: String(item.size || "").trim(),
-              colour: String(item.colour || "").trim(),
-              productUrl: String(item.productUrl || "").trim(),
-            };
-          })
-          .filter((item) => item.itemName)
-      : [];
+        const created = await CustomerPurchase.create(
+          [
+            {
+              purchaseNumber,
+              customerId: customer._id,
+              customerEkonId: customer.ekonId,
+              customerName: customer.name,
+              customerEmail: customer.email || "",
+              customerPhone: customer.phone || "",
 
-    const purchase = await CustomerPurchase.create({
-      purchaseNumber,
-      customerId: customer._id,
-      customerEkonId: customer.ekonId,
-      customerName: customer.name,
-      customerEmail: customer.email || "",
-      customerPhone: customer.phone || "",
-      branch:
-        branch ||
-        customer.branch ||
-        "Eltham Park Mainstore",
-      requestDate: requestDate || "",
-      purchaseDate,
-      merchant: String(merchant).trim(),
-      website: String(website || "").trim(),
-      orderNumber: normalizedOrderNumber,
-      items: preparedItems,
-      purchaseCurrency: String(purchaseCurrency || "USD").toUpperCase(),
-      purchaseAmount: numericPurchaseAmount,
-      exchangeRate: numericExchangeRate,
-      baseCurrency: "JMD",
-      baseCurrencyAmount,
-      paymentAccountNumber: paymentAccount.accountNumber,
-      paymentAccountName: paymentAccount.accountName,
-      paymentAccountType: paymentAccount.accountType,
-      paymentChartAccountCode:
-        paymentAccount.linkedChartAccountCode,
-      itemRecoveryAmount: baseCurrencyAmount,
-      totalCustomerCharge: baseCurrencyAmount,
-      recoveredAmount: 0,
-      outstandingAmount: baseCurrencyAmount,
-      recoveryStatus: "Not Invoiced",
-      status: "Pending Purchase",
-      receiptUrl: receiptUrl || "",
-      orderConfirmationUrl: orderConfirmationUrl || "",
-      notes: notes || "",
-      createdBy: performedBy,
-    });
+              branch:
+                branch ||
+                customer.branch ||
+                "Eltham Park Mainstore",
 
+              requestDate: requestDate || "",
+              purchaseDate,
+              merchant: normalizedMerchant,
+              website: String(website || "").trim(),
+              orderNumber: normalizedOrderNumber,
+              items: preparedItems,
+
+              purchaseCurrency: currency,
+              purchaseAmount: numericPurchaseAmount,
+              exchangeRate: numericExchangeRate,
+              baseCurrency: "JMD",
+              baseCurrencyAmount,
+
+              paymentAccountNumber: paymentAccount.accountNumber,
+              paymentAccountName: paymentAccount.accountName,
+              paymentAccountType: paymentAccount.accountType,
+              paymentChartAccountCode:
+                paymentAccount.linkedChartAccountCode,
+
+              itemRecoveryAmount: baseCurrencyAmount,
+              totalCustomerCharge: baseCurrencyAmount,
+              recoveredAmount: 0,
+              outstandingAmount: baseCurrencyAmount,
+              recoveryStatus: "Not Invoiced",
+              status: "Pending Purchase",
+
+              receiptUrl: receiptUrl || "",
+              orderConfirmationUrl: orderConfirmationUrl || "",
+              notes: notes || "",
+              createdBy: performedBy,
+            },
+          ],
+          { session }
+        );
+
+        const purchase = created[0];
+
+        const journalEntry = await postCustomerPurchase({
+          purchase,
+          paymentAccount,
+          user: req.user,
+          session,
+        });
+
+        if (!journalEntry?.entryNumber) {
+          reject(
+            "Purchase posting did not return a journal reference.",
+            409
+          );
+        }
+
+        const transactions = await AccountTransaction.create(
+          [
+            {
+              transactionNumber: generateTransactionNumber(),
+              accountNumber: paymentAccount.accountNumber,
+              accountName: paymentAccount.accountName,
+              linkedChartAccountCode:
+                paymentAccount.linkedChartAccountCode,
+
+              journalEntryNumber: journalEntry.entryNumber,
+              ledgerReference: journalEntry.entryNumber,
+              transactionType: "Customer Purchase",
+              transactionDirection: "Withdrawal",
+              amount: baseCurrencyAmount,
+
+              paymentMethod:
+                paymentAccount.accountType === "Credit Card"
+                  ? "Business Credit Card"
+                  : paymentAccount.accountType,
+
+              reference: purchase.purchaseNumber,
+              notes:
+                `${purchase.customerName} purchase from ` +
+                purchase.merchant,
+
+              transactionDate: new Date(
+                `${purchase.purchaseDate}T00:00:00.000Z`
+              ),
+
+              customerPurchaseNumber: purchase.purchaseNumber,
+              customerEkonId: purchase.customerEkonId,
+              customerName: purchase.customerName,
+              merchant: purchase.merchant,
+              transactionCurrency: purchase.baseCurrency,
+
+              foreignCurrencyAmount:
+                purchase.purchaseCurrency === purchase.baseCurrency
+                  ? 0
+                  : purchase.purchaseAmount,
+
+              exchangeRate: purchase.exchangeRate,
+            },
+          ],
+          { session }
+        );
+
+        const accountTransaction = transactions[0];
+
+        purchase.journalEntryNumber = journalEntry.entryNumber;
+        purchase.accountTransactionNumber =
+          accountTransaction.transactionNumber;
+        purchase.status = "Purchased";
+        purchase.updatedBy = performedBy;
+
+        await purchase.save({ session });
+
+        customer.lastActivityDate = getJamaicaDateString();
+        await customer.save({ session });
+
+        await writeFinanceAuditLog({
+          req,
+          session,
+          action: "CUSTOMER_PURCHASE_POSTED",
+
+          description:
+            `Customer purchase ${purchase.purchaseNumber} ` +
+            `posted for ${purchase.customerName}`,
+
+          targetType: "CustomerPurchase",
+          targetId: purchase.purchaseNumber,
+          postingDate: purchase.purchaseDate,
+          journalEntry,
+          accountNumber: paymentAccount.accountNumber,
+          accountName: paymentAccount.accountName,
+          performedByName: performedBy,
+
+          metadata: {
+            customerEkonId: purchase.customerEkonId,
+            merchant: purchase.merchant,
+            orderNumber: purchase.orderNumber,
+            purchaseCurrency: purchase.purchaseCurrency,
+            purchaseAmount: purchase.purchaseAmount,
+            exchangeRate: purchase.exchangeRate,
+            baseCurrencyAmount: purchase.baseCurrencyAmount,
+            paymentAccountType: purchase.paymentAccountType,
+            accountTransactionNumber:
+              accountTransaction.transactionNumber,
+          },
+        });
+
+        return {
+          purchase,
+          journalEntry,
+          accountTransaction,
+        };
+      }
+    );
+
+    const {
+      purchase,
+      journalEntry,
+      accountTransaction,
+    } = result;
+
+    // This separate operational log must not turn a committed
+    // purchase into a reported posting failure.
     try {
-      const journalEntry = await postCustomerPurchase({
-        purchase,
-        paymentAccount,
-        user: req.user,
-      });
-
-      purchase.journalEntryNumber = journalEntry.entryNumber;
-      purchase.status = "Purchased";
-      purchase.updatedBy = performedBy;
-
-      await purchase.save();
-
-      const accountTransaction = await AccountTransaction.create({
-        transactionNumber: generateTransactionNumber(),
-        accountNumber: paymentAccount.accountNumber,
-        accountName: paymentAccount.accountName,
-        linkedChartAccountCode:
-          paymentAccount.linkedChartAccountCode,
-        journalEntryNumber: journalEntry.entryNumber,
-        ledgerReference: journalEntry.entryNumber,
-        transactionType: "Customer Purchase",
-        amount: baseCurrencyAmount,
-        paymentMethod:
-          paymentAccount.accountType === "Credit Card"
-            ? "Business Credit Card"
-            : paymentAccount.accountType,
-        reference: purchase.purchaseNumber,
-        notes: `${purchase.customerName} purchase from ${purchase.merchant}`,
-        transactionDate: new Date(purchase.purchaseDate),
-        customerPurchaseNumber: purchase.purchaseNumber,
-        customerEkonId: purchase.customerEkonId,
-        customerName: purchase.customerName,
-        merchant: purchase.merchant,
-        transactionCurrency: purchase.baseCurrency,
-        foreignCurrencyAmount:
-          purchase.purchaseCurrency === purchase.baseCurrency
-            ? 0
-            : purchase.purchaseAmount,
-        exchangeRate: purchase.exchangeRate,
-      });
-
-      purchase.accountTransactionNumber =
-        accountTransaction.transactionNumber;
-
-      await purchase.save();
-
-      customer.lastActivityDate = getJamaicaDateString();
-      await customer.save();
-
-      await writeFinanceAuditLog({
-        req,
-        action: "CUSTOMER_PURCHASE_POSTED",
-        description: `Customer purchase ${purchase.purchaseNumber} posted for ${purchase.customerName}`,
-        targetType: "CustomerPurchase",
-        targetId: purchase.purchaseNumber,
-        postingDate: purchase.purchaseDate,
-        journalEntry,
-        accountNumber: paymentAccount.accountNumber,
-        accountName: paymentAccount.accountName,
-        performedByName: performedBy,
-        metadata: {
-          customerEkonId: purchase.customerEkonId,
-          merchant: purchase.merchant,
-          orderNumber: purchase.orderNumber,
-          purchaseCurrency: purchase.purchaseCurrency,
-          purchaseAmount: purchase.purchaseAmount,
-          exchangeRate: purchase.exchangeRate,
-          baseCurrencyAmount: purchase.baseCurrencyAmount,
-          paymentAccountType: purchase.paymentAccountType,
-          accountTransactionNumber:
-            accountTransaction.transactionNumber,
-        },
-      });
-
       await writeAuditLog({
         req,
         action: "CREATE_CUSTOMER_PURCHASE",
         module: "Customer Purchases",
-        description: `Customer purchase ${purchase.purchaseNumber} created for ${purchase.customerName}`,
+
+        description:
+          `Customer purchase ${purchase.purchaseNumber} ` +
+          `created for ${purchase.customerName}`,
+
         targetType: "CustomerPurchase",
         targetId: purchase.purchaseNumber,
         financeReference: purchase.purchaseNumber,
         journalEntryNumber: journalEntry.entryNumber,
-        accountNumber: paymentAccount.accountNumber,
-        accountName: paymentAccount.accountName,
+        accountNumber: purchase.paymentAccountNumber,
+        accountName: purchase.paymentAccountName,
+
         metadata: {
           customerEkonId: purchase.customerEkonId,
           merchant: purchase.merchant,
           orderNumber: purchase.orderNumber,
           baseCurrencyAmount: purchase.baseCurrencyAmount,
           accountTransactionNumber:
-            purchase.accountTransactionNumber,
+            accountTransaction.transactionNumber,
           status: purchase.status,
         },
       });
-
-      return res.status(201).json({
-        success: true,
-        message:
-          "Customer purchase created and posted successfully.",
-        data: purchase,
-        journalEntryNumber: journalEntry.entryNumber,
-        accountTransactionNumber:
-          accountTransaction.transactionNumber,
-      });
-    } catch (postingError) {
-      purchase.status = "Pending Purchase";
-      purchase.notes = [
-        purchase.notes,
-        `Posting failed: ${postingError.message}`,
-      ]
-        .filter(Boolean)
-        .join("\n");
-
-      await purchase.save();
-
-      return res.status(500).json({
-        success: false,
-        message:
-          "Customer purchase was saved but could not be posted to accounting.",
-        error: postingError.message,
-        purchaseNumber: purchase.purchaseNumber,
-      });
+    } catch (auditError) {
+      console.error(
+        "Operational audit log failed after purchase commit:",
+        auditError
+      );
     }
+
+    return res.status(201).json({
+      success: true,
+      message: "Customer purchase created and posted successfully.",
+      data: purchase,
+      journalEntryNumber: journalEntry.entryNumber,
+      accountTransactionNumber:
+        accountTransaction.transactionNumber,
+    });
   } catch (error) {
     console.error("Customer purchase creation error:", error);
 
-    res.status(500).json({
+    const status =
+      error.code === 11000
+        ? 409
+        : [400, 403, 404, 409].includes(error.statusCode)
+        ? error.statusCode
+        : 500;
+
+    return res.status(status).json({
       success: false,
-      message: "Could not create customer purchase.",
-      error: error.message,
+
+      message:
+        status === 500
+          ? "Could not confirm purchase creation. Check the purchase register before retrying."
+          : error.code === 11000
+          ? "A conflicting purchase or transaction already exists. Check the register before retrying."
+          : error.message,
     });
   }
 };
