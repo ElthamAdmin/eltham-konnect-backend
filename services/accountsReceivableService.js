@@ -20,11 +20,17 @@ const {
   jamaicaToday,
 } = require("./arBalanceService");
 
-const getOpenInvoices = async () =>
-  Invoice.find({
+const getOpenInvoices = async () => {
+  const invoices = await Invoice.find({
     status: { $in: ["Unpaid", "Partially Paid"] },
-    balanceDue: { $gt: 0 },
   }).sort({ createdAt: 1 });
+
+  return invoices.filter((invoice) => {
+    const balance = getInvoiceReportBalance(invoice);
+
+    return Number.isFinite(balance) && balance > 0;
+  });
+};
 
 
 const buildAgingReport = async () => {
@@ -169,19 +175,56 @@ const reconcileARSubledgerToGL = async () => {
   };
 };
 
-const findInvoiceNumberInLedgerLine = (line, invoiceNumbers = []) => {
-  const searchableText = [
+const findInvoiceNumberInLedgerLine = (
+  line,
+  invoiceNumbers = []
+) => {
+  const numbers = [
+    ...new Set(
+      invoiceNumbers.filter(
+        (number) =>
+          typeof number === "string" && number
+      )
+    ),
+  ];
+
+  const known = new Set(numbers);
+
+  const exact = [
+    ...new Set(
+      [line.sourceDocumentNumber, line.reference]
+        .filter((value) => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => known.has(value))
+    ),
+  ];
+
+  if (exact.length) {
+    return exact.length === 1 ? exact[0] : undefined;
+  }
+
+  const searchable = [
     line.reference,
     line.memo,
     line.description,
-    line.entryNumber,
   ]
-    .filter(Boolean)
+    .filter((value) => typeof value === "string")
     .join(" ");
 
-  return invoiceNumbers.find((invoiceNumber) =>
-    searchableText.includes(invoiceNumber)
-  );
+  const matches = numbers.filter((number) => {
+    const escaped = number.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+
+    return new RegExp(
+      `(^|[^A-Za-z0-9_-])${escaped}($|[^A-Za-z0-9_-])`
+    ).test(searchable);
+  });
+
+  return matches.length === 1
+    ? matches[0]
+    : undefined;
 };
 
 const getHighestSeverity = (issueTypes = []) => {
@@ -744,7 +787,13 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
     const balanceDue = getInvoiceReportBalance(invoice);
     const daysOutstanding = getDaysOutstanding(invoice.dueDate || invoice.createdAt);
 
-    return {
+        return {
+      excludedFromTotals: [
+        "Draft",
+        "Cancelled",
+        "Refunded",
+      ].includes(invoice.status),
+
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: invoice.createdAt,
       dueDate: invoice.dueDate || invoice.createdAt,
@@ -765,16 +814,27 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
     };
   });
 
-  const openInvoiceRows = invoiceRows.filter((row) =>
-    ["Unpaid", "Partially Paid"].includes(row.status)
+    const includedInvoiceRows = invoiceRows.filter(
+    (row) => !row.excludedFromTotals
   );
 
-  const totalInvoiced = roundMoney(
-    invoiceRows.reduce((sum, row) => sum + Number(row.finalTotal || 0), 0)
+  const openInvoiceRows = includedInvoiceRows.filter(
+    (row) =>
+      ["Unpaid", "Partially Paid"].includes(row.status)
+  );
+
+    const totalInvoiced = roundMoney(
+    includedInvoiceRows.reduce(
+      (sum, row) => sum + Number(row.finalTotal || 0),
+      0
+    )
   );
 
   const totalPaid = roundMoney(
-    invoiceRows.reduce((sum, row) => sum + Number(row.amountPaid || 0), 0)
+    includedInvoiceRows.reduce(
+      (sum, row) => sum + Number(row.amountPaid || 0),
+      0
+    )
   );
 
   const outstandingBalance = roundMoney(
@@ -848,6 +908,8 @@ const buildCustomerCollectionsProfile = async (customerEkonId) => {
       outstandingBalance,
       openInvoiceCount: openInvoiceRows.length,
       totalInvoiceCount: invoiceRows.length,
+            excludedInvoiceCount:
+        invoiceRows.length - includedInvoiceRows.length,
       oldestInvoiceDays,
       lastPaymentDate,
       riskLevel,
