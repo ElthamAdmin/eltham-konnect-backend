@@ -30,6 +30,15 @@ const fail = (message, statusCode = 400) => {
   throw error;
 };
 
+const requireWriteOffApprover = (user) => {
+  if (!user || user.role !== "Admin") {
+    fail(
+      "Only the Owner/Admin can approve or reject a write-off.",
+      403
+    );
+  }
+};
+
 const nameOf = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -161,6 +170,7 @@ const requestInvoiceWriteOff = async ({
 
 const approveInvoiceWriteOff = async ({ invoiceNumber, user }) =>
   mongoose.connection.transaction(async (session) => {
+        requireWriteOffApprover(user);
     const invoice = await loadInvoice(invoiceNumber, session);
 
     if (
@@ -256,6 +266,7 @@ const approveInvoiceWriteOff = async ({ invoiceNumber, user }) =>
 
 const rejectInvoiceWriteOff = async ({ invoiceNumber, notes, user }) =>
   mongoose.connection.transaction(async (session) => {
+        requireWriteOffApprover(user);
     const invoice = await loadInvoice(invoiceNumber, session);
 
     if (invoice.writeOffStatus !== "Pending Approval") {
