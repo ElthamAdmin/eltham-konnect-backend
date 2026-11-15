@@ -162,9 +162,19 @@ const getCollectionPerformanceKPIs = async (req, res) => {
 const getWriteOffDashboard = async (req, res) => {
   try {
     const dashboard = await buildWriteOffDashboard();
-    res.json({ success: true, data: dashboard });
+
+    res.json({
+      success: true,
+      data: {
+        ...dashboard,
+        permissions: {
+          canApproveWriteOff: req.user?.role === "Admin",
+        },
+      },
+    });
   } catch (error) {
     console.error("Write-off dashboard error:", error);
+
     res.status(error.statusCode || 500).json({
       success: false,
       message: "Could not load write-off dashboard",
