@@ -2,7 +2,10 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 
 const {
   getFixedAssets,
@@ -10,13 +13,16 @@ const {
   runMonthlyDepreciation,
 } = require("../controllers/fixedAssetController");
 
-router.get("/", protect, getFixedAssets);
+router.use(
+  protect,
+  requirePermission("finance")
+);
 
-router.post("/", protect, createFixedAsset);
+router.get("/", getFixedAssets);
+router.post("/", createFixedAsset);
 
 router.post(
   "/run-depreciation",
-  protect,
   runMonthlyDepreciation
 );
 

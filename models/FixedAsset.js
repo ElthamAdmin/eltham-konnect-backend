@@ -1,11 +1,74 @@
 const mongoose = require("mongoose");
 
+const depreciationHistorySchema = new mongoose.Schema(
+  {
+    period: { type: String, required: true },
+    amount: { type: Number, required: true, min: 0 },
+    journalEntryNumber: { type: String, default: "" },
+    accumulatedDepreciation: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    netBookValue: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    postedAt: { type: Date, required: true },
+    postedBy: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const fixedAssetSchema = new mongoose.Schema(
   {
     assetNumber: {
       type: String,
       required: true,
       unique: true,
+    },
+
+        inServiceDate: {
+      type: String,
+      default: "",
+    },
+
+    currency: {
+      type: String,
+      enum: ["JMD"],
+      default: undefined,
+    },
+
+    policyVersion: {
+      type: String,
+      default: undefined,
+    },
+
+    entityCode: {
+      type: String,
+      default: "",
+    },
+
+    acquisitionJournalEntryNumber: {
+      type: String,
+      default: "",
+    },
+
+    registrationHash: {
+      type: String,
+      default: undefined,
+    },
+
+    appliedPeriods: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
+    depreciationHistory: {
+      type: [depreciationHistorySchema],
+      default: [],
     },
 
     assetName: {
