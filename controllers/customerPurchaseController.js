@@ -1266,167 +1266,321 @@ const linkCustomerPurchasePackage = async (req, res) => {
 };
 
 const receiveCustomerPurchase = async (req, res) => {
+  const reject = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
   try {
     const { purchaseNumber } = req.params;
+
     const {
       trackingNumber = "",
       warehouse = "",
-      weight = 0,
+      weight,
       chargeableWeight = 0,
       packageReceivedDate,
-    } = req.body;
-
-    const purchase = await CustomerPurchase.findOne({
-      purchaseNumber,
-    });
-
-    if (!purchase) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer purchase not found.",
-      });
-    }
-
-        if (
-      !trackingNumber &&
-      !purchase.trackingNumber
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Record the shipment tracking number before recording warehouse arrival.",
-      });
-    }
+    } = req.body || {};
 
     if (
-      ["Cancelled", "Refunded", "Reversed"].includes(
-        purchase.status
-      )
+      typeof trackingNumber !== "string" ||
+      typeof warehouse !== "string"
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "This customer purchase cannot be marked as received.",
-      });
+      reject("Tracking number and warehouse must be text.");
     }
 
-        const numericWeight = roundMoney(weight);
+    const numericWeight = roundMoney(weight);
 
-    if (numericWeight <= 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Actual warehouse weight must be greater than zero.",
-      });
-    }
-
-    if (!warehouse && !purchase.warehouse) {
-      return res.status(400).json({
-        success: false,
-        message: "Warehouse location is required.",
-      });
-    }
-    const billedWeight =
-      Number(chargeableWeight || 0) > 0
-        ? roundMoney(chargeableWeight)
-        : numericWeight > 0
-        ? Math.ceil(numericWeight)
-        : 0;
-
-    const beforeValues = purchase.toObject();
-
-    if (trackingNumber) {
-      purchase.trackingNumber = trackingNumber;
-    }
-
-    purchase.warehouse =
-      warehouse || purchase.warehouse || "";
-    purchase.weight = numericWeight;
-    purchase.chargeableWeight = billedWeight;
-    purchase.packageReceivedDate =
-      packageReceivedDate
-        ? new Date(packageReceivedDate)
-        : new Date();
-        purchase.status = "At Warehouse";
-    purchase.lastPackageStatus = "At Warehouse";
-    purchase.lastPackageSyncAt = new Date();
-    purchase.invoiceReady = false;
-    purchase.updatedBy = getUserName(req.user);
-
-    await purchase.save();
-
-    if (purchase.packageId) {
-      await Package.findByIdAndUpdate(
-        purchase.packageId,
-        {
-          $set: {
-            trackingNumber:
-              purchase.trackingNumber || undefined,
-            weight: numericWeight,
-            warehouseLocation: purchase.warehouse,
-            status: "At Warehouse",
-            dateReceived:
-              purchase.packageReceivedDate,
-            statusUpdatedAt: new Date(),
-          },
-        },
-        {
-          runValidators: true,
-        }
+    if (
+      !Number.isFinite(Number(weight)) ||
+      !Number.isFinite(numericWeight) ||
+      numericWeight <= 0
+    ) {
+      reject(
+        "Actual warehouse weight must be a finite amount greater than zero."
       );
-    } else if (purchase.trackingNumber) {
-      const linkedPackage = await Package.findOne({
-        trackingNumber: purchase.trackingNumber,
-      });
-
-      if (linkedPackage) {
-        if (
-          linkedPackage.customerEkonId !==
-          purchase.customerEkonId
-        ) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Tracking number belongs to a different customer.",
-          });
-        }
-
-        linkedPackage.weight = numericWeight;
-        linkedPackage.warehouseLocation =
-          purchase.warehouse;
-        linkedPackage.status = "At Warehouse";
-        linkedPackage.dateReceived =
-          purchase.packageReceivedDate;
-        linkedPackage.statusUpdatedAt = new Date();
-
-        await linkedPackage.save();
-
-        purchase.packageId = linkedPackage._id;
-        await purchase.save();
-      }
     }
 
-    await writeAuditLog({
-      req,
-      action: "RECEIVE_CUSTOMER_PURCHASE",
-      module: "Customer Purchases",
-      description: `Customer purchase ${purchase.purchaseNumber} marked received at warehouse`,
-      targetType: "CustomerPurchase",
-      targetId: purchase.purchaseNumber,
-      beforeValues,
-      afterValues: purchase.toObject(),
-      metadata: {
-        trackingNumber: purchase.trackingNumber,
-        warehouse: purchase.warehouse,
-        weight: purchase.weight,
-        chargeableWeight:
-          purchase.chargeableWeight,
-        packageReceivedDate:
-          purchase.packageReceivedDate,
-      },
-    });
+    const suppliedChargeable = Number(chargeableWeight);
 
-    res.json({
+    if (
+      !Number.isFinite(suppliedChargeable) ||
+      suppliedChargeable < 0
+    ) {
+      reject(
+        "Chargeable weight must be a finite, nonnegative number."
+      );
+    }
+
+    const billedWeight =
+      suppliedChargeable > 0
+        ? roundMoney(suppliedChargeable)
+        : Math.ceil(numericWeight);
+
+    if (
+      !Number.isFinite(billedWeight) ||
+      billedWeight < numericWeight
+    ) {
+      reject(
+        "Chargeable weight cannot be lower than the actual warehouse weight."
+      );
+    }
+
+    let receivedDate = new Date();
+
+    if (packageReceivedDate) {
+      if (typeof packageReceivedDate !== "string") {
+        reject("Arrival date must be a valid date.");
+      }
+
+      const dateOnly =
+        /^\d{4}-\d{2}-\d{2}$/.test(packageReceivedDate);
+
+      const check = new Date(
+        dateOnly
+          ? `${packageReceivedDate}T00:00:00.000Z`
+          : packageReceivedDate
+      );
+
+      if (
+        !Number.isFinite(check.getTime()) ||
+        (dateOnly &&
+          check.toISOString().slice(0, 10) !==
+            packageReceivedDate)
+      ) {
+        reject("Arrival date must be a valid date.");
+      }
+
+      receivedDate = dateOnly
+        ? new Date(`${packageReceivedDate}T12:00:00-05:00`)
+        : check;
+    }
+
+    const result = await mongoose.connection.transaction(
+      async (session) => {
+        const purchase = await CustomerPurchase.findOne({
+          purchaseNumber,
+        }).session(session);
+
+        if (!purchase) {
+          reject("Customer purchase not found.", 404);
+        }
+
+        const allowedStatuses = [
+          "Purchased",
+          "Tracking Received",
+          "In Transit",
+          "At Warehouse",
+          "Recovery Calculated",
+          "Ready to Invoice",
+        ];
+
+        if (
+          !allowedStatuses.includes(purchase.status) ||
+          !purchase.journalEntryNumber ||
+          purchase.invoiceNumber ||
+          purchase.invoiceJournalEntryNumber ||
+          purchase.invoicedAt ||
+          purchase.invoiceHistory?.length ||
+          purchase.paymentAllocations?.length ||
+          Number(purchase.recoveredAmount || 0) > 0
+        ) {
+          reject(
+            "Only a posted, uninvoiced purchase can have warehouse arrival recorded here. Invoiced, recovered or closed purchases require separate review.",
+            409
+          );
+        }
+
+        const tracking =
+          trackingNumber.trim() ||
+          String(purchase.trackingNumber || "").trim();
+
+        if (!tracking) {
+          reject(
+            "Record the shipment tracking number before recording warehouse arrival."
+          );
+        }
+
+        const previouslyLinked = Boolean(purchase.packageId);
+        let pkg = null;
+
+        if (purchase.packageId) {
+          pkg = await Package.findById(
+            purchase.packageId
+          ).session(session);
+
+          if (!pkg) {
+            reject(
+              "The linked package no longer exists. Review the package link first.",
+              409
+            );
+          }
+
+          if (
+            pkg.customerEkonId !== purchase.customerEkonId
+          ) {
+            reject(
+              "The linked package belongs to another customer.",
+              409
+            );
+          }
+
+          if (pkg.trackingNumber !== tracking) {
+            reject(
+              "The tracking number differs from the linked package. Review the tracking link first.",
+              409
+            );
+          }
+        }
+
+        const trackedPackage = await Package.findOne({
+          trackingNumber: tracking,
+        }).session(session);
+
+        if (trackedPackage) {
+          if (
+            trackedPackage.customerEkonId !==
+            purchase.customerEkonId
+          ) {
+            reject(
+              "Tracking number belongs to a different customer.",
+              409
+            );
+          }
+
+          if (
+            pkg &&
+            String(pkg._id) !== String(trackedPackage._id)
+          ) {
+            reject(
+              "The package ID and tracking number identify different packages.",
+              409
+            );
+          }
+
+          pkg = trackedPackage;
+        }
+
+        if (
+          pkg &&
+          (
+            pkg.invoiceNumber ||
+            ["Paid", "Invoiced"].includes(pkg.invoiceStatus) ||
+            [
+              "delivered",
+              "collected",
+              "released",
+              "cancelled",
+              "returned",
+              "refunded",
+            ].includes(
+              String(pkg.status || "").toLowerCase()
+            )
+          )
+        ) {
+          reject(
+            "The linked package is already invoiced or closed. Its warehouse status cannot be reset here.",
+            409
+          );
+        }
+
+        const location =
+          warehouse.trim() ||
+          String(purchase.warehouse || "").trim() ||
+          String(pkg?.warehouseLocation || "").trim();
+
+        if (!location) {
+          reject("Warehouse location is required.");
+        }
+
+        const beforeValues = purchase.toObject();
+
+        purchase.trackingNumber = tracking;
+        purchase.warehouse = location;
+        purchase.weight = numericWeight;
+        purchase.chargeableWeight = billedWeight;
+        purchase.packageReceivedDate = receivedDate;
+        purchase.status = "At Warehouse";
+        purchase.lastPackageStatus = "At Warehouse";
+        purchase.lastPackageSyncAt = new Date();
+        purchase.invoiceReady = false;
+        purchase.updatedBy = getUserName(req.user);
+
+        if (pkg) {
+          purchase.packageId = pkg._id;
+
+          pkg.weight = numericWeight;
+          pkg.warehouseLocation = location;
+          pkg.status = "At Warehouse";
+          pkg.dateReceived = receivedDate;
+          pkg.statusUpdatedAt = new Date();
+
+          // Preserve the existing update method for each link path.
+          if (previouslyLinked) {
+            await Package.findByIdAndUpdate(
+              pkg._id,
+              {
+                $set: {
+                  weight: numericWeight,
+                  warehouseLocation: location,
+                  status: "At Warehouse",
+                  dateReceived: receivedDate,
+                  statusUpdatedAt: pkg.statusUpdatedAt,
+                },
+              },
+              {
+                session,
+                runValidators: true,
+              }
+            );
+          } else {
+            await pkg.save({ session });
+          }
+        }
+
+        await purchase.save({ session });
+
+        return {
+          purchase,
+          beforeValues,
+        };
+      }
+    );
+
+    const { purchase, beforeValues } = result;
+
+    try {
+      await writeAuditLog({
+        req,
+        action: "RECEIVE_CUSTOMER_PURCHASE",
+        module: "Customer Purchases",
+
+        description:
+          `Customer purchase ${purchase.purchaseNumber} ` +
+          "marked received at warehouse",
+
+        targetType: "CustomerPurchase",
+        targetId: purchase.purchaseNumber,
+        beforeValues,
+        afterValues: purchase.toObject(),
+
+        metadata: {
+          trackingNumber: purchase.trackingNumber,
+          warehouse: purchase.warehouse,
+          weight: purchase.weight,
+          chargeableWeight: purchase.chargeableWeight,
+          packageReceivedDate: purchase.packageReceivedDate,
+        },
+      });
+    } catch (auditError) {
+      console.error(
+        "Operational audit log failed after warehouse receipt commit:",
+        auditError
+      );
+    }
+
+    return res.json({
       success: true,
       message:
         "Customer purchase warehouse arrival recorded successfully.",
@@ -1435,11 +1589,24 @@ const receiveCustomerPurchase = async (req, res) => {
   } catch (error) {
     console.error("Customer purchase receipt error:", error);
 
-    res.status(500).json({
+    const status =
+      error.code === 11000
+        ? 409
+        : [400, 403, 404, 409].includes(error.statusCode)
+        ? error.statusCode
+        : ["ValidationError", "CastError"].includes(error.name)
+        ? 400
+        : 500;
+
+    return res.status(status).json({
       success: false,
+
       message:
-        "Could not record customer purchase arrival.",
-      error: error.message,
+        status === 500
+          ? "Could not confirm warehouse arrival. Check the purchase and package before retrying."
+          : error.code === 11000
+          ? "A conflicting tracking or package record exists. Review the link before retrying."
+          : error.message,
     });
   }
 };
