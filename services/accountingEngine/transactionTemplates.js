@@ -560,11 +560,49 @@ const buildCustomerPurchaseRecoveryInvoiceLines = ({
   deliveryRevenue = 0,
   otherServiceRevenue = 0,
 }) => {
-  const recovery = roundMoney(recoverableAmount);
-  const shoppingFee = roundMoney(shoppingServiceFee);
-  const shipping = roundMoney(shippingRevenue);
-  const delivery = roundMoney(deliveryRevenue);
-  const otherRevenue = roundMoney(otherServiceRevenue);
+    const component = (amount, label) => {
+    const number = Number(amount);
+    const cents = Math.round(number * 100);
+
+    if (
+      amount === null ||
+      amount === "" ||
+      !Number.isFinite(number) ||
+      number < 0 ||
+      !Number.isSafeInteger(cents)
+    ) {
+      throw new Error(
+        `${label} must be a valid non-negative amount.`
+      );
+    }
+
+    return cents / 100;
+  };
+
+  const recovery = component(
+    recoverableAmount,
+    "Recoverable goods"
+  );
+
+  const shoppingFee = component(
+    shoppingServiceFee,
+    "Shopping assistance fee"
+  );
+
+  const shipping = component(
+    shippingRevenue,
+    "Shipping charge"
+  );
+
+  const delivery = component(
+    deliveryRevenue,
+    "Delivery charge"
+  );
+
+  const otherRevenue = component(
+    otherServiceRevenue,
+    "Other service charges"
+  );
 
   const totalInvoiceAmount = roundMoney(
     recovery + shoppingFee + shipping + delivery + otherRevenue

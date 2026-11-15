@@ -52,7 +52,7 @@ const calculateBaseCurrencyAmount = ({
 }) => {
   const amount = roundMoney(purchaseAmount);
   const currency = String(purchaseCurrency || "JMD").toUpperCase();
-  const rate = roundMoney(exchangeRate || 1);
+  const rate = Number(exchangeRate);
 
   if (currency === "JMD") {
     return amount;
@@ -382,8 +382,14 @@ const createCustomerPurchase = async (req, res) => {
       );
     }
 
-    const numericPurchaseAmount = roundMoney(purchaseAmount);
-    const numericExchangeRate = roundMoney(exchangeRate);
+    const currency = String(purchaseCurrency || "USD")
+  .trim()
+  .toUpperCase();
+
+const numericPurchaseAmount = roundMoney(purchaseAmount);
+
+const numericExchangeRate =
+  currency === "JMD" ? 1 : Number(exchangeRate);
 
     if (
       !Number.isFinite(Number(purchaseAmount)) ||
@@ -404,10 +410,6 @@ const createCustomerPurchase = async (req, res) => {
         "Exchange rate must be a finite number greater than zero."
       );
     }
-
-    const currency = String(purchaseCurrency)
-      .trim()
-      .toUpperCase();
 
     if (!["JMD", "USD"].includes(currency)) {
       reject("Select JMD or USD as the purchase currency.");
@@ -1612,206 +1614,205 @@ const receiveCustomerPurchase = async (req, res) => {
 };
 
 const prepareCustomerPurchaseRecovery = async (req, res) => {
-  try {
-    const { purchaseNumber } = req.params;
-    const {
-      itemRecoveryAmount,
-      shoppingAssistanceFee = 0,
-      weightCharge = 0,
-      shippingCharge = 0,
-      customsDuty = 0,
-      deliveryFee = 0,
-      otherCharges = 0,
-      notes = "",
-    } = req.body;
+  const fail = (message, statusCode = 409) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
 
-    const purchase = await CustomerPurchase.findOne({
-      purchaseNumber,
-    });
-
-    if (!purchase) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer purchase not found.",
-      });
-    }
+  const amount = (value, label) => {
+    const number = Number(value);
+    const cents = Math.round(number * 100);
 
     if (
-      ["Cancelled", "Refunded", "Reversed"].includes(
-        purchase.status
-      )
+      value === null ||
+      value === "" ||
+      !Number.isFinite(number) ||
+      number < 0 ||
+      !Number.isSafeInteger(cents)
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Recovery cannot be prepared for this purchase.",
-      });
+      fail(`${label} must be a valid non-negative amount.`, 400);
     }
+
+    return cents / 100;
+  };
+
+  try {
+    const result = await mongoose.connection.transaction(
+      async (session) => {
+        const purchase = await CustomerPurchase.findOne({
+          purchaseNumber: req.params.purchaseNumber,
+        }).session(session);
+
+        if (!purchase) {
+          fail("Customer purchase not found.", 404);
+        }
 
         if (
-      purchase.status !== "At Warehouse" &&
-      purchase.status !== "Recovery Calculated"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Recovery charges can only be calculated after the package reaches the warehouse.",
-      });
-    }
+          ![
+            "At Warehouse",
+            "Recovery Calculated",
+            "Ready to Invoice",
+          ].includes(purchase.status) ||
+          !purchase.journalEntryNumber ||
+          purchase.invoiceNumber ||
+          purchase.invoiceJournalEntryNumber ||
+          purchase.invoicedAt ||
+          purchase.invoiceHistory?.length ||
+          purchase.paymentAllocations?.length ||
+          Number(purchase.recoveredAmount || 0) !== 0
+        ) {
+          fail(
+            "Recovery can only be prepared for a funded, uninvoiced purchase at the warehouse."
+          );
+        }
 
-    if (
-      Number(purchase.weight || 0) <= 0 ||
-      Number(purchase.chargeableWeight || 0) <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Warehouse weight and chargeable weight must be recorded before recovery calculation.",
-      });
-    }
+        if (
+          !Number.isFinite(Number(purchase.weight)) ||
+          Number(purchase.weight) <= 0 ||
+          !Number.isFinite(Number(purchase.chargeableWeight)) ||
+          Number(purchase.chargeableWeight) <= 0
+        ) {
+          fail(
+            "Record valid warehouse weight and chargeable weight first."
+          );
+        }
 
-    if (purchase.invoiceNumber) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "This purchase is already linked to an invoice.",
-      });
-    }
+        const beforeValues = purchase.toObject();
+        const body = req.body || {};
 
-    const beforeValues = purchase.toObject();
+        const charges = {
+          itemRecoveryAmount: amount(
+            body.itemRecoveryAmount ??
+              purchase.itemRecoveryAmount,
+            "Recoverable item cost"
+          ),
+        };
 
-        const nextItemRecovery = Number(
-      itemRecoveryAmount !== undefined
-        ? itemRecoveryAmount
-        : purchase.itemRecoveryAmount
-    );
+        for (const field of [
+          "shoppingAssistanceFee",
+          "weightCharge",
+          "shippingCharge",
+          "customsDuty",
+          "deliveryFee",
+          "otherCharges",
+        ]) {
+          charges[field] = amount(
+            body[field] ?? 0,
+            field
+          );
+        }
 
-    const remainingGoodsCost = roundMoney(
-      Number(purchase.baseCurrencyAmount || 0) -
-        Number(purchase.refundedAmount || 0)
-    );
+        const base = amount(
+          purchase.baseCurrencyAmount,
+          "Original purchase cost"
+        );
 
-    if (
-      !Number.isFinite(nextItemRecovery) ||
-      nextItemRecovery < 0 ||
-      (
-        Number(purchase.refundedAmount || 0) > 0 &&
-        roundMoney(nextItemRecovery) > remainingGoodsCost
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Recoverable goods cannot include an amount already refunded by the merchant.",
-      });
-    }
+        const refunded = amount(
+          purchase.refundedAmount ?? 0,
+          "Recorded merchant refunds"
+        );
 
-    purchase.itemRecoveryAmount = roundMoney(
-      nextItemRecovery
-    );
+        if (
+          refunded > base ||
+          (
+            refunded > 0 &&
+            charges.itemRecoveryAmount >
+              amount(base - refunded, "Remaining goods cost")
+          )
+        ) {
+          fail(
+            "Recoverable goods cannot include an amount already refunded by the merchant."
+          );
+        }
 
-    purchase.shoppingAssistanceFee = roundMoney(
-      shoppingAssistanceFee
-    );
-    purchase.weightCharge = roundMoney(weightCharge);
-    purchase.shippingCharge =
-      roundMoney(shippingCharge);
-    purchase.customsDuty = roundMoney(customsDuty);
-    purchase.deliveryFee = roundMoney(deliveryFee);
-    purchase.otherCharges = roundMoney(otherCharges);
+        const total = amount(
+          Object.values(charges).reduce(
+            (sum, value) => sum + value,
+            0
+          ),
+          "Total customer charge"
+        );
 
-    const recoveryTotals = calculateRecoveryTotals({
-      itemRecoveryAmount:
-        purchase.itemRecoveryAmount,
-      shoppingAssistanceFee:
-        purchase.shoppingAssistanceFee,
-      weightCharge: purchase.weightCharge,
-      shippingCharge: purchase.shippingCharge,
-      customsDuty: purchase.customsDuty,
-      deliveryFee: purchase.deliveryFee,
-      otherCharges: purchase.otherCharges,
-      recoveredAmount: purchase.recoveredAmount,
-    });
+        if (total <= 0) {
+          fail(
+            "The total recovery charge must be greater than zero.",
+            400
+          );
+        }
 
-    purchase.totalCustomerCharge =
-      recoveryTotals.totalCustomerCharge;
-    purchase.outstandingAmount =
-      recoveryTotals.outstandingAmount;
+        Object.assign(purchase, charges);
+
+        purchase.totalCustomerCharge = total;
+        purchase.outstandingAmount = total;
         purchase.recoveryStatus = "Not Invoiced";
+        purchase.status = "Ready to Invoice";
+        purchase.invoiceReady = true;
+        purchase.updatedBy = getUserName(req.user);
 
-    purchase.status = "Recovery Calculated";
-    purchase.invoiceReady = true;
-    purchase.updatedBy = getUserName(req.user);
+        const notes = String(body.notes || "").trim();
 
-    await purchase.save();
+        if (notes) {
+          purchase.notes = [purchase.notes, notes]
+            .filter(Boolean)
+            .join("\n");
+        }
 
-    purchase.status = "Ready to Invoice";
+        await purchase.save({ session });
 
-    if (notes) {
-      purchase.notes = [purchase.notes, notes]
-        .filter(Boolean)
-        .join("\n");
+        return { purchase, beforeValues };
+      }
+    );
+
+    try {
+      await writeAuditLog({
+        req,
+        action: "PREPARE_CUSTOMER_PURCHASE_RECOVERY",
+        module: "Customer Purchases",
+        description:
+          `Recovery charges prepared for ${result.purchase.purchaseNumber}`,
+        targetType: "CustomerPurchase",
+        targetId: result.purchase.purchaseNumber,
+        beforeValues: result.beforeValues,
+        afterValues: result.purchase.toObject(),
+      });
+    } catch (auditError) {
+      console.error(
+        "Recovery preparation audit failed:",
+        auditError
+      );
     }
 
-    await purchase.save();
-
-    await writeAuditLog({
-      req,
-      action: "PREPARE_CUSTOMER_PURCHASE_RECOVERY",
-      module: "Customer Purchases",
-      description: `Recovery charges prepared for customer purchase ${purchase.purchaseNumber}`,
-      targetType: "CustomerPurchase",
-      targetId: purchase.purchaseNumber,
-      beforeValues,
-      afterValues: purchase.toObject(),
-      metadata: {
-        itemRecoveryAmount:
-          purchase.itemRecoveryAmount,
-        shoppingAssistanceFee:
-          purchase.shoppingAssistanceFee,
-        weightCharge: purchase.weightCharge,
-        shippingCharge: purchase.shippingCharge,
-        customsDuty: purchase.customsDuty,
-        deliveryFee: purchase.deliveryFee,
-        otherCharges: purchase.otherCharges,
-        totalCustomerCharge:
-          purchase.totalCustomerCharge,
-        outstandingAmount:
-          purchase.outstandingAmount,
-      },
-    });
-
-    res.json({
+    return res.json({
       success: true,
-      message:
-        "Customer purchase recovery data prepared successfully.",
-      data: purchase,
+      message: "Customer purchase recovery data prepared successfully.",
+      data: result.purchase,
       invoiceReadyData: {
-        purchaseNumber: purchase.purchaseNumber,
-        customerEkonId: purchase.customerEkonId,
-        customerName: purchase.customerName,
-        trackingNumber: purchase.trackingNumber,
-        itemRecoveryAmount:
-          purchase.itemRecoveryAmount,
-        shoppingAssistanceFee:
-          purchase.shoppingAssistanceFee,
-        weightCharge: purchase.weightCharge,
-        shippingCharge: purchase.shippingCharge,
-        customsDuty: purchase.customsDuty,
-        deliveryFee: purchase.deliveryFee,
-        otherCharges: purchase.otherCharges,
-        totalCustomerCharge:
-          purchase.totalCustomerCharge,
+        purchaseNumber: result.purchase.purchaseNumber,
+        customerEkonId: result.purchase.customerEkonId,
+        customerName: result.purchase.customerName,
+        trackingNumber: result.purchase.trackingNumber,
+        itemRecoveryAmount: result.purchase.itemRecoveryAmount,
+        shoppingAssistanceFee: result.purchase.shoppingAssistanceFee,
+        weightCharge: result.purchase.weightCharge,
+        shippingCharge: result.purchase.shippingCharge,
+        customsDuty: result.purchase.customsDuty,
+        deliveryFee: result.purchase.deliveryFee,
+        otherCharges: result.purchase.otherCharges,
+        totalCustomerCharge: result.purchase.totalCustomerCharge,
       },
     });
   } catch (error) {
-    console.error("Customer purchase recovery error:", error);
+    console.error(
+      "Customer purchase recovery error:",
+      error
+    );
 
-    res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message:
-        "Could not prepare customer purchase recovery.",
-      error: error.message,
+      message: error.statusCode
+        ? error.message
+        : "Could not confirm recovery preparation. Refresh the purchase before retrying.",
     });
   }
 };

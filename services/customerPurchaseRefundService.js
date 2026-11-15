@@ -80,6 +80,28 @@ const dateOnly = (value) => {
   return text;
 };
 
+const jamaicaRecordDate = (value) => {
+  const parsed = new Date(value);
+
+  if (Number.isNaN(parsed.getTime())) {
+    fail("The original invoice date needs review.");
+  }
+
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Jamaica",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(parsed);
+
+  return ["year", "month", "day"]
+    .map(
+      (type) =>
+        parts.find((part) => part.type === type).value
+    )
+    .join("-");
+};
+
 const reference = (value) => {
   const result = String(value || "")
     .trim()
@@ -559,9 +581,9 @@ const recordMerchantRefund = async ({
           fail("Linked invoice was not found.");
         }
 
-        if (
-          refundDate <
-          String(invoice.createdAt || "").slice(0, 10)
+                if (
+          !invoice.createdAt ||
+          refundDate < jamaicaRecordDate(invoice.createdAt)
         ) {
           fail("Refund date cannot precede the invoice date.");
         }
@@ -681,6 +703,7 @@ const recordMerchantRefund = async ({
             journalEntryNumber: journal.entryNumber,
             ledgerReference: journal.entryNumber,
             transactionType: "Customer Purchase Refund",
+            transactionDirection: "Deposit",
             amount,
             reference: number,
             notes:
@@ -1035,6 +1058,7 @@ const payPurchaseCredit = async ({
             ledgerReference:
               journal.entryNumber,
             transactionType: "Withdrawal",
+            transactionDirection: "Withdrawal",
             amount,
             reference: refundNumber,
             notes:

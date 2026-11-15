@@ -11,15 +11,14 @@ const getPurchaseStatusFromPackage = ({
   packageStatus,
   invoiceNumber = "",
   outstandingAmount = 0,
+  recoveredAmount = 0,
 }) => {
   if (invoiceNumber) {
-    return Number(outstandingAmount || 0) <= 0
+    return Number(outstandingAmount) === 0
       ? "Recovered"
-      : "Invoiced";
-  }
-
-  if (packageStatus === "Ready for Pickup") {
-    return "Ready to Invoice";
+      : Number(recoveredAmount) > 0
+        ? "Partially Recovered"
+        : "Invoiced";
   }
 
   if (packageStatus === "At Warehouse") {
@@ -27,15 +26,93 @@ const getPurchaseStatusFromPackage = ({
   }
 
   if (
-    packageStatus === "Manifest Assigned" ||
-    packageStatus === "In Transit" ||
-    packageStatus === "Cleared Customs" ||
-    packageStatus === "In Transit to Branch"
+    [
+      "Manifest Assigned",
+      "In Transit",
+      "Cleared Customs",
+      "In Transit to Branch",
+    ].includes(packageStatus)
   ) {
     return "In Transit";
   }
 
   return "";
+};
+
+const validateRecoveryCharges = (purchase) => {
+  const fail = (message) => {
+    const error = new Error(message);
+    error.statusCode = 409;
+    throw error;
+  };
+
+  const fields = [
+    "itemRecoveryAmount",
+    "shoppingAssistanceFee",
+    "weightCharge",
+    "shippingCharge",
+    "customsDuty",
+    "deliveryFee",
+    "otherCharges",
+  ];
+
+  let cents = 0;
+
+  for (const field of fields) {
+    const raw = purchase[field];
+    const value = Number(raw);
+    const minor = Math.round(value * 100);
+
+    if (
+      raw === null ||
+      raw === undefined ||
+      raw === "" ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      !Number.isSafeInteger(minor)
+    ) {
+      fail(`${field} must be a valid non-negative amount.`);
+    }
+
+    cents += minor;
+
+    if (!Number.isSafeInteger(cents)) {
+      fail("Recovery total is too large.");
+    }
+  }
+
+  const total = cents / 100;
+
+  if (
+    total <= 0 ||
+    total !== Number(purchase.totalCustomerCharge) ||
+    total !== Number(purchase.outstandingAmount) ||
+    Number(purchase.recoveredAmount) !== 0
+  ) {
+    fail(
+      "Recovery charges and purchase balances do not agree. Prepare recovery again."
+    );
+  }
+
+  if (
+    !purchase.journalEntryNumber ||
+    purchase.status !== "Ready to Invoice" ||
+    purchase.invoiceReady !== true ||
+    purchase.recoveryStatus !== "Not Invoiced" ||
+    purchase.invoiceNumber ||
+    purchase.invoiceJournalEntryNumber ||
+    purchase.invoicedAt ||
+    purchase.invoiceHistory?.length ||
+    purchase.paymentAllocations?.length ||
+    !Number.isFinite(Number(purchase.weight)) ||
+    Number(purchase.weight) <= 0 ||
+    !Number.isFinite(Number(purchase.chargeableWeight)) ||
+    Number(purchase.chargeableWeight) <= 0
+  ) {
+    fail(
+      "The purchase must have posted funding, warehouse weight and reviewed recovery charges before invoicing."
+    );
+  }
 };
 
 const syncCustomerPurchaseFromPackage = async ({
@@ -79,6 +156,42 @@ const syncCustomerPurchaseFromPackage = async ({
     );
   }
 
+    if (
+    ["Cancelled", "Refunded", "Reversed"].includes(
+      purchase.status
+    )
+  ) {
+    return null;
+  }
+
+  if (
+    (
+      purchase.packageId &&
+      String(purchase.packageId) !== String(pkg._id)
+    ) ||
+    (
+      pkg.customerPurchaseId &&
+      String(pkg.customerPurchaseId) !==
+        String(purchase._id)
+    ) ||
+    (
+      pkg.customerPurchaseNumber &&
+      pkg.customerPurchaseNumber !==
+        purchase.purchaseNumber
+    ) ||
+    (
+      purchase.trackingNumber &&
+      purchase.trackingNumber !== pkg.trackingNumber
+    )
+  ) {
+    const error = new Error(
+      "Package and purchase links conflict. Review the existing links."
+    );
+
+    error.statusCode = 409;
+    throw error;
+  }
+
   const billedWeight =
     Number(pkg.weight || 0) > 0
       ? Math.ceil(Number(pkg.weight || 0))
@@ -96,27 +209,24 @@ const syncCustomerPurchaseFromPackage = async ({
   purchase.lastPackageStatus = pkg.status || "";
   purchase.updatedBy = getUserName(user);
 
-  const synchronizedStatus = getPurchaseStatusFromPackage({
+    const synchronizedStatus = getPurchaseStatusFromPackage({
     packageStatus: pkg.status,
     invoiceNumber: purchase.invoiceNumber,
     outstandingAmount: purchase.outstandingAmount,
+    recoveredAmount: purchase.recoveredAmount,
   });
 
-  if (
+    if (
     synchronizedStatus &&
-    !["Refunded", "Reversed", "Cancelled"].includes(
-      purchase.status
+    (
+      purchase.invoiceNumber ||
+      ![
+        "Recovery Calculated",
+        "Ready to Invoice",
+      ].includes(purchase.status)
     )
   ) {
     purchase.status = synchronizedStatus;
-  }
-
-  if (
-    pkg.status === "Ready for Pickup" &&
-    !purchase.invoiceNumber
-  ) {
-    purchase.invoiceReady = true;
-    purchase.status = "Ready to Invoice";
   }
 
   await purchase.save({ session });
@@ -194,6 +304,10 @@ const getRecoveryInvoiceData = async ({
     throw new Error(
       `Purchase ${notReady.purchaseNumber} is not ready to invoice. Prepare its recovery charges first.`
     );
+  }
+
+    for (const purchase of purchases) {
+    validateRecoveryCharges(purchase);
   }
 
   const totals = purchases.reduce(
