@@ -876,8 +876,14 @@ const buildReportBundle = async (options = {}) => {
     totalInflows - totalOutflows
   );
 
-  const openingCash = roundMoney(
-    closingCash - netCashFlow
+    const openingCash = sumMoney(
+    scopedLedger.filter(
+      (line) =>
+        filters.from &&
+        line.day < filters.from &&
+        cashCodes.has(line.accountCode)
+    ),
+    (line) => line.debit - line.credit
   );
 
   const cashFlow = {

@@ -1,115 +1,42 @@
-const FinancialAccount = require("../models/FinancialAccount");
-const AccountTransaction = require("../models/AccountTransaction");
+const {
+  buildCashFlow,
+} = require("../services/accountingEngine/cashFlowService");
 
 const getCashFlowStatement = async (req, res) => {
   try {
-    const transactions = await AccountTransaction.find();
+    const options = {};
 
-    let operatingInflows = 0;
-    let operatingOutflows = 0;
+    for (const field of ["from", "to"]) {
+      const value = req.query[field];
 
-    let investingInflows = 0;
-    let investingOutflows = 0;
+      if (value !== undefined) {
+        if (typeof value !== "string") {
+          return res.status(400).json({
+            success: false,
+            message: "Report dates must be YYYY-MM-DD values.",
+          });
+        }
 
-    let financingInflows = 0;
-    let financingOutflows = 0;
-
-    for (const trx of transactions) {
-      const amount = Number(trx.amount || 0);
-
-      // OPERATING ACTIVITIES
-      if (trx.transactionType === "Invoice Payment") {
-        operatingInflows += amount;
-      }
-
-      if (
-        trx.transactionType === "Expense Payment" ||
-        trx.transactionType === "Payroll Payment"
-      ) {
-        operatingOutflows += amount;
-      }
-
-      // FINANCING ACTIVITIES
-      if (trx.transactionType === "Loan Received") {
-        financingInflows += amount;
-      }
-
-      if (
-        trx.transactionType === "Loan Payment" ||
-        trx.transactionType === "Credit Card Payment"
-      ) {
-        financingOutflows += amount;
-      }
-
-      // INVESTING ACTIVITIES
-      if (trx.transactionType === "Asset Purchase") {
-        investingOutflows += amount;
-      }
-
-      if (trx.transactionType === "Asset Sale") {
-        investingInflows += amount;
+        options[field] = value.trim();
       }
     }
 
-    const netOperatingCashFlow =
-      operatingInflows - operatingOutflows;
+    const data = await buildCashFlow(options);
 
-    const netInvestingCashFlow =
-      investingInflows - investingOutflows;
+    res.set("Cache-Control", "no-store");
 
-    const netFinancingCashFlow =
-      financingInflows - financingOutflows;
-
-    const accounts = await FinancialAccount.find();
-
-    const totalCashBalance = accounts.reduce(
-      (sum, acc) =>
-        sum + Number(acc.currentBalance || 0),
-      0
-    );
-
-    res.json({
+    return res.json({
       success: true,
-
-      data: {
-        operatingActivities: {
-          inflows: operatingInflows,
-          outflows: operatingOutflows,
-          net: netOperatingCashFlow,
-        },
-
-        investingActivities: {
-          inflows: investingInflows,
-          outflows: investingOutflows,
-          net: netInvestingCashFlow,
-        },
-
-        financingActivities: {
-          inflows: financingInflows,
-          outflows: financingOutflows,
-          net: netFinancingCashFlow,
-        },
-
-        openingCashBalance: 0,
-
-        closingCashBalance: totalCashBalance,
-
-        netCashMovement:
-          netOperatingCashFlow +
-          netInvestingCashFlow +
-          netFinancingCashFlow,
-      },
+      data,
     });
   } catch (error) {
-    console.error(
-      "Cash Flow Statement Error:",
-      error
-    );
+    console.error("Cash Flow Statement Error:", error);
 
-    res.status(500).json({
+    return res.status(error.statusCode || 500).json({
       success: false,
-      message: "Could not generate cash flow statement",
-      error: error.message,
+      message: error.statusCode
+        ? error.message
+        : "Could not generate the cash movement report.",
     });
   }
 };

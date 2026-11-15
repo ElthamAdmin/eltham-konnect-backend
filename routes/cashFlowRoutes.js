@@ -2,7 +2,10 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requirePermission,
+} = require("../middleware/authMiddleware");
 
 const {
   getCashFlowStatement,
@@ -11,6 +14,7 @@ const {
 router.get(
   "/statement",
   protect,
+  requirePermission("finance"),
   getCashFlowStatement
 );
 
