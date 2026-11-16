@@ -1,308 +1,329 @@
+const crypto = require("crypto");
+
 const Budget = require("../models/Budget");
-const Expense = require("../models/Expense");
-const Invoice = require("../models/Invoice");
-const Payroll = require("../models/Payroll");
 const ChartOfAccount = require("../models/ChartOfAccount");
-const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
 
-const roundMoney = (value) =>
-  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const T = require("../services/taxControl");
+const S = require("../services/taxScopeService");
 
-const getMonthRange = (year, month) => {
-  const start = new Date(Number(year), Number(month) - 1, 1);
-  const end = new Date(Number(year), Number(month), 0, 23, 59, 59, 999);
+const {
+  getBudgetRange,
+  evaluateBudget,
+  markOverlaps,
+} = require("../services/budgetEngine");
 
-  return { start, end };
-};
+const handle = (work) => async (req, res) => {
+  res.set("Cache-Control", "no-store");
 
-const isWithinMonth = (value, year, month) => {
-  if (!value) return false;
+  try {
+    await work(req, res);
+  } catch (error) {
+    console.error("Budgeting:", error);
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return false;
+    const status =
+      error.statusCode ||
+      (error.name === "ValidationError" ? 400 : 500);
 
-  const { start, end } = getMonthRange(year, month);
-  return date >= start && date <= end;
-};
-
-const calculateActualAmount = async ({
-  category,
-  budgetYear,
-  budgetMonth,
-  linkedChartAccountCode = "",
-  branch = "All Branches",
-}) => {
-  const { start, end } = getMonthRange(budgetYear, budgetMonth);
-
-    if (linkedChartAccountCode) {
-    const ledgerRows = await GeneralLedgerTransaction.find({
-      accountCode: linkedChartAccountCode,
+    res.status(status).json({
+      success: false,
+      message:
+        status === 500
+          ? "Could not complete the budget operation."
+          : error.message,
     });
-
-    return ledgerRows
-      .filter((row) =>
-        isWithinMonth(row.entryDate || row.createdAt, budgetYear, budgetMonth)
-      )
-      .reduce((sum, row) => {
-        const debit = Number(row.debit || 0);
-        const credit = Number(row.credit || 0);
-
-        if (row.accountCategory === "Revenue") {
-          return sum + credit - debit;
-        }
-
-        return sum + debit - credit;
-      }, 0);
   }
-
-  if (category === "Revenue") {
-    const invoices = await Invoice.find({ status: "Paid" });
-
-    return invoices
-      .filter((invoice) =>
-        isWithinMonth(
-          invoice.paidAt || invoice.paidDate || invoice.createdAt,
-          budgetYear,
-          budgetMonth
-        )
-      )
-      .reduce((sum, invoice) => sum + Number(invoice.finalTotal || 0), 0);
-  }
-
-  if (category === "Payroll") {
-    const payrolls = await Payroll.find();
-
-    return payrolls
-      .filter((payroll) =>
-        isWithinMonth(payroll.createdAt, budgetYear, budgetMonth)
-      )
-      .reduce((sum, payroll) => sum + Number(payroll.netPay || 0), 0);
-  }
-
-  const expenses = await Expense.find();
-
-  return expenses
-    .filter((expense) => {
-      const sameMonth = isWithinMonth(
-        expense.date || expense.createdAt,
-        budgetYear,
-        budgetMonth
-      );
-
-      if (!sameMonth) return false;
-
-      if (
-        branch &&
-        branch !== "All Branches" &&
-        expense.branch &&
-        expense.branch !== branch
-      ) {
-        return false;
-      }
-
-      if (category === "Other") return true;
-
-      return (
-        String(expense.category || "")
-          .toLowerCase()
-          .includes(String(category || "").toLowerCase()) ||
-        String(expense.expenseGroup || "")
-          .toLowerCase()
-          .includes(String(category || "").toLowerCase()) ||
-        String(expense.expenseClassification || "")
-          .toLowerCase()
-          .includes(String(category || "").toLowerCase())
-      );
-    })
-    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
 };
 
-const refreshBudgetActuals = async (budget) => {
-  const actualAmount = roundMoney(
-    await calculateActualAmount({
-            category: budget.category,
-      budgetYear: budget.budgetYear,
-      budgetMonth: budget.budgetMonth,
-      linkedChartAccountCode: budget.linkedChartAccountCode,
-      branch: budget.branch,
-    })
+const getBudgets = handle(async (req, res) => {
+  const unassigned = req.query.unassigned === "true";
+
+  const entityCode = unassigned
+    ? ""
+    : T.text(
+        req.query.entityCode,
+        "Business entity"
+      ).toUpperCase();
+
+  const scope = {
+    budgetYear: Number(req.query.budgetYear),
+    budgetMonth: Number(req.query.budgetMonth),
+    frequency: T.text(
+      req.query.frequency || "Monthly",
+      "Frequency"
+    ),
+  };
+
+  getBudgetRange(scope);
+
+  const query = {
+    ...scope,
+
+    ...(unassigned
+      ? {
+          $or: [
+            { entityCode: "" },
+            { entityCode: null },
+          ],
+        }
+      : { entityCode }),
+  };
+
+  const budgets = await Budget.find(query)
+    .sort({ budgetType: 1, category: 1, budgetName: 1 });
+
+  const data = markOverlaps(
+    await Promise.all(
+      budgets.map(evaluateBudget)
+    )
   );
 
-  const plannedAmount = Number(budget.plannedAmount || 0);
-  const variance =
-    budget.category === "Revenue"
-      ? roundMoney(actualAmount - plannedAmount)
-      : roundMoney(plannedAmount - actualAmount);
+  res.json({
+    success: true,
 
-  const variancePercent =
-    plannedAmount > 0 ? roundMoney((variance / plannedAmount) * 100) : 0;
+    filters: {
+      entityCode,
+      unassigned,
+      ...scope,
+    },
 
-  budget.actualAmount = actualAmount;
-  budget.variance = variance;
-  budget.variancePercent = variancePercent;
+    summary: {
+      totalBudgets: data.length,
 
-  await budget.save();
+      comparedCount: data.filter(
+        (row) =>
+          row.comparisonStatus ===
+          "Recorded ledger comparison"
+      ).length,
 
-  return budget;
-};
+      noActivityCount: data.filter(
+        (row) =>
+          row.comparisonStatus ===
+          "No ledger activity"
+      ).length,
 
-const getBudgets = async (req, res) => {
-  try {
-    const budgets = await Budget.find().sort({
-      budgetYear: -1,
-      budgetMonth: -1,
-      category: 1,
-    });
+      unavailableCount: data.filter(
+        (row) =>
+          row.comparisonStatus === "Unavailable"
+      ).length,
 
-    const refreshed = [];
+      overlappingCount: data.filter(
+        (row) => row.overlapWarning
+      ).length,
+    },
 
-    for (const budget of budgets) {
-      refreshed.push(await refreshBudgetActuals(budget));
-    }
+    notice:
+      "Actuals are recorded JMD ledger amounts, not proof of complete records or cash available for staffing. Revenue, expenses, and planning-only budgets are not combined into a financial-health score.",
 
-    const totalPlanned = refreshed.reduce(
-      (sum, item) => sum + Number(item.plannedAmount || 0),
-      0
+    data,
+  });
+});
+
+const budgetValues = async (body) => {
+  const entityCode = T.text(
+    body.entityCode,
+    "Business entity"
+  ).toUpperCase();
+
+  const values = {
+    budgetName: T.text(
+      body.budgetName,
+      "Budget name"
+    ),
+
+    entityCode,
+    currency: "JMD",
+
+    budgetYear: Number(body.budgetYear),
+    budgetMonth: Number(body.budgetMonth),
+
+    frequency: T.text(
+      body.frequency || "Monthly",
+      "Frequency"
+    ),
+
+    category: T.text(
+      body.category,
+      "Budget category"
+    ),
+
+    budgetType: T.text(
+      body.budgetType,
+      "Budget type"
+    ),
+
+    branch: T.text(
+      body.branch || "All Branches",
+      "Branch"
+    ),
+
+    costCenter: "General",
+
+    plannedAmount: T.amount(
+      body.plannedAmount,
+      "Planned amount"
+    ),
+
+    linkedChartAccountCode: T.text(
+      body.linkedChartAccountCode || "",
+      "Chart account",
+      false
+    ),
+
+    linkedChartAccountName: "",
+
+    notes: T.text(
+      body.notes || "",
+      "Notes",
+      false
+    ),
+  };
+
+  if (
+    body.currency &&
+    body.currency !== "JMD"
+  ) {
+    T.fail(
+      "This budget comparison supports JMD base currency."
     );
-
-    const totalActual = refreshed.reduce(
-      (sum, item) => sum + Number(item.actualAmount || 0),
-      0
-    );
-
-    const totalVariance = refreshed.reduce(
-      (sum, item) => sum + Number(item.variance || 0),
-      0
-    );
-
-            const overBudgetCount = refreshed.filter(
-      (item) => Number(item.variance || 0) < 0
-    ).length;
-
-    const underBudgetCount = refreshed.filter(
-      (item) => Number(item.variance || 0) >= 0
-    ).length;
-
-    const needsAttentionCount = refreshed.filter(
-      (item) =>
-        Number(item.variance || 0) < 0 &&
-        Math.abs(Number(item.variancePercent || 0)) >= 10
-    ).length;
-
-    const onTargetCount = refreshed.filter(
-      (item) => Math.abs(Number(item.variancePercent || 0)) <= 5
-    ).length;
-
-    const revenueAboveTargetCount = refreshed.filter(
-      (item) =>
-        item.category === "Revenue" && Number(item.variance || 0) > 0
-    ).length;
-
-    const budgetHealthScore =
-      refreshed.length > 0
-        ? roundMoney(
-            ((refreshed.length - needsAttentionCount) / refreshed.length) * 100
-          )
-        : 100;
-
-    res.json({
-      success: true,
-      summary: {
-        totalBudgets: refreshed.length,
-        totalPlanned,
-        totalActual,
-                totalVariance,
-        overBudgetCount,
-        underBudgetCount,
-        needsAttentionCount,
-        onTargetCount,
-        revenueAboveTargetCount,
-        budgetHealthScore,
-      },
-      data: refreshed,
-    });
-  } catch (error) {
-    console.error("Budget load error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not retrieve budgets",
-      error: error.message,
-    });
   }
-};
 
-const createBudget = async (req, res) => {
-  try {
-    const {
-      budgetName,
-      budgetYear,
-      budgetMonth,
-      category,
-            branch,
-      costCenter,
-      linkedChartAccountCode,
-      budgetType,
-      frequency,
-      plannedAmount,
-      notes,
-    } = req.body;
+  if (
+    body.costCenter &&
+    body.costCenter !== "General"
+  ) {
+    T.fail(
+      "New comparisons use General because consistent cost-center attribution is not available in the ledger."
+    );
+  }
 
-        let linkedChartAccountName = "";
+  if (
+    ![
+      "All Branches",
+      "Eltham Park Mainstore",
+      "Brown's Town Square",
+    ].includes(values.branch)
+  ) {
+    T.fail("Select a configured branch.");
+  }
 
-    if (linkedChartAccountCode) {
-      const chartAccount = await ChartOfAccount.findOne({
-        accountCode: linkedChartAccountCode,
-        status: "Active",
-      });
+  const range = getBudgetRange(values);
 
-      if (!chartAccount) {
-        return res.status(404).json({
-          success: false,
-          message: "Selected Chart of Account was not found.",
-        });
-      }
+  await S.resolve(
+    entityCode,
+    range.periodStart,
+    range.periodEnd
+  );
 
-      linkedChartAccountName = chartAccount.accountName;
+  if (
+    ["Operating", "Revenue"].includes(
+      values.budgetType
+    )
+  ) {
+    if (!values.linkedChartAccountCode) {
+      T.fail(
+        "Operating and Revenue comparisons require a specific Chart of Accounts mapping."
+      );
     }
 
-    const budget = await Budget.create({
-      budgetNumber: `BUD-${Date.now()}`,
-      budgetName,
-      budgetYear: Number(budgetYear),
-      budgetMonth: Number(budgetMonth),
-      category,
-            branch: branch || "All Branches",
-      costCenter: costCenter || branch || "General",
-      linkedChartAccountCode: linkedChartAccountCode || "",
-      linkedChartAccountName,
-      budgetType: budgetType || (category === "Revenue" ? "Revenue" : "Operating"),
-      frequency: frequency || "Monthly",
-      plannedAmount: Number(plannedAmount || 0),
-      actualAmount: 0,
-      variance: 0,
-      variancePercent: 0,
-      notes,
+    const account = await ChartOfAccount.findOne({
+      accountCode: values.linkedChartAccountCode,
       status: "Active",
     });
 
-    const refreshed = await refreshBudgetActuals(budget);
+    if (
+      !account ||
+      (
+        values.budgetType === "Revenue"
+          ? account.accountCategory !== "Revenue"
+          : !["Expense", "Cost of Sales"].includes(
+              account.accountCategory
+            )
+      )
+    ) {
+      T.fail(
+        "Select an Active account matching the budget type."
+      );
+    }
 
-    res.status(201).json({
-      success: true,
-      message: "Budget created successfully",
-      data: refreshed,
-    });
-  } catch (error) {
-    console.error("Budget creation error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not create budget",
-      error: error.message,
-    });
+    values.linkedChartAccountName =
+      account.accountName;
+  } else {
+    values.linkedChartAccountCode = "";
   }
+
+  if (
+    values.category === "Revenue" &&
+    values.budgetType !== "Revenue"
+  ) {
+    T.fail(
+      "The Revenue category requires the Revenue budget type."
+    );
+  }
+
+  return values;
 };
+
+const createBudget = handle(async (req, res) => {
+  const values = await budgetValues(req.body || {});
+
+  const budget = await Budget.create({
+    ...values,
+    budgetNumber: `BUD-${crypto.randomUUID()}`,
+    status: "Active",
+  });
+
+  res.status(201).json({
+    success: true,
+    message:
+      "Budget plan saved. No financial transaction was posted.",
+    data: await evaluateBudget(budget),
+  });
+});
+
+const updateBudget = handle(async (req, res) => {
+  const budget = await Budget.findOne({
+    budgetNumber: T.text(
+      req.params.budgetNumber,
+      "Budget number"
+    ),
+  });
+
+  if (!budget) {
+    T.fail("Budget not found.", 404);
+  }
+
+  if (budget.status !== "Active") {
+    T.fail(
+      "A Closed budget cannot be edited here.",
+      409
+    );
+  }
+
+  const values = await budgetValues(req.body || {});
+
+  if (
+    budget.entityCode &&
+    budget.entityCode !== values.entityCode
+  ) {
+    T.fail(
+      "An attributed budget cannot be moved to another business.",
+      409
+    );
+  }
+
+  Object.assign(budget, values);
+  await budget.save();
+
+  res.json({
+    success: true,
+    message:
+      "Budget plan updated. Ledger transactions were not changed.",
+    data: await evaluateBudget(budget),
+  });
+});
 
 module.exports = {
   getBudgets,
   createBudget,
+  updateBudget,
 };
