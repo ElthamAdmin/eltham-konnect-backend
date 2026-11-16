@@ -1,75 +1,95 @@
-const path = require("path");
-
 const TaxDocument = require("../models/TaxDocument");
 
 const {
   configureCloudinary,
 } = require("../config/cloudinary");
 
-const getFormat = (document) => {
-  const fromFileName = path
-    .extname(document.fileName || "")
-    .replace(".", "")
-    .toLowerCase();
+const T = require("../services/taxControl");
 
-  if (fromFileName) {
-    return fromFileName;
-  }
+const {
+  transact,
+} = require("../services/taxTransactionService");
 
-  try {
-    return path
-      .extname(new URL(document.fileUrl).pathname)
-      .replace(".", "")
-      .toLowerCase();
-  } catch (error) {
-    return "";
-  }
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
+
+const FORMATS = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+    "xlsx",
+
+  "application/vnd.ms-excel":
+    "xls",
+
+  "text/csv": "csv",
 };
 
-const extractCloudinaryMetadataFromUrl = (fileUrl) => {
-  const parsedUrl = new URL(fileUrl);
-  const segments = parsedUrl.pathname
-    .split("/")
-    .filter(Boolean);
+const deriveMetadata = (fileUrl) => {
+  let url;
 
-  const resourceType =
-    segments.find((segment) =>
-      ["image", "video", "raw"].includes(segment)
-    ) || "image";
-
-  const versionIndex = segments.findIndex((segment) =>
-    /^v\d+$/.test(segment)
-  );
-
-  if (
-    versionIndex < 0 ||
-    versionIndex >= segments.length - 1
-  ) {
-    throw new Error(
-      "The stored Cloudinary URL does not contain a recognizable asset version."
+  try {
+    url = new URL(fileUrl);
+  } catch {
+    T.fail(
+      "The stored document URL is invalid.",
+      409
     );
   }
 
-  const version = Number(
-    segments[versionIndex].slice(1)
-  );
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "res.cloudinary.com" ||
+    url.username ||
+    url.password
+  ) {
+    T.fail(
+      "Metadata recovery requires a standard HTTPS Cloudinary URL.",
+      409
+    );
+  }
 
-  const assetPath = segments
-    .slice(versionIndex + 1)
-    .map(decodeURIComponent)
-    .join("/");
+  const parts = url.pathname
+    .split("/")
+    .filter(Boolean)
+    .map(decodeURIComponent);
 
-  const lastExtensionIndex =
-    assetPath.lastIndexOf(".");
+  if (
+    parts[0] !==
+      process.env.CLOUDINARY_CLOUD_NAME ||
+    !["image", "raw"].includes(parts[1]) ||
+    parts[2] !== "authenticated" ||
+    !/^v\d+$/.test(parts[3] || "")
+  ) {
+    T.fail(
+      "The URL must identify an authenticated asset in the configured Cloudinary account, with an explicit version.",
+      409
+    );
+  }
 
-  const publicId =
-    lastExtensionIndex > 0
-      ? assetPath.slice(0, lastExtensionIndex)
-      : assetPath;
+  const resourceType = parts[1];
+  const version = Number(parts[3].slice(1));
+
+  let publicId = parts.slice(4).join("/");
+
+  // Raw public IDs include their extension.
+  // Image public IDs exclude the delivery format.
+  if (resourceType === "image") {
+    const extension = publicId.lastIndexOf(".");
+
+    if (extension > publicId.lastIndexOf("/")) {
+      publicId = publicId.slice(0, extension);
+    }
+  }
 
   if (!publicId) {
-    throw new Error(
-      "The Cloudinary public ID could not be derived from the stored URL."
+    T.fail(
+      "The asset public ID could not be determined.",
+      409
     );
   }
 
@@ -80,175 +100,197 @@ const extractCloudinaryMetadataFromUrl = (fileUrl) => {
   };
 };
 
-const backfillTaxDocumentCloudinaryMetadata = async (
-  req,
-  res
-) => {
-  try {
-    const documentNumber = String(
-      req.params.documentNumber || ""
-    ).trim();
+const backfillTaxDocumentCloudinaryMetadata =
+  T.handler(async (req, res) => {
+    if (req.user?.role !== "Admin") {
+      T.fail(
+        "Only an administrator can recover document storage metadata.",
+        403
+      );
+    }
 
-    const taxDocument = await TaxDocument.findOne({
+    const documentNumber = T.text(
+      req.params.documentNumber,
+      "Document number"
+    ).toUpperCase();
+
+    const document = await TaxDocument.findOne({
       documentNumber,
     });
 
-    if (!taxDocument) {
-      return res.status(404).json({
-        success: false,
-        message:
-          `Tax document ${documentNumber} was not found.`,
-      });
+    if (!document) {
+      T.fail("Tax document not found.", 404);
     }
 
-    if (
-      String(taxDocument.storageProvider || "") !==
-      "Cloudinary"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `${documentNumber} is not stored in Cloudinary.`,
-      });
-    }
-
-    if (!String(taxDocument.fileUrl || "").trim()) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `${documentNumber} does not have a stored Cloudinary URL.`,
-      });
-    }
-
-    const derivedMetadata =
-      extractCloudinaryMetadataFromUrl(
-        taxDocument.fileUrl
+    if (document.storageProvider !== "Cloudinary") {
+      T.fail(
+        "This document is not stored in Cloudinary.",
+        409
       );
+    }
 
+    const derived = deriveMetadata(document.fileUrl);
     const cloudinary = configureCloudinary();
 
-    const cloudinaryAsset =
-      await cloudinary.api.resource(
-        derivedMetadata.publicId,
-        {
-          resource_type:
-            derivedMetadata.resourceType,
-          type: "authenticated",
-        }
+    const asset = await cloudinary.api.resource(
+      derived.publicId,
+      {
+        resource_type: derived.resourceType,
+        type: "authenticated",
+      }
+    );
+
+    if (
+      !asset.asset_id ||
+      asset.public_id !== derived.publicId ||
+      asset.resource_type !== derived.resourceType ||
+      Number(asset.version) !== derived.version
+    ) {
+      T.fail(
+        "The current Cloudinary asset does not match the stored URL and version. Review it without replacing the document.",
+        409
       );
+    }
 
-    taxDocument.storageAccess = "Authenticated";
-    taxDocument.cloudinaryPublicId =
-      cloudinaryAsset.public_id;
-    taxDocument.cloudinaryAssetId =
-      cloudinaryAsset.asset_id || "";
-    taxDocument.resourceType =
-      cloudinaryAsset.resource_type ||
-      derivedMetadata.resourceType;
-    taxDocument.storageVersion =
-      cloudinaryAsset.version ||
-      derivedMetadata.version;
+    const data = await transact(async (session) => {
+      const current = await TaxDocument.findById(
+        document._id
+      ).session(session);
 
-    await taxDocument.save();
+      if (
+        !current ||
+        current.fileUrl !== document.fileUrl
+      ) {
+        T.fail(
+          "The document changed during metadata recovery. Refresh and review it.",
+          409
+        );
+      }
+
+      if (
+        (current.cloudinaryPublicId &&
+          current.cloudinaryPublicId !== asset.public_id) ||
+        (current.cloudinaryAssetId &&
+          current.cloudinaryAssetId !== asset.asset_id) ||
+        (current.resourceType &&
+          current.resourceType !== asset.resource_type) ||
+        (current.storageVersion !== null &&
+          current.storageVersion !== undefined &&
+          Number(current.storageVersion) !== Number(asset.version))
+      ) {
+        T.fail(
+          "Existing storage metadata conflicts with the Cloudinary asset. It will not be overwritten.",
+          409
+        );
+      }
+
+      const beforeValues = current.toObject();
+
+      current.storageAccess = "Authenticated";
+      current.cloudinaryPublicId = asset.public_id;
+      current.cloudinaryAssetId = asset.asset_id;
+      current.resourceType = asset.resource_type;
+      current.storageVersion = asset.version;
+
+      await current.save({ session });
+
+      await writeAuditLog({
+        req,
+        session,
+        action: "RECOVER_TAX_DOCUMENT_METADATA",
+        module: "Tax Center",
+        description: `Recovered metadata for ${documentNumber}`,
+        targetType: "TaxDocument",
+        targetId: documentNumber,
+        beforeValues,
+        afterValues: current.toObject(),
+      });
+
+      return current;
+    });
 
     return res.json({
       success: true,
       message:
-        `${documentNumber} Cloudinary metadata backfilled successfully.`,
+        "Cloudinary metadata confirmed and saved. The stored file was not replaced.",
       data: {
-        documentNumber: taxDocument.documentNumber,
-        storageProvider:
-          taxDocument.storageProvider,
-        storageAccess:
-          taxDocument.storageAccess,
-        cloudinaryPublicId:
-          taxDocument.cloudinaryPublicId,
-        cloudinaryAssetId:
-          taxDocument.cloudinaryAssetId,
-        resourceType:
-          taxDocument.resourceType,
-        storageVersion:
-          taxDocument.storageVersion,
+        documentNumber: data.documentNumber,
+        cloudinaryPublicId: data.cloudinaryPublicId,
+        cloudinaryAssetId: data.cloudinaryAssetId,
+        resourceType: data.resourceType,
+        storageVersion: data.storageVersion,
       },
     });
-  } catch (error) {
-    console.error(
-      "Tax document Cloudinary backfill error:",
-      error
-    );
+  });
 
-    return res.status(400).json({
-      success: false,
-      message:
-        "Could not backfill the tax document Cloudinary metadata.",
-      error: error.message,
-    });
-  }
-};
+const getTaxDocumentAccessLink = T.handler(
+  async (req, res) => {
+    const documentNumber = T.text(
+      req.params.documentNumber,
+      "Document number"
+    ).toUpperCase();
 
-const getTaxDocumentAccessLink = async (req, res) => {
-  try {
-    const documentNumber = String(
-      req.params.documentNumber || ""
-    ).trim();
-
-    const taxDocument = await TaxDocument.findOne({
+    const document = await TaxDocument.findOne({
       documentNumber,
     });
 
-    if (!taxDocument) {
-      return res.status(404).json({
-        success: false,
-        message:
-          `Tax document ${documentNumber} was not found.`,
-      });
+    if (!document) {
+      T.fail("Tax document not found.", 404);
     }
 
     if (
-      String(taxDocument.storageProvider || "") !==
-      "Cloudinary"
+      document.storageProvider !== "Cloudinary" ||
+      document.storageAccess !== "Authenticated" ||
+      !document.cloudinaryPublicId ||
+      !document.cloudinaryAssetId ||
+      !["image", "raw"].includes(document.resourceType) ||
+      !document.storageVersion
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `${documentNumber} is not stored in Cloudinary.`,
-      });
+      T.fail(
+        "This document requires reviewed Cloudinary metadata before secure access.",
+        409
+      );
     }
 
-    if (
-      !String(
-        taxDocument.cloudinaryPublicId || ""
-      ).trim()
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${documentNumber} requires Cloudinary metadata backfill before it can be accessed securely.`,
-      });
-    }
-
-    const format = getFormat(taxDocument);
+    const format = FORMATS[document.mimeType];
 
     if (!format) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `${documentNumber} does not have a recognizable file format.`,
-      });
+      T.fail(
+        "The stored document MIME type requires review.",
+        409
+      );
     }
 
     const cloudinary = configureCloudinary();
 
+    const asset = await cloudinary.api.resource(
+      document.cloudinaryPublicId,
+      {
+        resource_type: document.resourceType,
+        type: "authenticated",
+      }
+    );
+
+    if (
+      asset.asset_id !== document.cloudinaryAssetId ||
+      asset.public_id !== document.cloudinaryPublicId ||
+      Number(asset.version) !== Number(document.storageVersion)
+    ) {
+      T.fail(
+        "The Cloudinary asset differs from the preserved document metadata. Review it before opening.",
+        409
+      );
+    }
+
     const expiresAt =
-      Math.floor(Date.now() / 1000) + 5 * 60;
+      Math.floor(Date.now() / 1000) + 300;
 
     const accessUrl =
       cloudinary.utils.private_download_url(
-        taxDocument.cloudinaryPublicId,
+        document.cloudinaryPublicId,
         format,
         {
-          resource_type:
-            taxDocument.resourceType || "image",
+          resource_type: document.resourceType,
           type: "authenticated",
           expires_at: expiresAt,
           attachment: true,
@@ -257,15 +299,12 @@ const getTaxDocumentAccessLink = async (req, res) => {
 
     return res.json({
       success: true,
-      message:
-        "Temporary tax document access link generated successfully.",
+      message: "Temporary document access generated.",
       data: {
-        documentNumber:
-          taxDocument.documentNumber,
-        title: taxDocument.title,
-        originalFileName:
-          taxDocument.fileName,
-        mimeType: taxDocument.mimeType,
+        documentNumber,
+        title: document.title,
+        originalFileName: document.fileName,
+        mimeType: document.mimeType,
         accessUrl,
         expiresAt: new Date(
           expiresAt * 1000
@@ -273,20 +312,8 @@ const getTaxDocumentAccessLink = async (req, res) => {
         validForSeconds: 300,
       },
     });
-  } catch (error) {
-    console.error(
-      "Tax document access-link error:",
-      error
-    );
-
-    return res.status(500).json({
-      success: false,
-      message:
-        "Could not generate a secure tax document access link.",
-      error: error.message,
-    });
   }
-};
+);
 
 module.exports = {
   backfillTaxDocumentCloudinaryMetadata,

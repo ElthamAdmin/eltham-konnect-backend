@@ -172,6 +172,12 @@ const ExpenseSchema = new mongoose.Schema({
       trim: true,
     },
 
+    supportingDocumentNumber: {
+  type: String,
+  default: "",
+  trim: true,
+},
+
     supportingDocumentVerified: {
       type: Boolean,
       default: false,
@@ -246,5 +252,29 @@ const ExpenseSchema = new mongoose.Schema({
     default: Date.now,
   },
 });
+
+ExpenseSchema.pre(
+  "validate",
+  async function assignExpenseBusiness() {
+    if (!this.isNew) {
+      return;
+    }
+
+    const {
+      operatingEntity,
+    } = require(
+      "../services/operatingEntityService"
+    );
+
+    const context =
+      await operatingEntity(
+        this.date,
+        this.$session() || null
+      );
+
+    this.businessEntitySnapshot =
+      context.businessEntitySnapshot;
+  }
+);
 
 module.exports = mongoose.model("Expense", ExpenseSchema);

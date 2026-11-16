@@ -1,42 +1,73 @@
-const Invoice = require("../models/Invoice");
+const Invoice = require(
+  "../models/Invoice"
+);
+
 const TaxRegistrationProfile = require(
   "../models/TaxRegistrationProfile"
 );
 
-const roundMoney = (value) =>
-  Math.round(
-    (Number(value || 0) + Number.EPSILON) * 100
-  ) / 100;
+const T = require("./taxControl");
 
 const normalizeAsOfDate = (value) => {
-  const text =
-    String(value || "").trim() ||
-    new Date().toISOString().slice(0, 10);
+  const dateValue =
+    value instanceof Date
+      ? value.toISOString().slice(0, 10)
+      : value || T.today();
 
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    throw new Error(
-      "As-of date must use YYYY-MM-DD format."
-    );
-  }
-
-  const date = new Date(`${text}T12:00:00.000Z`);
-
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("As-of date is invalid.");
-  }
-
-  return date;
+  return new Date(
+    `${T.date(
+      dateValue,
+      "As-of date"
+    )}T12:00:00.000Z`
+  );
 };
 
 const getRollingPeriod = ({
   asOfDate,
   months = 12,
 }) => {
-  const endDate = normalizeAsOfDate(asOfDate);
-  const startDate = new Date(endDate);
+  const monthCount = Number(months);
+
+  if (
+    !Number.isInteger(monthCount) ||
+    monthCount < 1 ||
+    monthCount > 120
+  ) {
+    T.fail(
+      "Monitoring months must be a whole number between 1 and 120."
+    );
+  }
+
+  const endDate =
+    normalizeAsOfDate(asOfDate);
+
+  const startDate =
+    new Date(endDate);
+
+  const originalDay =
+    startDate.getUTCDate();
+
+  startDate.setUTCDate(1);
 
   startDate.setUTCMonth(
-    startDate.getUTCMonth() - Number(months || 12)
+    startDate.getUTCMonth() -
+      monthCount
+  );
+
+  const lastDay = new Date(
+    Date.UTC(
+      startDate.getUTCFullYear(),
+      startDate.getUTCMonth() + 1,
+      0,
+      12
+    )
+  ).getUTCDate();
+
+  startDate.setUTCDate(
+    Math.min(
+      originalDay,
+      lastDay
+    )
   );
 
   startDate.setUTCDate(
@@ -44,61 +75,137 @@ const getRollingPeriod = ({
   );
 
   return {
-    startDate:
-      startDate.toISOString().slice(0, 10),
-    endDate:
-      endDate.toISOString().slice(0, 10),
+    startDate: startDate
+      .toISOString()
+      .slice(0, 10),
+
+    endDate: endDate
+      .toISOString()
+      .slice(0, 10),
   };
 };
 
-const calculateInvoiceTurnover = (invoice) => {
-  const grossInvoiceAmount = roundMoney(
-    invoice?.finalTotal || 0
-  );
+const calculateInvoiceTurnover = (
+  invoice
+) => {
+  const classification =
+    invoice.turnoverClassification ||
+    {};
 
-  const customerPurchaseRecovery = roundMoney(
-    invoice?.customerPurchaseRecoveryAmount || 0
-  );
-
-  const customsRecovery = roundMoney(
-    Number(invoice?.customsDuty || 0) +
-      Number(
-        invoice?.customerPurchaseCustomsDuty || 0
-      )
-  );
-
-  const outputGct = roundMoney(
-    invoice?.gctTreatment?.outputGct ??
-      invoice?.gct ??
-      0
-  );
-
-  const previouslyClassifiedTurnover =
-    Number(
-      invoice?.turnoverClassification
-        ?.potentiallyTaxableTurnover || 0
-    );
-
-  const hasReviewedClassification = [
+  const reviewed = [
     "Reviewed",
     "Adjusted",
   ].includes(
-    invoice?.turnoverClassification
-      ?.classificationStatus
+    classification.classificationStatus
   );
 
-  const potentiallyTaxableTurnover =
-    hasReviewedClassification
-      ? roundMoney(previouslyClassifiedTurnover)
-      : Math.max(
+  const grossInvoiceAmount =
+    T.amount(
+      invoice.finalTotal ?? 0,
+      "Invoice total"
+    );
+
+  const customerPurchaseRecovery =
+    T.amount(
+      reviewed
+        ? classification
+            .customerPurchaseRecovery ?? 0
+        : invoice
+            .customerPurchaseRecoveryAmount ??
           0,
-          roundMoney(
-            grossInvoiceAmount -
-              customerPurchaseRecovery -
-              customsRecovery -
-              outputGct
-          )
+
+      "Customer purchase recovery"
+    );
+
+  // Recovery invoices also copy customs
+  // into the general customsDuty field.
+  // Count that recovery once.
+  const customsRecovery =
+    invoice.invoiceSource ===
+    "Customer Purchases"
+      ? T.amount(
+          invoice
+            .customerPurchaseCustomsDuty ??
+            invoice.customsDuty ??
+            0,
+
+          "Customs recovery"
+        )
+      : T.amount(
+          invoice.customsDuty ?? 0,
+          "Customs recovery"
         );
+
+  const treatmentOutput =
+    T.amount(
+      invoice.gctTreatment
+        ?.outputGct ?? 0,
+      "Recorded output GCT"
+    );
+
+  const legacyOutput =
+    T.amount(
+      invoice.gct ?? 0,
+      "Invoice GCT"
+    );
+
+  if (
+    treatmentOutput !==
+      legacyOutput &&
+    (
+      treatmentOutput > 0 ||
+      legacyOutput > 0
+    )
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} has conflicting GCT amounts and requires review.`,
+      409
+    );
+  }
+
+  const outputGct =
+    treatmentOutput;
+
+  const excludedAmount = T.round(
+    customerPurchaseRecovery +
+      customsRecovery +
+      outputGct
+  );
+
+  if (
+    excludedAmount >
+    grossInvoiceAmount
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} has recoveries and GCT exceeding its total.`,
+      409
+    );
+  }
+
+  const preliminaryTurnover =
+    T.round(
+      grossInvoiceAmount -
+        excludedAmount
+    );
+
+  const potentiallyTaxableTurnover =
+    reviewed
+      ? T.amount(
+          classification
+            .potentiallyTaxableTurnover,
+          "Reviewed turnover"
+        )
+      : preliminaryTurnover;
+
+  if (
+    potentiallyTaxableTurnover >
+    preliminaryTurnover
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} has reviewed turnover exceeding its available amount.`,
+      409
+    );
+  }
 
   return {
     grossInvoiceAmount,
@@ -107,14 +214,12 @@ const calculateInvoiceTurnover = (invoice) => {
     outputGct,
     potentiallyTaxableTurnover,
 
-    classificationStatus:
-      hasReviewedClassification
-        ? invoice.turnoverClassification
-            .classificationStatus
-        : "Preliminary Monitor",
+    classificationStatus: reviewed
+      ? classification
+          .classificationStatus
+      : "Preliminary Monitor",
 
-    requiresReview:
-      !hasReviewedClassification,
+    requiresReview: !reviewed,
   };
 };
 
@@ -122,66 +227,141 @@ const getActiveGctProfile = async ({
   entityCode,
   asOfDate,
 }) => {
-  const effectiveDate = normalizeAsOfDate(
-    asOfDate
-  );
-
-  return TaxRegistrationProfile.findOne({
+  const code = T.text(
     entityCode,
-    taxType: "GCT",
-    status: "Active",
+    "Business entity"
+  ).toUpperCase();
 
-    effectiveFrom: {
-      $lte: effectiveDate,
-    },
+  const effectiveDate =
+    normalizeAsOfDate(asOfDate);
 
-    $or: [
-      {
-        effectiveTo: null,
+  const profiles =
+    await TaxRegistrationProfile.find({
+      entityCode: code,
+      taxType: "GCT",
+      status: "Active",
+
+      effectiveFrom: {
+        $lte: effectiveDate,
       },
-      {
-        effectiveTo: {
-          $gte: effectiveDate,
+
+      $or: [
+        { effectiveTo: null },
+        {
+          effectiveTo: {
+            $gte: effectiveDate,
+          },
         },
-      },
-    ],
-  }).sort({
-    effectiveFrom: -1,
-  });
-};
+      ],
+    });
 
-const generateGctTurnoverMonitor = async ({
-  entityCode = "EK-SP-2026",
-  asOfDate,
-}) => {
-  const effectiveDate = normalizeAsOfDate(
-    asOfDate
-  );
-
-  const profile = await getActiveGctProfile({
-    entityCode,
-    asOfDate:
-      effectiveDate.toISOString().slice(0, 10),
-  });
-
-  if (!profile) {
-    throw new Error(
-      `No active GCT registration profile exists for ${entityCode}.`
+  if (profiles.length !== 1) {
+    T.fail(
+      "Exactly one Active GCT profile must cover the selected business and date.",
+      409
     );
   }
 
-  const monitoringMonths = Number(
-    profile.turnoverThreshold
-      ?.monitoringMonths || 12
-  );
+  const profile = profiles[0];
+
+  if (
+    !profile.sourceName?.trim() ||
+    (
+      !profile.sourceUrl?.trim() &&
+      !profile.sourceReference?.trim()
+    ) ||
+    !profile.sourceVerifiedAt
+  ) {
+    T.fail(
+      "The GCT profile requires verified source information.",
+      409
+    );
+  }
+
+  return profile;
+};
+
+const generateGctTurnoverMonitor = async ({
+  entityCode,
+  asOfDate,
+}) => {
+  const code = T.text(
+    entityCode,
+    "Business entity"
+  ).toUpperCase();
+
+  const effectiveDate =
+    normalizeAsOfDate(asOfDate);
+
+  const profile =
+    await getActiveGctProfile({
+      entityCode: code,
+      asOfDate: effectiveDate,
+    });
+
+  if (!profile.monitoringEnabled) {
+    T.fail(
+      "Turnover monitoring is disabled for this profile.",
+      409
+    );
+  }
+
+  const threshold =
+    profile.turnoverThreshold;
+
+  const thresholdStart =
+    threshold?.effectiveFrom
+      ? new Date(
+          threshold.effectiveFrom
+        )
+      : null;
+
+  const thresholdEnd =
+    threshold?.effectiveTo
+      ? new Date(
+          threshold.effectiveTo
+        )
+      : null;
+
+  if (
+    threshold?.currency !== "JMD" ||
+    !thresholdStart ||
+    !Number.isFinite(
+      thresholdStart.getTime()
+    ) ||
+    thresholdStart > effectiveDate ||
+    (
+      thresholdEnd &&
+      (
+        !Number.isFinite(
+          thresholdEnd.getTime()
+        ) ||
+        thresholdEnd <
+          effectiveDate
+      )
+    ) ||
+    !threshold.ruleCode?.trim()
+  ) {
+    T.fail(
+      "An effective JMD threshold with a source rule reference is required.",
+      409
+    );
+  }
+
+  const thresholdAmount =
+    T.amount(
+      threshold.amount,
+      "Turnover threshold",
+      true
+    );
 
   const period = getRollingPeriod({
-    asOfDate:
-      effectiveDate.toISOString().slice(0, 10),
-    months: monitoringMonths,
+    asOfDate: effectiveDate,
+    months:
+      threshold.monitoringMonths,
   });
 
-  const invoices = await Invoice.find({
+  const rows = await Invoice.find({
     createdAt: {
       $gte: period.startDate,
       $lte: period.endDate,
@@ -194,106 +374,146 @@ const generateGctTurnoverMonitor = async ({
         "Refunded",
       ],
     },
-  }).sort({
-    createdAt: 1,
-    invoiceNumber: 1,
-  });
-
-  const invoiceResults = invoices.map(
-    (invoice) => ({
-      invoiceNumber: invoice.invoiceNumber,
-      invoiceDate: invoice.createdAt,
-      customerName: invoice.customerName,
-      ...calculateInvoiceTurnover(invoice),
+  })
+    .sort({
+      createdAt: 1,
+      invoiceNumber: 1,
     })
-  );
+    .lean();
 
-  const totals = invoiceResults.reduce(
-    (sum, invoice) => {
-      sum.grossInvoiceAmount +=
-        invoice.grossInvoiceAmount;
+  const invoices = [];
 
-      sum.customerPurchaseRecovery +=
-        invoice.customerPurchaseRecovery;
+  const unattributedInvoiceNumbers =
+    [];
 
-      sum.customsRecovery +=
-        invoice.customsRecovery;
+  for (const invoice of rows) {
+    const codes = [
+      invoice.entityCode,
+      invoice.entitySnapshot
+        ?.entityCode,
+      invoice.businessEntitySnapshot
+        ?.entityCode,
+    ]
+      .filter(
+        (value) =>
+          value !== null &&
+          value !== undefined &&
+          String(value).trim() !== ""
+      )
+      .map((value) =>
+        T.text(
+          value,
+          "Invoice business entity"
+        ).toUpperCase()
+      );
 
-      sum.outputGct += invoice.outputGct;
+    const distinctCodes = [
+      ...new Set(codes),
+    ];
 
-      sum.potentiallyTaxableTurnover +=
-        invoice.potentiallyTaxableTurnover;
+    if (
+      distinctCodes.length !== 1
+    ) {
+      unattributedInvoiceNumbers.push(
+        invoice.invoiceNumber
+      );
 
-      if (invoice.requiresReview) {
-        sum.unreviewedInvoices += 1;
-      }
-
-      return sum;
-    },
-    {
-      invoiceCount: invoiceResults.length,
-      unreviewedInvoices: 0,
-      grossInvoiceAmount: 0,
-      customerPurchaseRecovery: 0,
-      customsRecovery: 0,
-      outputGct: 0,
-      potentiallyTaxableTurnover: 0,
-    }
-  );
-
-  Object.keys(totals).forEach((key) => {
-    totals[key] = Number.isInteger(totals[key])
-      ? totals[key]
-      : roundMoney(totals[key]);
-  });
-
-  const thresholdAmount = roundMoney(
-    profile.turnoverThreshold?.amount || 0
-  );
-
-  const thresholdUtilization =
-    thresholdAmount > 0
-      ? roundMoney(
-          (totals.potentiallyTaxableTurnover /
-            thresholdAmount) *
-            100
-        )
-      : 0;
-
-  const remainingBeforeThreshold =
-    thresholdAmount > 0
-      ? Math.max(
-          0,
-          roundMoney(
-            thresholdAmount -
-              totals.potentiallyTaxableTurnover
-          )
-        )
-      : 0;
-
-  let alertLevel = "No Threshold Configured";
-
-  if (thresholdAmount > 0) {
-    alertLevel = "Below Review Level";
-
-    if (thresholdUtilization >= 75) {
-      alertLevel = "Registration Review";
+      continue;
     }
 
-    if (thresholdUtilization >= 90) {
-      alertLevel = "Registration Urgent";
+    if (
+      distinctCodes[0] !== code
+    ) {
+      continue;
     }
 
-    if (thresholdUtilization >= 100) {
-      alertLevel = "Threshold Reached";
+    invoices.push({
+      invoiceNumber:
+        invoice.invoiceNumber,
+
+      invoiceDate:
+        invoice.createdAt,
+
+      customerName:
+        invoice.customerName,
+
+      ...calculateInvoiceTurnover(
+        invoice
+      ),
+    });
+  }
+
+  const moneyFields = [
+    "grossInvoiceAmount",
+    "customerPurchaseRecovery",
+    "customsRecovery",
+    "outputGct",
+    "potentiallyTaxableTurnover",
+  ];
+
+  const totals = {
+    invoiceCount: invoices.length,
+    unreviewedInvoices: 0,
+    grossInvoiceAmount: 0,
+    customerPurchaseRecovery: 0,
+    customsRecovery: 0,
+    outputGct: 0,
+    potentiallyTaxableTurnover: 0,
+  };
+
+  for (const invoice of invoices) {
+    for (const field of moneyFields) {
+      totals[field] = T.round(
+        totals[field] +
+          invoice[field]
+      );
+    }
+
+    if (invoice.requiresReview) {
+      totals.unreviewedInvoices += 1;
     }
   }
 
+  const thresholdUtilization =
+    T.round(
+      (
+        totals
+          .potentiallyTaxableTurnover /
+        thresholdAmount
+      ) * 100
+    );
+
+  let alertLevel =
+    "Below Review Level";
+
+  if (
+    thresholdUtilization >= 100
+  ) {
+    alertLevel =
+      "Threshold Reached";
+  } else if (
+    thresholdUtilization >= 90
+  ) {
+    alertLevel =
+      "Registration Urgent";
+  } else if (
+    thresholdUtilization >= 75
+  ) {
+    alertLevel =
+      "Registration Review";
+  }
+
+  const scopeVerified =
+    unattributedInvoiceNumbers
+      .length === 0;
+
   return {
     entity: {
-      entityCode: profile.entityCode,
-      entityName: profile.entityName,
-      businessType: profile.businessType,
+      entityCode: code,
+      entityName:
+        profile.entityName,
+      businessType:
+        profile.businessType,
     },
 
     registration: {
@@ -303,47 +523,63 @@ const generateGctTurnoverMonitor = async ({
       registrationNumber:
         profile.registrationNumber,
 
-      effectiveFrom: profile.effectiveFrom,
+      effectiveFrom:
+        profile.effectiveFrom,
     },
 
     monitoringPeriod: period,
 
     threshold: {
       amount: thresholdAmount,
-      currency:
-        profile.turnoverThreshold?.currency ||
-        "JMD",
+      currency: "JMD",
 
-      monitoringMonths,
+      monitoringMonths:
+        threshold.monitoringMonths,
+
       ruleCode:
-        profile.turnoverThreshold?.ruleCode ||
-        "",
+        threshold.ruleCode,
 
-      sourceName: profile.sourceName,
-      sourceUrl: profile.sourceUrl,
+      sourceName:
+        profile.sourceName,
+
+      sourceUrl:
+        profile.sourceUrl,
+
       sourceReference:
         profile.sourceReference,
+
       sourceVerifiedAt:
         profile.sourceVerifiedAt,
     },
 
     totals,
-
     thresholdUtilization,
-    remainingBeforeThreshold,
+
+    remainingBeforeThreshold:
+      Math.max(
+        0,
+        T.round(
+          thresholdAmount -
+            totals
+              .potentiallyTaxableTurnover
+        )
+      ),
+
     alertLevel,
 
     canChargeGct:
       profile.registrationStatus ===
       "Registered",
 
-    notice:
-      profile.registrationStatus ===
-      "Registered"
-        ? "GCT treatment must follow the active registered profile."
-        : "The business is not registered for GCT. This is a turnover monitor only; no GCT may be charged or claimed.",
+    scopeVerified,
 
-    invoices: invoiceResults,
+    unattributedInvoiceNumbers,
+
+    notice: scopeVerified
+      ? "Recorded turnover attributed to the selected business only. Unreviewed classifications remain preliminary. Alerts do not automatically register the business or change invoice GCT."
+      : "Invoices with missing or conflicting business attribution were excluded. Totals and threshold alerts may be incomplete and require review.",
+
+    invoices,
   };
 };
 

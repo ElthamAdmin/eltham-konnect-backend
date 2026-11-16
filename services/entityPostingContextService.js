@@ -31,6 +31,7 @@ const buildEntitySnapshot = (entity) => ({
 const resolveEntityPostingContext = async ({
   source,
   sourceName = "Source record",
+  session = null,
 }) => {
   const entityCode = cleanText(
     source?.entityCode ||
@@ -46,9 +47,9 @@ const resolveEntityPostingContext = async ({
     throw error;
   }
 
-  const entity = await BusinessEntity.findOne({
+    const entity = await BusinessEntity.findOne({
     entityCode,
-  });
+  }).session(session);
 
   if (!entity) {
     const error = new Error(

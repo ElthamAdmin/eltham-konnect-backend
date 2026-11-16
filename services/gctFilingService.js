@@ -10,30 +10,45 @@ const GctRegisterEntry = require(
   "../models/GctRegisterEntry"
 );
 
-const PERIOD_PATTERN = /^\d{4}-\d{2}$/;
+const T = require("./taxControl");
+const S = require("./taxScopeService");
 
-const roundMoney = (value) =>
-  Math.round(
-    (Number(value || 0) + Number.EPSILON) * 100
-  ) / 100;
+const {
+  transact,
+} = require("./taxTransactionService");
+
+const {
+  calculateInvoiceTurnover,
+} = require("./gctMonitoringService");
+
+const TaxDocument = require(
+  "../models/TaxDocument"
+);
+
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
+
+const roundMoney = T.round;
 
 const getPeriodDates = (periodKey) => {
   const normalizedPeriod =
-    String(periodKey || "").trim();
-
-  if (!PERIOD_PATTERN.test(normalizedPeriod)) {
-    throw new Error(
-      "GCT period must use YYYY-MM format."
-    );
-  }
+    T.period(periodKey);
 
   const [year, month] =
-    normalizedPeriod.split("-").map(Number);
+    normalizedPeriod
+      .split("-")
+      .map(Number);
 
   return {
     periodKey: normalizedPeriod,
-    periodStart: `${normalizedPeriod}-01`,
-    periodEnd: new Date(Date.UTC(year, month, 0))
+
+    periodStart:
+      `${normalizedPeriod}-01`,
+
+    periodEnd: new Date(
+      Date.UTC(year, month, 0, 12)
+    )
       .toISOString()
       .slice(0, 10),
   };
@@ -48,39 +63,87 @@ const getUserName = (user) =>
 const getActiveGctProfile = async ({
   entityCode,
   periodStart,
+  periodEnd,
+  session = null,
 }) => {
-  const effectiveDate = new Date(
-    `${periodStart}T12:00:00.000Z`
+  const start = T.date(
+    periodStart,
+    "Filing period start"
   );
 
-  return TaxRegistrationProfile.findOne({
-    entityCode,
-    taxType: "GCT",
-    status: "Active",
-    effectiveFrom: {
-      $lte: effectiveDate,
-    },
-    $or: [
-      {
-        effectiveTo: null,
+  const end = T.date(
+    periodEnd,
+    "Filing period end"
+  );
+
+  const profiles =
+    await TaxRegistrationProfile.find({
+      entityCode,
+      taxType: "GCT",
+      status: "Active",
+
+      effectiveFrom: {
+        $lte: new Date(
+          `${start}T12:00:00.000Z`
+        ),
       },
-      {
-        effectiveTo: {
-          $gte: effectiveDate,
+
+      $or: [
+        { effectiveTo: null },
+        {
+          effectiveTo: {
+            $gte: new Date(
+              `${end}T12:00:00.000Z`
+            ),
+          },
         },
-      },
-    ],
-  }).sort({
-    effectiveFrom: -1,
-  });
+      ],
+    }).session(session);
+
+  if (profiles.length !== 1) {
+    T.fail(
+      "Exactly one Active GCT profile must cover the complete filing period.",
+      409
+    );
+  }
+
+  const profile = profiles[0];
+
+  if (
+    !profile.sourceName?.trim() ||
+    (
+      !profile.sourceUrl?.trim() &&
+      !profile.sourceReference?.trim()
+    ) ||
+    !profile.sourceVerifiedAt
+  ) {
+    T.fail(
+      "The GCT profile requires verified source information.",
+      409
+    );
+  }
+
+  if (
+    profile.filingFrequency &&
+    profile.filingFrequency !==
+      "Monthly"
+  ) {
+    T.fail(
+      "This calculation supports monthly GCT periods. A different filing frequency requires its own reviewed period calculation.",
+      409
+    );
+  }
+
+  return profile;
 };
 
 const getInvoiceDate = (invoice) =>
-  String(
+  T.date(
     invoice.createdAt ||
-      invoice.invoiceDate ||
-      ""
-  ).slice(0, 10);
+      invoice.invoiceDate,
+
+    "Invoice date"
+  );
 
 const calculateInvoiceEntry = ({
   invoice,
@@ -89,185 +152,220 @@ const calculateInvoiceEntry = ({
   filingNumber,
   user,
 }) => {
-  const reviewedClassification = [
-    "Reviewed",
-    "Adjusted",
-  ].includes(
-    invoice.turnoverClassification
-      ?.classificationStatus
-  );
+  const turnover =
+    calculateInvoiceTurnover(invoice);
 
-  const grossInvoiceAmount = roundMoney(
-    invoice.turnoverClassification
-      ?.grossInvoiceAmount ||
-      invoice.finalTotal ||
-      0
-  );
+  const reviewed =
+    !turnover.requiresReview;
 
-  const customerPurchaseRecovery = roundMoney(
-    reviewedClassification
-      ? invoice.turnoverClassification
-          ?.customerPurchaseRecovery
-      : invoice.customerPurchaseRecoveryAmount
-  );
-
-  const customsRecovery = roundMoney(
-    Number(invoice.customsDuty || 0) +
-      Number(
-        invoice.customerPurchaseCustomsDuty || 0
-      )
-  );
-
-  const exemptAmount = roundMoney(
-    reviewedClassification
-      ? invoice.turnoverClassification
-          ?.exemptTurnover
-      : 0
-  );
-
-  const zeroRatedAmount = roundMoney(
-    reviewedClassification
-      ? invoice.turnoverClassification
-          ?.zeroRatedTurnover
-      : 0
-  );
-
-  const outsideScopeAmount = roundMoney(
-    reviewedClassification
-      ? invoice.turnoverClassification
-          ?.outsideScopeAmount
-      : 0
-  );
-
-  const preliminaryTaxableAmount = Math.max(
-    0,
-    roundMoney(
-      grossInvoiceAmount -
-        customerPurchaseRecovery -
-        customsRecovery -
-        exemptAmount -
-        zeroRatedAmount -
-        outsideScopeAmount -
-        Number(
-          invoice.gctTreatment?.outputGct ||
-            invoice.gct ||
-            0
-        )
-    )
-  );
-
-  const taxableAmount = roundMoney(
-    reviewedClassification
-      ? invoice.turnoverClassification
-          ?.potentiallyTaxableTurnover
-      : preliminaryTaxableAmount
-  );
+  const classification =
+    invoice.turnoverClassification || {};
 
   const registered =
-    profile.registrationStatus === "Registered";
+    profile.registrationStatus ===
+    "Registered";
 
-  const taxableSupply =
-    invoice.gctTreatment?.treatment ===
-    "Taxable Supply";
+  const treatment =
+    invoice.gctTreatment?.treatment;
+
+  const taxableSupply = [
+    "Taxable Supply",
+    "Mixed Supply",
+  ].includes(treatment);
+
+  if (
+    !registered &&
+    turnover.outputGct > 0
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} contains output GCT during an unregistered period. Review its source accounting.`,
+      409
+    );
+  }
+
+  if (
+    registered &&
+    reviewed &&
+    turnover.potentiallyTaxableTurnover >
+      0 &&
+    (
+      !taxableSupply ||
+      turnover.outputGct <= 0
+    )
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} has taxable turnover without matching recorded GCT treatment.`,
+      409
+    );
+  }
+
+  if (
+    registered &&
+    turnover.outputGct > 0 &&
+    !taxableSupply
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} has output GCT inconsistent with its supply treatment.`,
+      409
+    );
+  }
 
   const canChargeOutputGct =
     registered && taxableSupply;
 
-  const outputGct = canChargeOutputGct
-    ? roundMoney(
-        invoice.gctTreatment?.outputGct ||
-          taxableAmount *
-            Number(profile.standardRate || 0)
-      )
-    : 0;
+  const treatmentClassification = {
+    "Taxable Supply": "Taxable",
+    "Zero-Rated Supply":
+      "Zero Rated",
+    "Exempt Supply": "Exempt",
+    "Outside Scope":
+      "Outside Scope",
+    "Mixed Supply": "Taxable",
+  };
 
-  let classification = "Pending Review";
+  const entryClassification =
+    reviewed
+      ? treatmentClassification[
+          treatment
+        ] ||
+        (
+          !registered
+            ? "Outside Scope"
+            : "Pending Review"
+        )
+      : "Pending Review";
 
-  if (reviewedClassification) {
-    const treatment =
-      invoice.gctTreatment?.treatment;
+  const sourceRate = Number(
+    invoice.gctTreatment?.rate ?? 0
+  );
 
-    if (treatment === "Taxable Supply") {
-      classification = "Taxable";
-    } else if (
-      treatment === "Zero-Rated Supply"
-    ) {
-      classification = "Zero Rated";
-    } else if (
-      treatment === "Exempt Supply"
-    ) {
-      classification = "Exempt";
-    } else if (
-      treatment === "Outside Scope"
-    ) {
-      classification = "Outside Scope";
-    }
+  if (
+    !Number.isFinite(sourceRate) ||
+    sourceRate < 0 ||
+    sourceRate > 1
+  ) {
+    T.fail(
+      `Invoice ${invoice.invoiceNumber} requires a decimal GCT rate between zero and one.`,
+      409
+    );
   }
 
   return {
     registerNumber:
       `GCT-OUT-${String(invoice._id)}`,
 
-    entityCode: profile.entityCode,
-    entityName: profile.entityName,
-    businessType: profile.businessType,
+    entityCode:
+      profile.entityCode,
 
-    periodKey: period.periodKey,
-    periodStart: period.periodStart,
-    periodEnd: period.periodEnd,
+    entityName:
+      profile.entityName,
+
+    businessType:
+      profile.businessType,
+
+    periodKey:
+      period.periodKey,
+
+    periodStart:
+      period.periodStart,
+
+    periodEnd:
+      period.periodEnd,
 
     transactionDate:
       getInvoiceDate(invoice),
 
-    registerType: "Output GCT",
-    sourceDocumentType: "Invoice",
-    sourceDocumentId: invoice._id,
+    registerType:
+      "Output GCT",
+
+    sourceDocumentType:
+      "Invoice",
+
+    sourceDocumentId:
+      invoice._id,
+
     sourceDocumentNumber:
       invoice.invoiceNumber,
 
     counterpartyName:
       invoice.customerName || "",
 
-    registrationProfileId: profile._id,
+    registrationProfileId:
+      profile._id,
+
     registrationCode:
       profile.registrationCode,
 
     registrationStatus:
-      profile.registrationStatus,
+      registered
+        ? "Registered"
+        : "Not Registered",
 
-    calculationMode: registered
-      ? "Compliance"
-      : "Preview",
+    calculationMode:
+      registered
+        ? "Compliance"
+        : "Preview",
 
-    classification,
+    classification:
+      entryClassification,
 
     classificationStatus:
-      reviewedClassification
-        ? invoice.turnoverClassification
+      reviewed
+        ? classification
             .classificationStatus
         : "Preliminary",
 
-    grossAmount: grossInvoiceAmount,
+    grossAmount:
+      turnover.grossInvoiceAmount,
 
     recoveryAmount:
-      customerPurchaseRecovery,
+      turnover.customerPurchaseRecovery,
 
-    customsRecovery,
+    customsRecovery:
+      turnover.customsRecovery,
 
-    exemptAmount,
-    zeroRatedAmount,
-    outsideScopeAmount,
-    taxableAmount,
+    exemptAmount:
+      T.amount(
+        reviewed
+          ? classification
+              .exemptTurnover ?? 0
+          : 0,
 
-    gctRate: canChargeOutputGct
-      ? Number(
-          invoice.gctTreatment?.rate ||
-            profile.standardRate ||
-            0
-        )
-      : 0,
+        "Exempt amount"
+      ),
 
-    gctAmount: outputGct,
+    zeroRatedAmount:
+      T.amount(
+        reviewed
+          ? classification
+              .zeroRatedTurnover ?? 0
+          : 0,
+
+        "Zero-rated amount"
+      ),
+
+    outsideScopeAmount:
+      T.amount(
+        reviewed
+          ? classification
+              .outsideScopeAmount ?? 0
+          : 0,
+
+        "Outside-scope amount"
+      ),
+
+    taxableAmount:
+      turnover.potentiallyTaxableTurnover,
+
+    gctRate:
+      canChargeOutputGct
+        ? sourceRate
+        : 0,
+
+    gctAmount:
+      registered
+        ? turnover.outputGct
+        : 0,
 
     claimableGctAmount: 0,
     disallowedGctAmount: 0,
@@ -276,61 +374,69 @@ const calculateInvoiceEntry = ({
     eligibility: {
       canChargeOutputGct,
       canClaimInputGct: false,
-      includedInReturn:
-        canChargeOutputGct &&
-        reviewedClassification,
 
-      blockReason: canChargeOutputGct
-        ? ""
-        : registered
-          ? "Invoice has not been reviewed as a taxable GCT supply."
-          : "Business was not registered for GCT during this period.",
+      includedInReturn:
+        registered &&
+        reviewed &&
+        entryClassification !==
+          "Pending Review",
+
+      blockReason:
+        !registered
+          ? "Preview only: business was not registered for this period."
+          : !reviewed
+            ? "Invoice classification requires review."
+            : entryClassification ===
+                "Pending Review"
+              ? "Supply treatment requires review."
+              : "",
     },
 
     filingNumber,
 
     sourceSnapshot: {
+      entityCode:
+        profile.entityCode,
+
       invoiceNumber:
         invoice.invoiceNumber,
+
+      invoiceDate:
+        getInvoiceDate(invoice),
 
       invoiceSource:
         invoice.invoiceSource,
 
-      status: invoice.status,
+      status:
+        invoice.status,
 
       finalTotal:
-        roundMoney(invoice.finalTotal),
-
-      customerPurchaseRecoveryAmount:
-        roundMoney(
-          invoice.customerPurchaseRecoveryAmount
-        ),
-
-      customsDuty:
-        roundMoney(invoice.customsDuty),
-
-      customerPurchaseCustomsDuty:
-        roundMoney(
-          invoice.customerPurchaseCustomsDuty
-        ),
+        turnover.grossInvoiceAmount,
 
       gctTreatment:
-        invoice.gctTreatment?.toObject
-          ? invoice.gctTreatment.toObject()
-          : invoice.gctTreatment,
+        JSON.parse(
+          JSON.stringify(
+            invoice.gctTreatment ||
+              {}
+          )
+        ),
 
       turnoverClassification:
-        invoice.turnoverClassification?.toObject
-          ? invoice.turnoverClassification.toObject()
-          : invoice.turnoverClassification,
+        JSON.parse(
+          JSON.stringify(
+            classification
+          )
+        ),
     },
 
-    notes: reviewedClassification
-      ? "Generated from reviewed invoice classification."
-      : "Preliminary turnover classification requiring review.",
+    notes:
+      "Calculated from recorded invoice amounts. No output GCT was generated automatically.",
 
-    createdBy: getUserName(user),
-    updatedBy: getUserName(user),
+    createdBy:
+      getUserName(user),
+
+    updatedBy:
+      getUserName(user),
   };
 };
 
@@ -341,43 +447,66 @@ const calculateExpenseEntry = ({
   filingNumber,
   user,
 }) => {
+  const treatment =
+    expense.gctTreatment || {};
+
+  const grossAmount =
+    T.amount(
+      expense.amount,
+      "Expense amount"
+    );
+
+  const inputGctPaid =
+    T.amount(
+      treatment.inputGctPaid ?? 0,
+      "Input GCT paid"
+    );
+
+  const amountExcludingGct =
+    T.amount(
+      treatment.amountExcludingGct ??
+        0,
+
+      "Amount excluding GCT"
+    );
+
+  if (
+    T.round(
+      amountExcludingGct +
+        inputGctPaid
+    ) > grossAmount
+  ) {
+    T.fail(
+      `Expense ${expense.expenseNumber} has inconsistent input-tax amounts.`,
+      409
+    );
+  }
+
   const registered =
-    profile.registrationStatus === "Registered";
+    profile.registrationStatus ===
+    "Registered";
 
-  const grossAmount = roundMoney(
-    expense.amount
-  );
-
-  const amountExcludingGct = roundMoney(
-    expense.gctTreatment
-      ?.amountExcludingGct || grossAmount
-  );
-
-  const inputGctPaid = roundMoney(
-    expense.gctTreatment?.inputGctPaid
-  );
-
-  const supplierEvidenceComplete =
+  const documentVerified =
+    treatment
+      .supportingDocumentVerified ===
+      true &&
     Boolean(
-      expense.gctTreatment
-        ?.supportingDocumentVerified
-    ) &&
-    Boolean(
-      expense.gctTreatment
-        ?.supplierGctRegistrationNumber
-    ) &&
-    Boolean(
-      expense.gctTreatment
-        ?.supplierInvoiceNumber
+      treatment
+        .supportingDocumentNumber &&
+      treatment
+        .supplierGctRegistrationNumber &&
+      treatment
+        .supplierInvoiceNumber &&
+      treatment.verifiedBy &&
+      treatment.verifiedAt
     );
 
   const canClaimInputGct =
     registered &&
-    Boolean(
-      expense.gctTreatment
-        ?.inputGctClaimable
-    ) &&
-    supplierEvidenceComplete;
+    inputGctPaid > 0 &&
+    documentVerified &&
+    treatment.inputGctClaimable ===
+      true;
 
   const claimableGctAmount =
     canClaimInputGct
@@ -387,68 +516,110 @@ const calculateExpenseEntry = ({
   const pendingVerificationGctAmount =
     registered &&
     inputGctPaid > 0 &&
-    !supplierEvidenceComplete
+    !documentVerified
       ? inputGctPaid
       : 0;
 
   const disallowedGctAmount =
-    !registered && inputGctPaid > 0
-      ? inputGctPaid
-      : registered &&
-          inputGctPaid > 0 &&
-          !canClaimInputGct &&
-          supplierEvidenceComplete
-        ? inputGctPaid
-        : 0;
+    T.round(
+      inputGctPaid -
+        claimableGctAmount -
+        pendingVerificationGctAmount
+    );
+
+  const transactionDate =
+    T.date(
+      expense.date,
+      "Expense date"
+    );
+
+  let blockReason = "";
+
+  if (!registered) {
+    blockReason =
+      "Preview only: business was not registered for this period.";
+  } else if (
+    inputGctPaid > 0 &&
+    !documentVerified
+  ) {
+    blockReason =
+      "Supplier tax-invoice evidence requires verification.";
+  } else if (
+    inputGctPaid > 0 &&
+    !canClaimInputGct
+  ) {
+    blockReason =
+      "Recorded input GCT is not marked eligible for a claim.";
+  }
 
   return {
     registerNumber:
       `GCT-IN-${String(expense._id)}`,
 
-    entityCode: profile.entityCode,
-    entityName: profile.entityName,
-    businessType: profile.businessType,
+    entityCode:
+      profile.entityCode,
 
-    periodKey: period.periodKey,
-    periodStart: period.periodStart,
-    periodEnd: period.periodEnd,
+    entityName:
+      profile.entityName,
 
-    transactionDate:
-      String(expense.date).slice(0, 10),
+    businessType:
+      profile.businessType,
 
-    registerType: "Input GCT",
-    sourceDocumentType: "Expense",
-    sourceDocumentId: expense._id,
+    periodKey:
+      period.periodKey,
+
+    periodStart:
+      period.periodStart,
+
+    periodEnd:
+      period.periodEnd,
+
+    transactionDate,
+
+    registerType:
+      "Input GCT",
+
+    sourceDocumentType:
+      "Expense",
+
+    sourceDocumentId:
+      expense._id,
+
     sourceDocumentNumber:
       expense.expenseNumber,
 
     counterpartyName:
-      expense.gctTreatment?.supplierName ||
-      "",
+      treatment.supplierName || "",
 
     counterpartyTrn:
-      expense.gctTreatment?.supplierTrn ||
-      "",
+      treatment.supplierTrn || "",
 
-    registrationProfileId: profile._id,
+    registrationProfileId:
+      profile._id,
+
     registrationCode:
       profile.registrationCode,
 
     registrationStatus:
-      profile.registrationStatus,
+      registered
+        ? "Registered"
+        : "Not Registered",
 
-    calculationMode: registered
-      ? "Compliance"
-      : "Preview",
+    calculationMode:
+      registered
+        ? "Compliance"
+        : "Preview",
 
     classification:
-      inputGctPaid > 0
-        ? "Pending Review"
-        : "Outside Scope",
+      inputGctPaid === 0
+        ? "Outside Scope"
+        : documentVerified
+          ? "Taxable"
+          : "Pending Review",
 
     classificationStatus:
-      expense.gctTreatment
-        ?.supportingDocumentVerified
+      inputGctPaid === 0 ||
+      documentVerified
         ? "Reviewed"
         : "Preliminary",
 
@@ -457,8 +628,11 @@ const calculateExpenseEntry = ({
     customsRecovery: 0,
     exemptAmount: 0,
     zeroRatedAmount: 0,
+
     outsideScopeAmount:
-      inputGctPaid > 0 ? 0 : grossAmount,
+      inputGctPaid === 0
+        ? grossAmount
+        : 0,
 
     taxableAmount:
       inputGctPaid > 0
@@ -467,13 +641,12 @@ const calculateExpenseEntry = ({
 
     gctRate:
       amountExcludingGct > 0
-        ? roundMoney(
-            inputGctPaid /
-              amountExcludingGct
-          )
+        ? inputGctPaid /
+          amountExcludingGct
         : 0,
 
-    gctAmount: inputGctPaid,
+    gctAmount:
+      inputGctPaid,
 
     claimableGctAmount,
     disallowedGctAmount,
@@ -482,43 +655,40 @@ const calculateExpenseEntry = ({
     supplierEvidence: {
       supplierGctRegistered:
         Boolean(
-          expense.gctTreatment
-            ?.supplierGctRegistrationNumber
+          treatment
+            .supplierGctRegistrationNumber
         ),
 
       supplierTrn:
-        expense.gctTreatment?.supplierTrn ||
-        "",
+        treatment.supplierTrn || "",
 
       supplierGctRegistrationNumber:
-        expense.gctTreatment
-          ?.supplierGctRegistrationNumber ||
+        treatment
+          .supplierGctRegistrationNumber ||
         "",
 
       taxInvoiceNumber:
-        expense.gctTreatment
-          ?.supplierInvoiceNumber ||
+        treatment
+          .supplierInvoiceNumber ||
         "",
 
       taxInvoiceDate:
-        String(expense.date).slice(0, 10),
+        "",
 
       receiptUrl:
         expense.receiptUrl || "",
 
-      documentVerified:
-        Boolean(
-          expense.gctTreatment
-            ?.supportingDocumentVerified
-        ),
+      documentVerified,
 
       verifiedBy:
-        expense.gctTreatment?.verifiedBy ||
-        "",
+        documentVerified
+          ? treatment.verifiedBy
+          : "",
 
       verifiedAt:
-        expense.gctTreatment?.verifiedAt ||
-        null,
+        documentVerified
+          ? treatment.verifiedAt
+          : null,
     },
 
     eligibility: {
@@ -528,22 +698,20 @@ const calculateExpenseEntry = ({
       includedInReturn:
         canClaimInputGct,
 
-      blockReason: canClaimInputGct
-        ? ""
-        : !registered
-          ? "Business was not registered for GCT during this period."
-          : inputGctPaid <= 0
-            ? "No input GCT was recorded."
-            : !supplierEvidenceComplete
-              ? "Supplier tax-invoice evidence has not been verified."
-              : "Expense is not marked as eligible for input GCT.",
+      blockReason,
     },
 
     filingNumber,
 
     sourceSnapshot: {
+      entityCode:
+        profile.entityCode,
+
       expenseNumber:
         expense.expenseNumber,
+
+      expenseDate:
+        transactionDate,
 
       category:
         expense.category,
@@ -551,50 +719,78 @@ const calculateExpenseEntry = ({
       description:
         expense.description,
 
-      amount: grossAmount,
+      amount:
+        grossAmount,
 
       status:
         expense.status,
 
-      receiptUrl:
-        expense.receiptUrl,
+      supportingDocumentNumber:
+        treatment
+          .supportingDocumentNumber ||
+        "",
 
       gctTreatment:
-        expense.gctTreatment?.toObject
-          ? expense.gctTreatment.toObject()
-          : expense.gctTreatment,
+        JSON.parse(
+          JSON.stringify(
+            treatment
+          )
+        ),
     },
 
     notes:
-      inputGctPaid > 0
-        ? "Generated from expense input-GCT information."
-        : "No input GCT was recorded on this expense.",
+      "Calculated from recorded expense amounts and reviewed supplier evidence. No input-tax accounting entry was created.",
 
-    createdBy: getUserName(user),
-    updatedBy: getUserName(user),
+    createdBy:
+      getUserName(user),
+
+    updatedBy:
+      getUserName(user),
   };
 };
 
 const saveRegisterEntry = async (
-  entryData
+  entryData,
+  session
 ) => {
   let entry =
     await GctRegisterEntry.findOne({
-      entityCode: entryData.entityCode,
-      registerType: entryData.registerType,
       sourceDocumentType:
         entryData.sourceDocumentType,
+
       sourceDocumentId:
         entryData.sourceDocumentId,
-    });
 
-  if (!entry) {
-    entry = new GctRegisterEntry(entryData);
+      registerType:
+        entryData.registerType,
+    }).session(session);
+
+  if (entry) {
+    if (
+      entry.entityCode !==
+        entryData.entityCode ||
+      entry.periodKey !==
+        entryData.periodKey ||
+      entry.filingNumber !==
+        entryData.filingNumber
+    ) {
+      T.fail(
+        `Source ${entryData.sourceDocumentNumber} already belongs to another register period or business. It will not be moved automatically.`,
+        409
+      );
+    }
+
+    Object.assign(
+      entry,
+      entryData
+    );
   } else {
-    Object.assign(entry, entryData);
+    entry = new GctRegisterEntry(
+      entryData
+    );
   }
 
-  await entry.save();
+  await entry.save({ session });
 
   return entry;
 };
@@ -612,534 +808,851 @@ const sumEntries = (
   );
 
 const generateGctFilingPeriod = async ({
-  entityCode = "EK-SP-2026",
+  entityCode,
   periodKey,
   user,
 }) => {
-  const period = getPeriodDates(periodKey);
-
-  const profile = await getActiveGctProfile({
+  const code = T.text(
     entityCode,
-    periodStart: period.periodStart,
-  });
-
-  if (!profile) {
-    throw new Error(
-      `No active GCT registration profile exists for ${entityCode} and ${period.periodKey}.`
-    );
-  }
-
-  const registered =
-    profile.registrationStatus === "Registered";
-
-  let filingPeriod =
-    await GctFilingPeriod.findOne({
-      entityCode,
-      periodKey: period.periodKey,
-    });
-
-  const lockedStatuses = [
-    "Reviewed",
-    "Approved",
-    "Submitted",
-    "Paid",
-    "Reconciled",
-  ];
-
-  if (
-    filingPeriod &&
-    lockedStatuses.includes(
-      filingPeriod.status
-    )
-  ) {
-    throw new Error(
-      `GCT filing ${filingPeriod.filingNumber} cannot be recalculated while its status is ${filingPeriod.status}.`
-    );
-  }
-
-  const filingNumber =
-    filingPeriod?.filingNumber ||
-    `GCT-${entityCode}-${period.periodKey.replace(
-      "-",
-      ""
-    )}-${Date.now()}`;
-
-    const invoiceQuery = {
-    createdAt: {
-      $gte: period.periodStart,
-      $lte: period.periodEnd,
-    },
-
-    status: {
-      $nin: [
-        "Draft",
-        "Cancelled",
-        "Refunded",
-      ],
-    },
-  };
-
-  if (entityCode === "EK-SP-2026") {
-    invoiceQuery.$or = [
-      {
-        "businessEntitySnapshot.entityCode":
-          entityCode,
-      },
-      {
-        "businessEntitySnapshot.entityCode": {
-          $exists: false,
-        },
-      },
-      {
-        "businessEntitySnapshot.entityCode": "",
-      },
-    ];
-  } else {
-    invoiceQuery[
-      "businessEntitySnapshot.entityCode"
-    ] = entityCode;
-  }
-
-  const invoices = await Invoice.find(
-    invoiceQuery
-  ).sort({
-    createdAt: 1,
-    invoiceNumber: 1,
-  });
-
-    const expenseQuery = {
-    date: {
-      $gte: period.periodStart,
-      $lte: period.periodEnd,
-    },
-
-    status: {
-      $ne: "Cancelled",
-    },
-  };
-
-  if (entityCode === "EK-SP-2026") {
-    expenseQuery.$or = [
-      {
-        "businessEntitySnapshot.entityCode":
-          entityCode,
-      },
-      {
-        "businessEntitySnapshot.entityCode": {
-          $exists: false,
-        },
-      },
-      {
-        "businessEntitySnapshot.entityCode": "",
-      },
-    ];
-  } else {
-    expenseQuery[
-      "businessEntitySnapshot.entityCode"
-    ] = entityCode;
-  }
-
-  const expenses = await Expense.find(
-    expenseQuery
-  ).sort({
-    date: 1,
-    expenseNumber: 1,
-  });
-
-  const outputEntries = [];
-
-  for (const invoice of invoices) {
-    const entryData =
-      calculateInvoiceEntry({
-        invoice,
-        profile,
-        period,
-        filingNumber,
-        user,
-      });
-
-    outputEntries.push(
-      await saveRegisterEntry(entryData)
-    );
-  }
-
-  const inputEntries = [];
-
-  for (const expense of expenses) {
-    const entryData =
-      calculateExpenseEntry({
-        expense,
-        profile,
-        period,
-        filingNumber,
-        user,
-      });
-
-    inputEntries.push(
-      await saveRegisterEntry(entryData)
-    );
-  }
-
-  const currentInvoiceIds =
-    invoices.map((invoice) => invoice._id);
-
-  const currentExpenseIds =
-    expenses.map((expense) => expense._id);
-
-  await GctRegisterEntry.deleteMany({
-    filingNumber,
-    registerType: "Output GCT",
-    sourceDocumentType: "Invoice",
-    sourceDocumentId: {
-      $nin: currentInvoiceIds,
-    },
-  });
-
-  await GctRegisterEntry.deleteMany({
-    filingNumber,
-    registerType: "Input GCT",
-    sourceDocumentType: "Expense",
-    sourceDocumentId: {
-      $nin: currentExpenseIds,
-    },
-  });
-
-  const outputSummary = {
-    grossInvoiceAmount:
-      sumEntries(
-        outputEntries,
-        "grossAmount"
-      ),
-
-    customerPurchaseRecovery:
-      sumEntries(
-        outputEntries,
-        "recoveryAmount"
-      ),
-
-    customsRecovery:
-      sumEntries(
-        outputEntries,
-        "customsRecovery"
-      ),
-
-    exemptSales:
-      sumEntries(
-        outputEntries,
-        "exemptAmount"
-      ),
-
-    zeroRatedSales:
-      sumEntries(
-        outputEntries,
-        "zeroRatedAmount"
-      ),
-
-    outsideScopeSales:
-      sumEntries(
-        outputEntries,
-        "outsideScopeAmount"
-      ),
-
-    taxableSales:
-      sumEntries(
-        outputEntries,
-        "taxableAmount"
-      ),
-
-    outputGct:
-      sumEntries(
-        outputEntries,
-        "gctAmount"
-      ),
-  };
-
-  const inputSummary = {
-    grossExpenseAmount:
-      sumEntries(
-        inputEntries,
-        "grossAmount"
-      ),
-
-    amountExcludingGct:
-      sumEntries(
-        inputEntries,
-        "taxableAmount"
-      ),
-
-    inputGctPaid:
-      sumEntries(
-        inputEntries,
-        "gctAmount"
-      ),
-
-    claimableInputGct:
-      sumEntries(
-        inputEntries,
-        "claimableGctAmount"
-      ),
-
-    disallowedInputGct:
-      sumEntries(
-        inputEntries,
-        "disallowedGctAmount"
-      ),
-
-    pendingVerificationInputGct:
-      sumEntries(
-        inputEntries,
-        "pendingVerificationGctAmount"
-      ),
-  };
-
-  const reviewedInvoiceCount =
-    outputEntries.filter((entry) =>
-      ["Reviewed", "Adjusted"].includes(
-        entry.classificationStatus
-      )
-    ).length;
-
-  const verifiedExpenseCount =
-    inputEntries.filter(
-      (entry) =>
-        entry.supplierEvidence
-          ?.documentVerified
-    ).length;
-
-  const performedBy = getUserName(user);
-
-  const filingData = {
-    filingNumber,
-
-    entityCode: profile.entityCode,
-    entityName: profile.entityName,
-    businessType: profile.businessType,
-
-    businessTrn:
-      profile.trn || "",
-
-    periodKey: period.periodKey,
-    periodStart: period.periodStart,
-    periodEnd: period.periodEnd,
-    filingFrequency: "Monthly",
-
-    calculationMode: registered
-      ? "Compliance"
-      : "Preview",
-
-    registrationProfileId:
-      profile._id,
-
-    registrationCode:
-      profile.registrationCode,
-
-    registrationStatus:
-      profile.registrationStatus,
-
-    registrationNumber:
-      profile.registrationNumber || "",
-
-    registrationSnapshot: {
-      registrationCode:
-        profile.registrationCode,
-
-      registrationStatus:
-        profile.registrationStatus,
-
-      registrationNumber:
-        profile.registrationNumber,
-
-      effectiveFrom:
-        profile.effectiveFrom,
-
-      effectiveTo:
-        profile.effectiveTo,
-
-      standardRate:
-        profile.standardRate,
-
-      rateRuleCode:
-        profile.rateRuleCode,
-
-      sourceName:
-        profile.sourceName,
-
-      sourceUrl:
-        profile.sourceUrl,
-
-      sourceReference:
-        profile.sourceReference,
-
-      sourceVerifiedAt:
-        profile.sourceVerifiedAt,
-    },
-
-    canChargeGct: registered,
-    canClaimInputGct: registered,
-    canFileReturn: registered,
-
-    complianceBlockReason: registered
-      ? ""
-      : "Business was not registered for GCT during this filing period. Preview only.",
-
-    standardRate:
-      registered
-        ? Number(
-            profile.standardRate || 0
+    "Business entity"
+  ).toUpperCase();
+
+  const period =
+    getPeriodDates(periodKey);
+
+  return transact(
+    async (session) => {
+      const entity = await S.resolve(
+        code,
+        period.periodStart,
+        period.periodEnd,
+        session,
+        true
+      );
+
+      const profile =
+        await getActiveGctProfile({
+          entityCode: code,
+          periodStart:
+            period.periodStart,
+          periodEnd:
+            period.periodEnd,
+          session,
+        });
+
+      if (
+        profile.businessType !==
+        entity.entityType
+      ) {
+        T.fail(
+          "The GCT profile business type does not match the selected entity.",
+          409
+        );
+      }
+
+      const registered =
+        profile.registrationStatus ===
+        "Registered";
+
+      let filingPeriod =
+        await GctFilingPeriod.findOne({
+          entityCode: code,
+          periodKey:
+            period.periodKey,
+        }).session(session);
+
+      if (
+        filingPeriod &&
+        ![
+          "Preview",
+          "Calculated",
+        ].includes(
+          filingPeriod.status
+        )
+      ) {
+        T.fail(
+          "Only a Preview or Calculated filing can be recalculated.",
+          409
+        );
+      }
+
+      if (
+        filingPeriod &&
+        (
+          filingPeriod.taxRecordId ||
+          filingPeriod.taxNumber ||
+          filingPeriod
+            .settlementJournalEntryNumber ||
+          Number(
+            filingPeriod.adjustments
+              ?.outputAdjustment || 0
+          ) !== 0 ||
+          Number(
+            filingPeriod.adjustments
+              ?.inputAdjustment || 0
+          ) !== 0
+        )
+      ) {
+        T.fail(
+          "This filing has accounting links or adjustments requiring separate review before recalculation.",
+          409
+        );
+      }
+
+      const beforeValues =
+        filingPeriod
+          ? filingPeriod.toObject()
+          : null;
+
+      const filingNumber =
+        filingPeriod?.filingNumber ||
+        T.number("GCT");
+
+      const invoiceRows =
+        await Invoice.find({
+          createdAt: {
+            $gte:
+              period.periodStart,
+            $lte:
+              period.periodEnd,
+          },
+
+          status: {
+            $nin: [
+              "Draft",
+              "Cancelled",
+              "Refunded",
+            ],
+          },
+        })
+          .sort({
+            createdAt: 1,
+            invoiceNumber: 1,
+          })
+          .session(session);
+
+      const expenseRows =
+        await Expense.find({
+          date: {
+            $gte:
+              period.periodStart,
+            $lte:
+              period.periodEnd,
+          },
+
+          status: {
+            $ne: "Cancelled",
+          },
+        })
+          .sort({
+            date: 1,
+            expenseNumber: 1,
+          })
+          .session(session);
+
+      const unattributedSources = [];
+
+      const selectSources = (
+        rows,
+        referenceField
+      ) =>
+        rows.filter((source) => {
+          const codes = [
+            source.entityCode,
+            source.entitySnapshot
+              ?.entityCode,
+            source.businessEntitySnapshot
+              ?.entityCode,
+          ]
+            .filter(
+              (value) =>
+                value !== undefined &&
+                value !== null &&
+                String(value).trim() !== ""
+            )
+            .map((value) =>
+              T.text(
+                value,
+                "Source entity"
+              ).toUpperCase()
+            );
+
+          const distinctCodes = [
+            ...new Set(codes),
+          ];
+
+          if (
+            distinctCodes.length !== 1
+          ) {
+            unattributedSources.push(
+              source[referenceField]
+            );
+
+            return false;
+          }
+
+          return (
+            distinctCodes[0] === code
+          );
+        });
+
+      const invoices =
+        selectSources(
+          invoiceRows,
+          "invoiceNumber"
+        );
+
+      const expenses =
+        selectSources(
+          expenseRows,
+          "expenseNumber"
+        );
+
+      if (
+        registered &&
+        unattributedSources.length
+      ) {
+        T.fail(
+          "Sources in this period have missing or conflicting business attribution. Review them before calculating a Compliance filing.",
+          409
+        );
+      }
+
+      // Register models use a smaller
+      // registration-status vocabulary.
+      const calculationProfile = {
+        ...profile.toObject(),
+
+        registrationStatus:
+          registered
+            ? "Registered"
+            : "Not Registered",
+      };
+
+      const outputEntries = [];
+      const inputEntries = [];
+
+      for (const invoice of invoices) {
+        const entry =
+          calculateInvoiceEntry({
+            invoice,
+            profile:
+              calculationProfile,
+            period,
+            filingNumber,
+            user,
+          });
+
+        outputEntries.push(
+          await saveRegisterEntry(
+            entry,
+            session
           )
-        : 0,
+        );
+      }
 
-    rateRuleCode:
-      profile.rateRuleCode || "",
+      for (const expense of expenses) {
+        const treatment =
+          expense.gctTreatment || {};
 
-    invoiceCount:
-      outputEntries.length,
+        const gross = T.amount(
+          expense.amount,
+          "Expense amount"
+        );
 
-    reviewedInvoiceCount,
+        const inputTax = T.amount(
+          treatment.inputGctPaid ?? 0,
+          "Input GCT"
+        );
 
-    unreviewedInvoiceCount:
-      outputEntries.length -
-      reviewedInvoiceCount,
+        const base = T.amount(
+          treatment.amountExcludingGct ??
+            0,
 
-    expenseCount:
-      inputEntries.length,
+          "Expense amount excluding GCT"
+        );
 
-    verifiedExpenseCount,
+        if (
+          T.round(
+            base + inputTax
+          ) > gross
+        ) {
+          T.fail(
+            `Expense ${expense.expenseNumber} has inconsistent input-tax amounts.`,
+            409
+          );
+        }
 
-    unverifiedExpenseCount:
-      inputEntries.length -
-      verifiedExpenseCount,
+        if (
+          treatment
+            .supportingDocumentVerified
+        ) {
+          const document =
+            await TaxDocument.findOne({
+              documentNumber:
+                treatment
+                  .supportingDocumentNumber,
 
-    outputGctSummary:
-      outputSummary,
+              entityCode: code,
+              taxType: "GCT",
 
-    inputGctSummary:
-      inputSummary,
+              documentType:
+                "Supplier Tax Invoice",
 
-    calculationSnapshot: {
-      calculatedAt: new Date(),
+              verificationStatus:
+                "Verified",
 
-      invoiceNumbers:
-        invoices.map(
-          (invoice) =>
-            invoice.invoiceNumber
-        ),
+              storageProvider:
+                "Cloudinary",
 
-      expenseNumbers:
-        expenses.map(
-          (expense) =>
-            expense.expenseNumber
-        ),
+              storageAccess:
+                "Authenticated",
+            }).session(session);
 
-      outputSummary,
-      inputSummary,
-    },
+          if (
+            !document ||
+            !document
+              .cloudinaryPublicId ||
+            !document
+              .cloudinaryAssetId ||
+            !document.verifiedBy ||
+            !document.verifiedAt ||
+            document.externalReference !==
+              treatment
+                .supplierInvoiceNumber ||
+            (
+              document.periodKey &&
+              document.periodKey !==
+                period.periodKey
+            )
+          ) {
+            T.fail(
+              `Expense ${expense.expenseNumber} requires matching verified Cloudinary supplier evidence.`,
+              409
+            );
+          }
+        }
 
-    calculatedBy: performedBy,
-    calculatedAt: new Date(),
+        if (
+          treatment.inputGctClaimable &&
+          (
+            !registered ||
+            !treatment
+              .supportingDocumentVerified ||
+            !treatment
+              .supplierGctRegistrationNumber ||
+            !treatment
+              .supplierInvoiceNumber
+          )
+        ) {
+          T.fail(
+            `Expense ${expense.expenseNumber} has a claimable flag without complete registration and supplier evidence.`,
+            409
+          );
+        }
 
-    status: registered
-      ? "Calculated"
-      : "Preview",
+        const entry =
+          calculateExpenseEntry({
+            expense,
+            profile:
+              calculationProfile,
+            period,
+            filingNumber,
+            user,
+          });
 
-    notes: registered
-      ? "GCT filing period calculated from registered-period invoices and expenses."
-      : "Preview-only GCT period. No output GCT may be charged and no input GCT may be claimed.",
+        inputEntries.push(
+          await saveRegisterEntry(
+            entry,
+            session
+          )
+        );
+      }
 
-    updatedBy: performedBy,
-  };
+      const total = (
+        rows,
+        field
+      ) =>
+        T.round(
+          rows.reduce(
+            (sum, row) =>
+              sum +
+              T.amount(
+                row[field] ?? 0,
+                field
+              ),
+            0
+          )
+        );
 
-  if (!filingPeriod) {
-    filingPeriod =
-      new GctFilingPeriod({
-        ...filingData,
-        createdBy: performedBy,
+      const outputSummary = {
+        grossInvoiceAmount:
+          total(
+            outputEntries,
+            "grossAmount"
+          ),
+
+        customerPurchaseRecovery:
+          total(
+            outputEntries,
+            "recoveryAmount"
+          ),
+
+        customsRecovery:
+          total(
+            outputEntries,
+            "customsRecovery"
+          ),
+
+        exemptSales:
+          total(
+            outputEntries,
+            "exemptAmount"
+          ),
+
+        zeroRatedSales:
+          total(
+            outputEntries,
+            "zeroRatedAmount"
+          ),
+
+        outsideScopeSales:
+          total(
+            outputEntries,
+            "outsideScopeAmount"
+          ),
+
+        taxableSales:
+          total(
+            outputEntries,
+            "taxableAmount"
+          ),
+
+        outputGct:
+          total(
+            outputEntries,
+            "gctAmount"
+          ),
+      };
+
+      const inputSummary = {
+        grossExpenseAmount:
+          total(
+            inputEntries,
+            "grossAmount"
+          ),
+
+        amountExcludingGct:
+          T.round(
+            expenses.reduce(
+              (sum, expense) =>
+                sum +
+                T.amount(
+                  expense.gctTreatment
+                    ?.amountExcludingGct ??
+                    0,
+
+                  "Amount excluding GCT"
+                ),
+              0
+            )
+          ),
+
+        inputGctPaid:
+          total(
+            inputEntries,
+            "gctAmount"
+          ),
+
+        claimableInputGct:
+          total(
+            inputEntries,
+            "claimableGctAmount"
+          ),
+
+        disallowedInputGct:
+          total(
+            inputEntries,
+            "disallowedGctAmount"
+          ),
+
+        pendingVerificationInputGct:
+          total(
+            inputEntries,
+            "pendingVerificationGctAmount"
+          ),
+      };
+
+      const reviewedInvoiceCount =
+        outputEntries.filter(
+          (entry) =>
+            [
+              "Reviewed",
+              "Adjusted",
+            ].includes(
+              entry.classificationStatus
+            ) &&
+            entry.classification !==
+              "Pending Review"
+        ).length;
+
+      const verifiedExpenseCount =
+        inputEntries.filter(
+          (entry) =>
+            entry.supplierEvidence
+              ?.documentVerified ===
+            true
+        ).length;
+
+      const standardRate =
+        Number(
+          profile.standardRate ?? 0
+        );
+
+      if (
+        !Number.isFinite(
+          standardRate
+        ) ||
+        standardRate < 0 ||
+        standardRate > 1
+      ) {
+        T.fail(
+          "The profile standard rate must be a decimal between zero and one.",
+          409
+        );
+      }
+
+      const now = new Date();
+      const userName =
+        getUserName(user);
+
+      const filingData = {
+        filingNumber,
+
+        entityCode: code,
+        entityName:
+          entity.legalName,
+
+        businessType:
+          entity.entityType,
+
+        businessTrn:
+          entity.trn || "",
+
+        ...period,
+
+        filingFrequency:
+          "Monthly",
+
+        calculationMode:
+          registered
+            ? "Compliance"
+            : "Preview",
+
+        registrationProfileId:
+          profile._id,
+
+        registrationCode:
+          profile.registrationCode,
+
+        registrationStatus:
+          registered
+            ? "Registered"
+            : "Not Registered",
+
+        registrationNumber:
+          profile.registrationNumber ||
+          "",
+
+        registrationSnapshot:
+          profile.toObject(),
+
+        canChargeGct:
+          registered,
+
+        canClaimInputGct:
+          registered,
+
+        canFileReturn:
+          registered,
+
+        complianceBlockReason:
+          registered
+            ? ""
+            : "Preview only: business was not registered during the complete filing period.",
+
+        standardRate:
+          registered
+            ? standardRate
+            : 0,
+
+        rateRuleCode:
+          profile.rateRuleCode || "",
+
+        invoiceCount:
+          outputEntries.length,
+
+        reviewedInvoiceCount,
+
+        unreviewedInvoiceCount:
+          outputEntries.length -
+          reviewedInvoiceCount,
+
+        expenseCount:
+          inputEntries.length,
+
+        verifiedExpenseCount,
+
+        unverifiedExpenseCount:
+          inputEntries.length -
+          verifiedExpenseCount,
+
+        outputGctSummary:
+          outputSummary,
+
+        inputGctSummary:
+          inputSummary,
+
+        calculationSnapshot: {
+          calculatedAt: now,
+
+          entitySnapshot:
+            S.snapshot(entity),
+
+          invoiceNumbers:
+            invoices.map(
+              (invoice) =>
+                invoice.invoiceNumber
+            ),
+
+          expenseNumbers:
+            expenses.map(
+              (expense) =>
+                expense.expenseNumber
+            ),
+
+          unattributedSources,
+
+          outputSummary,
+          inputSummary,
+
+          sourceSnapshots: [
+            ...outputEntries,
+            ...inputEntries,
+          ].map(
+            (entry) => ({
+              registerNumber:
+                entry.registerNumber,
+
+              sourceSnapshot:
+                entry.sourceSnapshot,
+            })
+          ),
+        },
+
+        calculatedBy:
+          userName,
+
+        calculatedAt: now,
+
+        status:
+          registered
+            ? "Calculated"
+            : "Preview",
+
+        notes:
+          "Calculated from attributed recorded sources. No source tax accounting was created automatically.",
+
+        updatedBy:
+          userName,
+      };
+
+      if (!filingPeriod) {
+        filingPeriod =
+          new GctFilingPeriod({
+            ...filingData,
+            createdBy: userName,
+          });
+      } else {
+        Object.assign(
+          filingPeriod,
+          filingData
+        );
+      }
+
+      await filingPeriod.save({
+        session,
       });
-  } else {
-    Object.assign(
-      filingPeriod,
-      filingData
-    );
-  }
 
-  await filingPeriod.save();
+      const entryIds = [
+        ...outputEntries,
+        ...inputEntries,
+      ].map(
+        (entry) => entry._id
+      );
 
-  await GctRegisterEntry.updateMany(
-    {
-      filingNumber,
-    },
-    {
-      $set: {
-        filingPeriodId:
-          filingPeriod._id,
-      },
+      await GctRegisterEntry.deleteMany(
+        {
+          entityCode: code,
+          periodKey:
+            period.periodKey,
+          filingNumber,
+
+          _id: {
+            $nin: entryIds,
+          },
+        },
+        { session }
+      );
+
+      await GctRegisterEntry.updateMany(
+        {
+          _id: {
+            $in: entryIds,
+          },
+        },
+        {
+          $set: {
+            filingPeriodId:
+              filingPeriod._id,
+          },
+        },
+        { session }
+      );
+
+      await writeAuditLog({
+        session,
+        action:
+          "CALCULATE_GCT_FILING",
+
+        module: "Tax Center",
+
+        description:
+          `Calculated ${filingNumber}`,
+
+        targetType:
+          "GctFilingPeriod",
+
+        targetId:
+          filingNumber,
+
+        beforeValues,
+
+        afterValues:
+          filingPeriod.toObject(),
+
+        metadata: {
+          performedBy:
+            userName,
+        },
+      });
+
+      return {
+        filingPeriod,
+
+        summary: {
+          calculationMode:
+            filingPeriod
+              .calculationMode,
+
+          registrationStatus:
+            filingPeriod
+              .registrationStatus,
+
+          canChargeGct:
+            filingPeriod
+              .canChargeGct,
+
+          canClaimInputGct:
+            filingPeriod
+              .canClaimInputGct,
+
+          canFileReturn:
+            filingPeriod
+              .canFileReturn,
+
+          invoiceCount:
+            filingPeriod
+              .invoiceCount,
+
+          expenseCount:
+            filingPeriod
+              .expenseCount,
+
+          outputGctSummary:
+            filingPeriod
+              .outputGctSummary,
+
+          inputGctSummary:
+            filingPeriod
+              .inputGctSummary,
+
+          outputGct:
+            filingPeriod
+              .outputGct,
+
+          inputGctCredit:
+            filingPeriod
+              .inputGctCredit,
+
+          netGct:
+            filingPeriod.netGct,
+
+          netPosition:
+            filingPeriod
+              .netPosition,
+
+          complianceBlockReason:
+            filingPeriod
+              .complianceBlockReason,
+        },
+      };
     }
   );
-
-  return {
-    filingPeriod,
-    summary: {
-      calculationMode:
-        filingPeriod.calculationMode,
-
-      registrationStatus:
-        filingPeriod.registrationStatus,
-
-      canChargeGct:
-        filingPeriod.canChargeGct,
-
-      canClaimInputGct:
-        filingPeriod.canClaimInputGct,
-
-      canFileReturn:
-        filingPeriod.canFileReturn,
-
-      invoiceCount:
-        filingPeriod.invoiceCount,
-
-      expenseCount:
-        filingPeriod.expenseCount,
-
-      outputGctSummary:
-        filingPeriod.outputGctSummary,
-
-      inputGctSummary:
-        filingPeriod.inputGctSummary,
-
-      outputGct:
-        filingPeriod.outputGct,
-
-      inputGctCredit:
-        filingPeriod.inputGctCredit,
-
-      netGct:
-        filingPeriod.netGct,
-
-      netPosition:
-        filingPeriod.netPosition,
-
-      complianceBlockReason:
-        filingPeriod.complianceBlockReason,
-    },
-  };
 };
 
 const getGctRegister = async ({
-  entityCode = "EK-SP-2026",
+  entityCode,
   periodKey,
   registerType = "",
 }) => {
-  const query = {
+  const code = T.text(
     entityCode,
-    periodKey,
+    "Business entity"
+  ).toUpperCase();
+
+  const period =
+    getPeriodDates(periodKey);
+
+  const query = {
+    entityCode: code,
+    periodKey:
+      period.periodKey,
   };
 
   if (registerType) {
-    query.registerType =
-      registerType;
+    const type = T.text(
+      registerType,
+      "Register type"
+    );
+
+    if (
+      ![
+        "Output GCT",
+        "Input GCT",
+      ].includes(type)
+    ) {
+      T.fail(
+        "Register type must be Output GCT or Input GCT."
+      );
+    }
+
+    query.registerType = type;
   }
 
-  return GctRegisterEntry.find(query).sort({
+  return GctRegisterEntry.find(
+    query
+  ).sort({
     registerType: 1,
     transactionDate: 1,
     sourceDocumentNumber: 1,

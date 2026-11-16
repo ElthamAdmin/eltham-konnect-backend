@@ -2,6 +2,7 @@ const express = require("express");
 
 const {
   protect,
+  requireAdmin,
   requireAnyPermission,
 } = require("../middleware/authMiddleware");
 
@@ -50,12 +51,17 @@ const {
   getBusinessEntities,
   getBusinessEntityByCode,
   resolveBusinessEntityForDate,
+  configureBusinessEntityIncomeTax,
+} = require("../controllers/businessEntityController");
+
+const {
   createBusinessEntity,
   updatePlannedBusinessEntity,
   registerBusinessEntity,
+  previewBusinessEntityActivation,
   activateBusinessEntity,
-  configureBusinessEntityIncomeTax,
-} = require("../controllers/businessEntityController");
+  configureBusinessEntityGct,
+} = require("../controllers/businessEntityTransitionController");
 
 const {
   getIncomeTaxRules,
@@ -103,17 +109,69 @@ const {
   getEntityPeriodTaxReconciliation,
 } = require("../controllers/taxEntityPeriodReconciliationController");
 
-router.get("/dashboard", protect, getTaxCenterDashboard);
+router.use(
+  "/entities",
+  protect,
+  canManageTaxCenter,
+  (req, res, next) => {
+    if (req.method === "GET") {
+      return next();
+    }
 
-router.get("/records", protect, getTaxRecords);
+    return requireAdmin(req, res, next);
+  }
+);
 
-router.post("/records", protect, createTaxRecord);
+router.use(
+  [
+    "/deadline-rules",
+    "/gct/profiles",
+    "/income-tax/rules",
+    "/records/entity-attribution/backfill",
+  ],
+  protect,
+  canManageTaxCenter,
+  (req, res, next) => {
+    if (req.method === "GET") {
+      return next();
+    }
 
-router.get("/payroll-summary", protect, generatePayrollTaxSummary);
+    return requireAdmin(req, res, next);
+  }
+);
+
+router.get(
+  "/dashboard",
+  protect,
+  canManageTaxCenter,
+  getTaxCenterDashboard
+);
+
+router.get(
+  "/records",
+  protect,
+  canManageTaxCenter,
+  getTaxRecords
+);
+
+router.post(
+  "/records",
+  protect,
+  canManageTaxCenter,
+  createTaxRecord
+);
+
+router.get(
+  "/payroll-summary",
+  protect,
+  canManageTaxCenter,
+  generatePayrollTaxSummary
+);
 
 router.post(
   "/payroll-liabilities/generate",
   protect,
+  canManageTaxCenter,
   generatePayrollLiabilities
 );
 
@@ -421,6 +479,22 @@ router.get(
   protect,
   canManageTaxCenter,
   getEntityPeriodTaxReconciliation
+);
+
+router.post(
+  "/entities/:entityCode/activation-preview",
+  protect,
+  canManageTaxCenter,
+  requireAdmin,
+  previewBusinessEntityActivation
+);
+
+router.post(
+  "/entities/:entityCode/gct-profile",
+  protect,
+  canManageTaxCenter,
+  requireAdmin,
+  configureBusinessEntityGct
 );
 
 module.exports = router;

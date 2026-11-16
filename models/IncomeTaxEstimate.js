@@ -446,27 +446,75 @@ incomeTaxEstimateSchema.index(
 incomeTaxEstimateSchema.pre(
   "validate",
   function validateEstimate() {
+    const T = require(
+      "../services/taxControl"
+    );
+
     if (
-      this.periodStart &&
-      this.periodEnd &&
-      this.periodEnd < this.periodStart
+      !this.periodStart ||
+      !this.periodEnd ||
+      !Number.isFinite(
+        this.periodStart.getTime()
+      ) ||
+      !Number.isFinite(
+        this.periodEnd.getTime()
+      ) ||
+      this.periodEnd <
+        this.periodStart
     ) {
       throw new Error(
-        "The income-tax period end cannot be earlier than its start."
+        "A valid income-tax period with its end on or after its start is required."
+      );
+    }
+
+    for (const field of [
+      "estimatedTaxableIncome",
+      "grossIncomeTax",
+      "taxCredits",
+      "priorPayments",
+      "estimatedTaxDue",
+      "amountPaid",
+    ]) {
+      this[field] = T.amount(
+        this[field] ?? 0,
+        field
       );
     }
 
     if (
-      Number(this.amountPaid || 0) >
-      Number(this.estimatedTaxDue || 0)
+      this.amountPaid >
+      this.estimatedTaxDue
     ) {
       throw new Error(
-        "The amount paid cannot exceed the estimated tax due."
+        "Amount paid cannot exceed estimated tax due."
       );
     }
+
+    const expectedTaxDue =
+      Math.max(
+        0,
+        T.round(
+          this.grossIncomeTax -
+            this.taxCredits -
+            this.priorPayments
+        )
+      );
+
+    if (
+      this.estimatedTaxDue !==
+      expectedTaxDue
+    ) {
+      throw new Error(
+        "Estimated tax due does not agree with gross tax, credits, and prior payments."
+      );
+    }
+
+    this.balanceDue = T.round(
+      this.estimatedTaxDue -
+        this.amountPaid
+    );
   }
 );
-
 
 module.exports = mongoose.model(
   "IncomeTaxEstimate",

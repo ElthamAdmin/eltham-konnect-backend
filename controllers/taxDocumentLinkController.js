@@ -3,469 +3,390 @@ const TaxRecord = require("../models/TaxRecord");
 const IncomeTaxEstimate = require("../models/IncomeTaxEstimate");
 const GctFilingPeriod = require("../models/GctFilingPeriod");
 const AccountTransaction = require("../models/AccountTransaction");
+const JournalEntry = require("../models/JournalEntry");
 
-const getUserName = (user) =>
-  user?.fullName ||
-  user?.name ||
-  user?.email ||
-  "System User";
+const T = require("../services/taxControl");
 
-const cleanText = (value) =>
-  String(value || "").trim();
+const {
+  transact,
+} = require("../services/taxTransactionService");
 
-const getTargetPeriodKey = (target) => {
-  if (cleanText(target?.periodKey)) {
-    return cleanText(target.periodKey);
-  }
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
 
-  const periodStart = target?.periodStart;
+const linkTaxDocument = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
 
-  if (!periodStart) {
-    return "";
-  }
+    const documentNumber = T.text(
+      req.params.documentNumber,
+      "Document number"
+    ).toUpperCase();
 
-  if (periodStart instanceof Date) {
-    return periodStart.toISOString().slice(0, 7);
-  }
-
-  return cleanText(periodStart).slice(0, 7);
-};
-
-const getIncomeTaxDocumentType = (estimate) =>
-  cleanText(estimate.incomeTaxType) ===
-  "Company Income Tax"
-    ? "Company Tax"
-    : "Income Tax";
-
-const assertEntityCompatible = ({
-  taxDocument,
-  target,
-  targetName,
-}) => {
-  const targetEntityCode = cleanText(
-    target?.entityCode ||
-      target?.entitySnapshot?.entityCode
-  );
-
-  if (
-    targetEntityCode &&
-    targetEntityCode !== taxDocument.entityCode
-  ) {
-    const error = new Error(
-      `${targetName} belongs to ${targetEntityCode}, but the document belongs to ${taxDocument.entityCode}.`
+    const notes = T.text(
+      body.notes ?? "",
+      "Linkage notes",
+      false
     );
 
-    error.statusCode = 409;
-    throw error;
-  }
-};
-
-const assertPeriodCompatible = ({
-  taxDocument,
-  target,
-  targetName,
-}) => {
-  const documentPeriod = cleanText(
-    taxDocument.periodKey
-  );
-
-  const targetPeriod = getTargetPeriodKey(target);
-
-  if (
-    documentPeriod &&
-    targetPeriod &&
-    documentPeriod !== targetPeriod
-  ) {
-    const error = new Error(
-      `${targetName} belongs to period ${targetPeriod}, but the document belongs to period ${documentPeriod}.`
+    const suppliedTargets = [
+      "taxNumber",
+      "estimateNumber",
+      "filingNumber",
+      "transactionNumber",
+    ].filter(
+      (field) =>
+        body[field] !== undefined &&
+        body[field] !== ""
     );
 
-    error.statusCode = 409;
-    throw error;
-  }
-};
+    const paymentLink =
+      suppliedTargets.includes("transactionNumber");
 
-const assertTaxTypeCompatible = ({
-  taxDocument,
-  expectedTaxType,
-  targetName,
-}) => {
-  const documentTaxType = cleanText(
-    taxDocument.taxType
-  );
-
-  if (
-    documentTaxType &&
-    expectedTaxType &&
-    documentTaxType !== expectedTaxType
-  ) {
-    const error = new Error(
-      `${targetName} uses ${expectedTaxType}, but the document is classified as ${documentTaxType}.`
-    );
-
-    error.statusCode = 409;
-    throw error;
-  }
-};
-
-const assertLinkNotBeingReplaced = ({
-  currentReference,
-  requestedReference,
-  linkName,
-}) => {
-  if (
-    cleanText(currentReference) &&
-    cleanText(currentReference) !==
-      cleanText(requestedReference)
-  ) {
-    const error = new Error(
-      `The document is already linked to ${linkName} ${currentReference}. Unlink it through an audited action before assigning another ${linkName}.`
-    );
-
-    error.statusCode = 409;
-    throw error;
-  }
-};
-
-const pushLinkHistory = ({
-  taxDocument,
-  targetType,
-  targetReference,
-  notes,
-  userName,
-}) => {
-  taxDocument.linkageHistory.push({
-    targetType,
-    targetReference,
-    action: "Linked",
-    notes,
-    performedBy: userName,
-    performedAt: new Date(),
-  });
-};
-
-const linkTaxDocument = async (req, res) => {
-  try {
-    const documentNumber = cleanText(
-      req.params.documentNumber
-    );
-
-    const {
-      taxNumber,
-      estimateNumber,
-      filingNumber,
-      transactionNumber,
-      notes = "",
-    } = req.body;
-
-    const requestedReferences = [
-      taxNumber,
-      estimateNumber,
-      filingNumber,
-      transactionNumber,
-    ].filter((value) => cleanText(value));
-
-    if (requestedReferences.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Provide at least one tax number, estimate number, filing number, or transaction number.",
-      });
+    if (
+      suppliedTargets.length === 0 ||
+      (!paymentLink && suppliedTargets.length !== 1) ||
+      (paymentLink &&
+        suppliedTargets.some(
+          (field) =>
+            !["taxNumber", "transactionNumber"].includes(field)
+        ))
+    ) {
+      T.fail(
+        "Select one target. A payment transaction may also include its related tax obligation."
+      );
     }
 
-    const taxDocument = await TaxDocument.findOne({
-      documentNumber,
+    const data = await transact(async (session) => {
+      const document = await TaxDocument.findOne({
+        documentNumber,
+      }).session(session);
+
+      if (!document) {
+        T.fail("Tax document not found.", 404);
+      }
+
+      if (
+        ["Rejected", "Superseded"].includes(
+          document.verificationStatus
+        )
+      ) {
+        T.fail(
+          "A rejected or superseded document cannot receive new links.",
+          409
+        );
+      }
+
+      const beforeValues = document.toObject();
+      const performedBy = T.actor(req);
+      const performedAt = new Date();
+      let changed = false;
+      let relatedTaxRecord = null;
+
+      const configurations = [
+        {
+          field: "taxNumber",
+          idField: "taxRecordId",
+          Model: TaxRecord,
+          targetType: "Tax Record",
+        },
+        {
+          field: "estimateNumber",
+          idField: "incomeTaxEstimateId",
+          Model: IncomeTaxEstimate,
+          targetType: "Income Tax Estimate",
+        },
+        {
+          field: "filingNumber",
+          idField: "gctFilingPeriodId",
+          Model: GctFilingPeriod,
+          targetType: "GCT Filing",
+        },
+      ];
+
+      const requested = {};
+
+      for (const field of suppliedTargets) {
+        requested[field] = T.text(
+          body[field],
+          field
+        );
+      }
+
+      if (paymentLink && !requested.taxNumber) {
+        requested.taxNumber = document.taxNumber;
+      }
+
+      if (paymentLink && !requested.taxNumber) {
+        T.fail(
+          "The related tax obligation number is required."
+        );
+      }
+
+      const checkTarget = (
+        target,
+        targetTaxType
+      ) => {
+        if (
+          !target.entityCode ||
+          target.entityCode !== document.entityCode ||
+          (target.entityId &&
+            String(target.entityId) !==
+              String(document.entityId))
+        ) {
+          T.fail(
+            "Document and target require matching business attribution.",
+            409
+          );
+        }
+
+        if (
+          !document.periodKey ||
+          !target.periodKey ||
+          document.periodKey !== target.periodKey
+        ) {
+          T.fail(
+            "Document and target require matching reporting periods.",
+            409
+          );
+        }
+
+        if (
+          T.canonical(document.taxType) !==
+          T.canonical(targetTaxType)
+        ) {
+          T.fail(
+            "Document and target tax types disagree.",
+            409
+          );
+        }
+
+        if (target.status === "Cancelled") {
+          T.fail(
+            "Documents cannot be linked to a cancelled target.",
+            409
+          );
+        }
+      };
+
+      const addHistory = (
+        targetType,
+        targetReference
+      ) => {
+        document.linkageHistory.push({
+          targetType,
+          targetReference,
+          action: "Linked",
+          notes,
+          performedBy,
+          performedAt,
+        });
+
+        changed = true;
+      };
+
+      for (const configuration of configurations) {
+        const {
+          field,
+          idField,
+          Model,
+          targetType,
+        } = configuration;
+
+        if (!requested[field]) {
+          continue;
+        }
+
+        const target = await Model.findOne({
+          [field]: requested[field],
+        }).session(session);
+
+        if (!target) {
+          T.fail(`${targetType} not found.`, 404);
+        }
+
+        const reference = target[field];
+
+        if (
+          (document[field] &&
+            document[field] !== reference) ||
+          (document[idField] &&
+            String(document[idField]) !==
+              String(target._id))
+        ) {
+          T.fail(
+            "An existing document link cannot be replaced through this action.",
+            409
+          );
+        }
+
+        let targetTaxType = target.taxType;
+
+        if (field === "estimateNumber") {
+          if (
+            ![
+              "Individual Income Tax",
+              "Company Income Tax",
+            ].includes(target.incomeTaxType)
+          ) {
+            T.fail(
+              "The estimate has an unsupported tax type.",
+              409
+            );
+          }
+
+          targetTaxType = target.incomeTaxType;
+        }
+
+        if (field === "filingNumber") {
+          targetTaxType = "GCT";
+        }
+
+        checkTarget(target, targetTaxType);
+
+        if (field === "taxNumber") {
+          relatedTaxRecord = target;
+        }
+
+        if (!document[field]) {
+          document[field] = reference;
+          document[idField] = target._id;
+
+          addHistory(
+            targetType,
+            reference
+          );
+        } else if (!document[idField]) {
+          document[idField] = target._id;
+          changed = true;
+        }
+      }
+
+      if (paymentLink) {
+        const transaction =
+          await AccountTransaction.findOne({
+            transactionNumber:
+              requested.transactionNumber,
+
+            transactionType:
+              "Tax Payment",
+
+            taxNumber:
+              relatedTaxRecord.taxNumber,
+          }).session(session);
+
+        if (
+          !transaction ||
+          transaction.taxPeriodKey !==
+            document.periodKey ||
+          T.canonical(transaction.taxType) !==
+            T.canonical(document.taxType)
+        ) {
+          T.fail(
+            "The payment does not match the obligation, reporting period, and tax type.",
+            409
+          );
+        }
+
+        if (
+          (document.transactionNumber &&
+            document.transactionNumber !==
+              transaction.transactionNumber) ||
+          (document.accountTransactionId &&
+            String(document.accountTransactionId) !==
+              String(transaction._id))
+        ) {
+          T.fail(
+            "The document is already linked to another payment.",
+            409
+          );
+        }
+
+        const remittance =
+          relatedTaxRecord.remittances.find(
+            (entry) =>
+              entry.journalEntryNumber ===
+                transaction.journalEntryNumber &&
+              entry.paymentReference ===
+                transaction.reference &&
+              T.amount(entry.amount) ===
+                T.amount(transaction.amount)
+          );
+
+        const journal =
+          await JournalEntry.findOne({
+            entryNumber:
+              transaction.journalEntryNumber,
+
+            entityCode:
+              document.entityCode,
+
+            reportingPeriodKey:
+              document.periodKey,
+
+            status: "Posted",
+          }).session(session);
+
+        if (
+          !remittance ||
+          !journal ||
+          journal.reversalEntryNumber
+        ) {
+          T.fail(
+            "The payment requires matching remittance and unreversed posted-journal evidence.",
+            409
+          );
+        }
+
+        if (!document.transactionNumber) {
+          document.transactionNumber =
+            transaction.transactionNumber;
+
+          document.accountTransactionId =
+            transaction._id;
+
+          document.journalEntryNumber =
+            transaction.journalEntryNumber;
+
+          addHistory(
+            "Tax Payment",
+            transaction.transactionNumber
+          );
+        }
+      }
+
+      if (changed) {
+        document.linkedBy = performedBy;
+        document.linkedAt = performedAt;
+
+        await document.save({ session });
+
+        await writeAuditLog({
+          req,
+          session,
+          action: "LINK_TAX_DOCUMENT",
+          module: "Tax Center",
+          description:
+            `Linked ${documentNumber}`,
+          targetType: "TaxDocument",
+          targetId: documentNumber,
+          beforeValues,
+          afterValues: document.toObject(),
+        });
+      }
+
+      return document;
     });
-
-    if (!taxDocument) {
-      return res.status(404).json({
-        success: false,
-        message:
-          `Tax document ${documentNumber} was not found.`,
-      });
-    }
-
-    const userName = getUserName(req.user);
-    const linkNotes = cleanText(notes);
-
-    if (cleanText(taxNumber)) {
-      const normalizedTaxNumber =
-        cleanText(taxNumber);
-
-      assertLinkNotBeingReplaced({
-        currentReference: taxDocument.taxNumber,
-        requestedReference: normalizedTaxNumber,
-        linkName: "TaxRecord",
-      });
-
-      const taxRecord = await TaxRecord.findOne({
-        taxNumber: normalizedTaxNumber,
-      });
-
-      if (!taxRecord) {
-        return res.status(404).json({
-          success: false,
-          message:
-            `TaxRecord ${normalizedTaxNumber} was not found.`,
-        });
-      }
-
-      assertEntityCompatible({
-        taxDocument,
-        target: taxRecord,
-        targetName: `TaxRecord ${normalizedTaxNumber}`,
-      });
-
-      assertPeriodCompatible({
-        taxDocument,
-        target: taxRecord,
-        targetName: `TaxRecord ${normalizedTaxNumber}`,
-      });
-
-      assertTaxTypeCompatible({
-        taxDocument,
-        expectedTaxType: cleanText(
-          taxRecord.taxType
-        ),
-        targetName: `TaxRecord ${normalizedTaxNumber}`,
-      });
-
-      taxDocument.taxRecordId = taxRecord._id;
-      taxDocument.taxNumber =
-        taxRecord.taxNumber;
-
-      pushLinkHistory({
-        taxDocument,
-        targetType: "Tax Record",
-        targetReference: taxRecord.taxNumber,
-        notes: linkNotes,
-        userName,
-      });
-    }
-
-    if (cleanText(estimateNumber)) {
-      const normalizedEstimateNumber =
-        cleanText(estimateNumber);
-
-      assertLinkNotBeingReplaced({
-        currentReference:
-          taxDocument.estimateNumber,
-        requestedReference:
-          normalizedEstimateNumber,
-        linkName: "income-tax estimate",
-      });
-
-      const estimate =
-        await IncomeTaxEstimate.findOne({
-          estimateNumber:
-            normalizedEstimateNumber,
-        });
-
-      if (!estimate) {
-        return res.status(404).json({
-          success: false,
-          message:
-            `Income-tax estimate ${normalizedEstimateNumber} was not found.`,
-        });
-      }
-
-      assertEntityCompatible({
-        taxDocument,
-        target: estimate,
-        targetName:
-          `Income-tax estimate ${normalizedEstimateNumber}`,
-      });
-
-      assertPeriodCompatible({
-        taxDocument,
-        target: estimate,
-        targetName:
-          `Income-tax estimate ${normalizedEstimateNumber}`,
-      });
-
-      assertTaxTypeCompatible({
-        taxDocument,
-        expectedTaxType:
-          getIncomeTaxDocumentType(estimate),
-        targetName:
-          `Income-tax estimate ${normalizedEstimateNumber}`,
-      });
-
-      taxDocument.incomeTaxEstimateId =
-        estimate._id;
-      taxDocument.estimateNumber =
-        estimate.estimateNumber;
-
-      pushLinkHistory({
-        taxDocument,
-        targetType: "Income Tax Estimate",
-        targetReference:
-          estimate.estimateNumber,
-        notes: linkNotes,
-        userName,
-      });
-    }
-
-    if (cleanText(filingNumber)) {
-      const normalizedFilingNumber =
-        cleanText(filingNumber);
-
-      assertLinkNotBeingReplaced({
-        currentReference:
-          taxDocument.filingNumber,
-        requestedReference:
-          normalizedFilingNumber,
-        linkName: "GCT filing",
-      });
-
-      const filing =
-        await GctFilingPeriod.findOne({
-          filingNumber:
-            normalizedFilingNumber,
-        });
-
-      if (!filing) {
-        return res.status(404).json({
-          success: false,
-          message:
-            `GCT filing ${normalizedFilingNumber} was not found.`,
-        });
-      }
-
-      assertEntityCompatible({
-        taxDocument,
-        target: filing,
-        targetName:
-          `GCT filing ${normalizedFilingNumber}`,
-      });
-
-      assertPeriodCompatible({
-        taxDocument,
-        target: filing,
-        targetName:
-          `GCT filing ${normalizedFilingNumber}`,
-      });
-
-      assertTaxTypeCompatible({
-        taxDocument,
-        expectedTaxType: "GCT",
-        targetName:
-          `GCT filing ${normalizedFilingNumber}`,
-      });
-
-      taxDocument.gctFilingPeriodId =
-        filing._id;
-      taxDocument.filingNumber =
-        filing.filingNumber;
-
-      pushLinkHistory({
-        taxDocument,
-        targetType: "GCT Filing",
-        targetReference:
-          filing.filingNumber,
-        notes: linkNotes,
-        userName,
-      });
-    }
-
-    if (cleanText(transactionNumber)) {
-      const normalizedTransactionNumber =
-        cleanText(transactionNumber);
-
-      assertLinkNotBeingReplaced({
-        currentReference:
-          taxDocument.transactionNumber,
-        requestedReference:
-          normalizedTransactionNumber,
-        linkName: "tax payment transaction",
-      });
-
-      const transaction =
-        await AccountTransaction.findOne({
-          transactionNumber:
-            normalizedTransactionNumber,
-        });
-
-      if (!transaction) {
-        return res.status(404).json({
-          success: false,
-          message:
-            `Account transaction ${normalizedTransactionNumber} was not found.`,
-        });
-      }
-
-      if (
-        cleanText(transaction.transactionType) !==
-        "Tax Payment"
-      ) {
-        return res.status(409).json({
-          success: false,
-          message:
-            `${normalizedTransactionNumber} is a ${transaction.transactionType} transaction, not a Tax Payment.`,
-        });
-      }
-
-      if (
-        cleanText(taxNumber) &&
-        cleanText(transaction.reference) &&
-        cleanText(transaction.reference) !==
-          cleanText(taxNumber) &&
-        cleanText(transaction.ledgerReference) !==
-          cleanText(taxNumber)
-      ) {
-        return res.status(409).json({
-          success: false,
-          message:
-            `${normalizedTransactionNumber} does not reference TaxRecord ${cleanText(
-              taxNumber
-            )}.`,
-        });
-      }
-
-      taxDocument.accountTransactionId =
-        transaction._id;
-      taxDocument.transactionNumber =
-        transaction.transactionNumber;
-      taxDocument.journalEntryNumber =
-        transaction.journalEntryNumber || "";
-
-      pushLinkHistory({
-        taxDocument,
-        targetType: "Tax Payment",
-        targetReference:
-          transaction.transactionNumber,
-        notes: linkNotes,
-        userName,
-      });
-    }
-
-    taxDocument.linkedBy = userName;
-    taxDocument.linkedAt = new Date();
-
-    await taxDocument.save();
 
     return res.json({
       success: true,
       message:
-        `${documentNumber} linked successfully.`,
-      data: taxDocument,
+        "Document links checked and saved. Cloudinary storage was not changed.",
+      data,
     });
-  } catch (error) {
-    console.error(
-      "Tax document linkage error:",
-      error
-    );
-
-    return res
-      .status(error.statusCode || 400)
-      .json({
-        success: false,
-        message:
-          error.message ||
-          "Could not link the tax document.",
-      });
   }
-};
+);
 
 module.exports = {
   linkTaxDocument,

@@ -262,6 +262,67 @@ incomeTaxRuleSchema.pre(
   }
 );
 
+incomeTaxRuleSchema.pre(
+  "validate",
+  function validateActiveRule() {
+    if (this.status !== "Active") {
+      return;
+    }
+
+    if (
+      !this.sourceName?.trim() ||
+      (
+        !this.sourceUrl?.trim() &&
+        !this.sourceReference?.trim()
+      ) ||
+      !this.sourceVerifiedAt
+    ) {
+      throw new Error(
+        "An Active income-tax rule requires verified source information."
+      );
+    }
+
+    if (
+      !this.applicableEntityTypes
+        ?.length
+    ) {
+      throw new Error(
+        "An Active income-tax rule must identify its applicable business types."
+      );
+    }
+
+    if (
+      this.calculationMethod ===
+      "Progressive"
+    ) {
+      const {
+        validateBands,
+      } = require(
+        "../services/incomeTaxService"
+      );
+
+      validateBands(
+        this.rateBands
+      );
+    }
+
+    if (
+      this.calculationMethod ===
+        "Flat Rate" &&
+      (
+        !Number.isFinite(
+          this.flatRate
+        ) ||
+        this.flatRate <= 0 ||
+        this.flatRate > 1
+      )
+    ) {
+      throw new Error(
+        "Flat rate must be a decimal greater than zero and no more than one."
+      );
+    }
+  }
+);
 
 module.exports = mongoose.model(
   "IncomeTaxRule",

@@ -1,53 +1,41 @@
 const {
-  getTaxToGlReconciliation,
-} = require("../services/taxReconciliationService");
+  generateEntityPeriodTaxReconciliation,
+} = require(
+  "../services/taxEntityPeriodReconciliationService"
+);
 
-const getTaxGlReconciliation = async (
-  req,
-  res
-) => {
-  try {
-    const reconciliation =
-      await getTaxToGlReconciliation({
-        taxType: req.query.taxType || "",
+const T = require("../services/taxControl");
+
+const getTaxGlReconciliation = T.handler(
+  async (req, res) => {
+    const result =
+      await generateEntityPeriodTaxReconciliation({
+        entityCode: T.text(
+          req.query.entityCode,
+          "Business entity"
+        ).toUpperCase(),
+
+        periodKey: T.text(
+          req.query.periodKey,
+          "Reporting period"
+        ),
+
+        taxType: req.query.taxType
+          ? T.text(
+              req.query.taxType,
+              "Tax type"
+            )
+          : "",
       });
 
-    res.json({
+    return res.json({
       success: true,
       message:
-        "Tax-to-GL reconciliation generated successfully",
-      filters: {
-        taxType:
-          reconciliation.taxType || "",
-      },
-      generatedAt:
-        reconciliation.generatedAt,
-      summary: reconciliation.summary,
-      data: reconciliation.data,
-    });
-  } catch (error) {
-    console.error(
-      "Tax-to-GL reconciliation error:",
-      error
-    );
-
-    const statusCode =
-      /No General Ledger payable mapping exists/i.test(
-        error.message
-      )
-        ? 400
-        : 500;
-
-    res.status(statusCode).json({
-      success: false,
-      message:
-        statusCode === 400
-          ? error.message
-          : "Could not generate Tax-to-GL reconciliation",
-      error: error.message,
+        "Business-period Tax-to-GL comparison generated successfully.",
+      ...result,
     });
   }
-};
+);
 
 module.exports = {
   getTaxGlReconciliation,

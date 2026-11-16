@@ -4,40 +4,46 @@ const {
   "../services/taxEntityPeriodReconciliationService"
 );
 
-const getEntityPeriodTaxReconciliation = async (
-  req,
-  res
-) => {
-  try {
-    const result =
-      await generateEntityPeriodTaxReconciliation({
-        entityCode: req.query.entityCode,
-        periodKey: req.query.periodKey,
-        taxType: req.query.taxType,
-      });
+const T = require(
+  "../services/taxControl"
+);
 
-    return res.json({
-      success: true,
-      message:
-        "Entity-period Tax-to-GL reconciliation generated successfully.",
-      ...result,
-    });
-  } catch (error) {
-    console.error(
-      "Entity-period Tax-to-GL reconciliation error:",
-      error
-    );
+const getEntityPeriodTaxReconciliation =
+  T.handler(
+    async (req, res) => {
+      const entityCode = T.text(
+        req.query.entityCode,
+        "Business entity"
+      ).toUpperCase();
 
-    return res
-      .status(error.statusCode || 500)
-      .json({
-        success: false,
+      const periodKey = T.text(
+        req.query.periodKey,
+        "Reporting period"
+      );
+
+      const taxType = T.text(
+        req.query.taxType ?? "",
+        "Tax type",
+        false
+      );
+
+      const result =
+        await generateEntityPeriodTaxReconciliation({
+          entityCode,
+          periodKey,
+          taxType,
+        });
+
+      return res.json({
+        success: true,
+
         message:
-          error.message ||
-          "Could not generate entity-period Tax-to-GL reconciliation.",
+          "Entity-period Tax-to-GL comparison generated successfully.",
+
+        ...result,
       });
-  }
-};
+    }
+  );
 
 module.exports = {
   getEntityPeriodTaxReconciliation,

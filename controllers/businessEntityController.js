@@ -8,6 +8,16 @@ const {
   getBusinessEntitySnapshot,
 } = require("../services/businessEntityService");
 
+const T = require("../services/taxControl");
+
+const {
+  transact,
+} = require("../services/taxTransactionService");
+
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -494,138 +504,290 @@ const activateBusinessEntity = async (req, res) => {
   }
 };
 
-const configureBusinessEntityIncomeTax = async (
-  req,
-  res
-) => {
-  try {
-    const { entityCode } = req.params;
-    const { ruleCode, effectiveDate } = req.body;
-
-    if (!ruleCode || !effectiveDate) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Income-tax rule code and effective date are required.",
-      });
-    }
-
-    const entity = await BusinessEntity.findOne({
-      entityCode: String(entityCode || "")
-        .trim()
-        .toUpperCase(),
-    });
-
-    if (!entity) {
-      return res.status(404).json({
-        success: false,
-        message: "Business entity not found",
-      });
-    }
-
-    const rule = await IncomeTaxRule.findOne({
-      ruleCode: String(ruleCode || "")
-        .trim()
-        .toUpperCase(),
-    });
-
-    if (!rule) {
-      return res.status(404).json({
-        success: false,
-        message: "Income-tax rule not found",
-      });
-    }
-
-    if (rule.status !== "Active") {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Only an Active income-tax rule may be assigned to an entity.",
-      });
-    }
-
-    if (
-      rule.incomeTaxType !==
-      entity.taxTreatment?.incomeTaxType
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: `${rule.ruleCode} is configured for ${rule.incomeTaxType}, but ${entity.entityCode} uses ${entity.taxTreatment?.incomeTaxType || "an unconfigured income-tax type"}.`,
-      });
-    }
-
-    if (
-      !rule.applicableEntityTypes.includes(
-        entity.entityType
-      )
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: `${rule.ruleCode} does not apply to ${entity.entityType} entities.`,
-      });
-    }
-
-    const normalizedEffectiveDate =
-      normalizeEntityDate(
-        effectiveDate,
-        "Effective date"
+const configureBusinessEntityIncomeTax =
+  T.handler(async (req, res) => {
+    if (req.user?.role !== "Admin") {
+      T.fail(
+        "Only an administrator can assign an income-tax rule.",
+        403
       );
+    }
 
-    const checkDate = new Date(
-      `${normalizedEffectiveDate}T12:00:00.000Z`
+    const body = req.body || {};
+
+    const entityCode = T.text(
+      req.params.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const ruleCode = T.text(
+      body.ruleCode,
+      "Income-tax rule code"
+    ).toUpperCase();
+
+    const effectiveDate = T.date(
+      body.effectiveDate,
+      "Configuration effective date"
     );
 
-    if (
-      checkDate < new Date(rule.effectiveFrom) ||
-      (rule.effectiveTo &&
-        checkDate > new Date(rule.effectiveTo))
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: `${rule.ruleCode} is not effective on ${normalizedEffectiveDate}.`,
-      });
-    }
+    const data = await transact(
+      async (session) => {
+        const entity =
+          await BusinessEntity.findOne({
+            entityCode,
+          }).session(session);
 
-    if (
-      normalizedEffectiveDate <
-        entity.effectiveFrom ||
-      (entity.effectiveTo &&
-        normalizedEffectiveDate >
-          entity.effectiveTo)
-    ) {
-      return res.status(409).json({
-        success: false,
-        message: `${entity.entityCode} is not effective on ${normalizedEffectiveDate}.`,
-      });
-    }
+        if (!entity) {
+          T.fail(
+            "Business entity not found.",
+            404
+          );
+        }
 
-    entity.taxTreatment.incomeTaxRuleCode =
-      rule.ruleCode;
+        if (
+          ![
+            "Planned",
+            "Registration In Progress",
+            "Registered",
+            "Active",
+          ].includes(
+            entity.lifecycleStatus
+          )
+        ) {
+          T.fail(
+            "Income-tax configuration cannot be changed for an inactive or closed business.",
+            409
+          );
+        }
 
-    entity.taxTreatment.taxConfigurationStatus =
-      "Configured";
+        const existingRuleCode =
+          entity.taxTreatment
+            ?.incomeTaxRuleCode || "";
 
-    entity.updatedBy = getUserName(req.user);
+        if (
+          entity.lifecycleStatus ===
+            "Active" &&
+          existingRuleCode &&
+          existingRuleCode !== ruleCode
+        ) {
+          T.fail(
+            "Replacing an operating business's assigned rule requires a separately reviewed effective-dated change. This setup action cannot overwrite it.",
+            409
+          );
+        }
 
-    await entity.save();
+        const entityStart = T.date(
+          entity.effectiveFrom,
+          "Business effective-from date"
+        );
 
-    res.json({
+        const entityEnd =
+          entity.effectiveTo
+            ? T.date(
+                entity.effectiveTo,
+                "Business effective-to date"
+              )
+            : "";
+
+        if (
+          effectiveDate < entityStart ||
+          (
+            entityEnd &&
+            effectiveDate > entityEnd
+          )
+        ) {
+          T.fail(
+            "The configuration date must fall within the business's effective period.",
+            409
+          );
+        }
+
+        const expectedIncomeTaxType = {
+          "Sole Proprietorship":
+            "Individual Income Tax",
+
+          "Limited Liability Company":
+            "Company Income Tax",
+        }[entity.entityType];
+
+        if (!expectedIncomeTaxType) {
+          T.fail(
+            "This business type requires a separately supported income-tax configuration.",
+            409
+          );
+        }
+
+        const configuredType =
+          entity.taxTreatment
+            ?.incomeTaxType;
+
+        if (
+          configuredType &&
+          configuredType !==
+            "Not Configured" &&
+          configuredType !==
+            expectedIncomeTaxType
+        ) {
+          T.fail(
+            "The business's existing income-tax type conflicts with its entity type.",
+            409
+          );
+        }
+
+        const rule =
+          await IncomeTaxRule.findOne({
+            ruleCode,
+            status: "Active",
+            countryCode: "JM",
+            currency: "JMD",
+
+            incomeTaxType:
+              expectedIncomeTaxType,
+
+            applicableEntityTypes:
+              entity.entityType,
+          }).session(session);
+
+        if (!rule) {
+          T.fail(
+            "An Active JMD income-tax rule matching this business type is required.",
+            409
+          );
+        }
+
+        if (
+          !rule.sourceName?.trim() ||
+          (
+            !rule.sourceUrl?.trim() &&
+            !rule.sourceReference?.trim()
+          ) ||
+          !rule.sourceVerifiedAt
+        ) {
+          T.fail(
+            "The income-tax rule requires verified source information.",
+            409
+          );
+        }
+
+        const ruleStart =
+          new Date(
+            rule.effectiveFrom
+          );
+
+        const ruleEnd =
+          rule.effectiveTo
+            ? new Date(
+                rule.effectiveTo
+              )
+            : null;
+
+        if (
+          !Number.isFinite(
+            ruleStart.getTime()
+          ) ||
+          (
+            ruleEnd &&
+            !Number.isFinite(
+              ruleEnd.getTime()
+            )
+          )
+        ) {
+          T.fail(
+            "The income-tax rule has invalid effective dates.",
+            409
+          );
+        }
+
+        if (
+          ruleStart
+            .toISOString()
+            .slice(0, 10) >
+            effectiveDate ||
+          (
+            ruleEnd &&
+            ruleEnd
+              .toISOString()
+              .slice(0, 10) <
+              effectiveDate
+          )
+        ) {
+          T.fail(
+            "The income-tax rule does not cover the configuration date.",
+            409
+          );
+        }
+
+        const beforeValues =
+          entity.toObject();
+
+        entity.taxTreatment
+          .incomeTaxType =
+          expectedIncomeTaxType;
+
+        entity.taxTreatment
+          .incomeTaxRuleCode =
+          rule.ruleCode;
+
+        entity.taxTreatment
+          .taxConfigurationStatus =
+          "Configured";
+
+        entity.updatedBy =
+          T.actor(req);
+
+        await entity.save({
+          session,
+        });
+
+        await writeAuditLog({
+          req,
+          session,
+
+          action:
+            "ASSIGN_ENTITY_INCOME_TAX_RULE",
+
+          module:
+            "Business Entities",
+
+          description:
+            `Assigned ${rule.ruleCode} to ${entity.entityCode}`,
+
+          targetType:
+            "BusinessEntity",
+
+          targetId:
+            entity.entityCode,
+
+          beforeValues,
+
+          afterValues:
+            entity.toObject(),
+
+          metadata: {
+            configurationCheckedForDate:
+              effectiveDate,
+
+            ruleCode:
+              rule.ruleCode,
+
+            incomeTaxType:
+              expectedIncomeTaxType,
+          },
+        });
+
+        return entity;
+      }
+    );
+
+    return res.json({
       success: true,
-      message: `${rule.ruleCode} assigned to ${entity.entityCode} successfully.`,
-      data: entity,
-    });
-  } catch (error) {
-    console.error(
-      "Configure entity income-tax error:",
-      error
-    );
 
-    res.status(400).json({
-      success: false,
-      message: error.message,
+      message:
+        `${ruleCode} assigned to ${entityCode}. Business activation was not changed.`,
+
+      data,
     });
-  }
-};
+  });
 
 
 module.exports = {

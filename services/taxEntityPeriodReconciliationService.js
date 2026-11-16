@@ -1,289 +1,103 @@
-const TaxRecord = require("../models/TaxRecord");
-const BusinessEntity = require("../models/BusinessEntity");
+const TaxRecord = require(
+  "../models/TaxRecord"
+);
+
+const BusinessEntity = require(
+  "../models/BusinessEntity"
+);
+
 const GeneralLedgerTransaction = require(
   "../models/GeneralLedgerTransaction"
 );
 
-const roundMoney = (value) =>
-  Math.round(
-    (Number(value || 0) + Number.EPSILON) * 100
-  ) / 100;
+const JournalEntry = require(
+  "../models/JournalEntry"
+);
 
-const TAX_ACCOUNT_MAP = {
-  PAYE: {
-    accountCode: "2100",
-    accountName: "PAYE Payable",
-  },
+const AccountTransaction = require(
+  "../models/AccountTransaction"
+);
 
-  NIS: {
-    accountCode: "2110",
-    accountName: "NIS Payable",
-  },
+const T = require("./taxControl");
 
-  NHT: {
-    accountCode: "2120",
-    accountName: "NHT Payable",
-  },
+const TAX_ACCOUNT_MAP = Object.fromEntries(
+  Object.entries(T.map).map(
+    ([taxType, accountCode]) => [
+      taxType,
+      {
+        accountCode,
+        accountName: `${taxType} Payable`,
+      },
+    ]
+  )
+);
 
-  "Education Tax": {
-    accountCode: "2130",
-    accountName: "Education Tax Payable",
-  },
-
-  Pension: {
-    accountCode: "2140",
-    accountName: "Pension Payable",
-  },
-
-  HEART: {
-    accountCode: "2150",
-    accountName: "HEART Payable",
-  },
-
-  GCT: {
-    accountCode: "2160",
-    accountName: "GCT Output Tax Payable",
-  },
-
-  "Income Tax": {
-    accountCode: "2170",
-    accountName:
-      "Individual Income Tax Payable",
-  },
-
-  "Company Tax": {
-    accountCode: "2180",
-    accountName:
-      "Company Income Tax Payable",
-  },
-};
-
-const cleanText = (value) =>
-  String(value || "").trim();
-
-const getPeriodDates = (periodKey) => {
-  if (/^\d{4}$/.test(periodKey)) {
-    return {
-      startDate: `${periodKey}-01-01`,
-      endDate: `${periodKey}-12-31`,
-    };
-  }
-
-  if (/^\d{4}-\d{2}$/.test(periodKey)) {
-    const [year, month] = periodKey
-      .split("-")
-      .map(Number);
-
-    const lastDay = new Date(
-      Date.UTC(year, month, 0)
-    )
-      .toISOString()
-      .slice(0, 10);
-
-    return {
-      startDate: `${periodKey}-01`,
-      endDate: lastDay,
-    };
-  }
-
-  const error = new Error(
-    "Period key must use YYYY or YYYY-MM format."
-  );
-
-  error.statusCode = 400;
-  throw error;
-};
-
-const validateEntityPeriod = ({
-  entity,
-  startDate,
-  endDate,
-}) => {
-  const entityStart = cleanText(
-    entity.effectiveFrom
-  );
-
-  const entityEnd = cleanText(
-    entity.effectiveTo
-  );
-
-  if (
-    entityStart &&
-    startDate < entityStart
-  ) {
-    const error = new Error(
-      `${entity.entityCode} was not effective at the start of the selected period.`
-    );
-
-    error.statusCode = 409;
-    throw error;
-  }
-
-  if (
-    entityEnd &&
-    endDate > entityEnd
-  ) {
-    const error = new Error(
-      `${entity.entityCode} was not effective through the end of the selected period.`
-    );
-
-    error.statusCode = 409;
-    throw error;
-  }
-};
-
-const calculateGlCreditBalance = (transactions) =>
-  roundMoney(
-    transactions.reduce(
-      (sum, transaction) =>
-        sum +
-        Number(transaction.credit || 0) -
-        Number(transaction.debit || 0),
+const sumSide = (
+  rows,
+  field
+) =>
+  T.round(
+    rows.reduce(
+      (total, row) =>
+        total +
+        T.amount(
+          row[field] ?? 0,
+          `Recorded ${field}`
+        ),
       0
     )
   );
 
-const buildAccountReconciliation = ({
-  taxType,
-  account,
-  taxRecords,
-  ledgerTransactions,
-  unattributedTransactions,
-}) => {
-  const recordsForType = taxRecords.filter(
-    (record) => record.taxType === taxType
+const getPeriodScope = (value) => {
+  const periodKey = T.text(
+    value,
+    "Reporting period"
   );
 
-  const ledgerForAccount =
-    ledgerTransactions.filter(
-      (transaction) =>
-        transaction.accountCode ===
-        account.accountCode
-    );
+  const annual =
+    /^\d{4}$/.test(periodKey);
 
-  const unattributedForAccount =
-    unattributedTransactions.filter(
-      (transaction) =>
-        transaction.accountCode ===
-        account.accountCode
-    );
+  if (annual) {
+    T.date(`${periodKey}-01-01`);
+  } else {
+    T.period(periodKey);
+  }
 
-  const calculatedLiability = roundMoney(
-    recordsForType.reduce(
-      (sum, record) =>
-        sum + Number(record.taxDue || 0),
-      0
-    )
-  );
+  const startDate = annual
+    ? `${periodKey}-01-01`
+    : `${periodKey}-01`;
 
-  const recordedPayments = roundMoney(
-    recordsForType.reduce(
-      (sum, record) =>
-        sum + Number(record.amountPaid || 0),
-      0
-    )
-  );
+  const endDate = annual
+    ? `${periodKey}-12-31`
+    : new Date(
+        Date.UTC(
+          Number(periodKey.slice(0, 4)),
+          Number(periodKey.slice(5, 7)),
+          0,
+          12
+        )
+      )
+        .toISOString()
+        .slice(0, 10);
 
-  const taxCenterBalance = roundMoney(
-    recordsForType.reduce(
-      (sum, record) =>
-        sum + Number(record.balanceDue || 0),
-      0
-    )
-  );
-
-  const glBalance =
-    calculateGlCreditBalance(
-      ledgerForAccount
-    );
-
-  const reconciliationDifference = roundMoney(
-    taxCenterBalance - glBalance
-  );
+  const periodKeys = annual
+    ? [
+        periodKey,
+        ...Array.from(
+          { length: 12 },
+          (_, index) =>
+            `${periodKey}-${String(
+              index + 1
+            ).padStart(2, "0")}`
+        ),
+      ]
+    : [periodKey];
 
   return {
-    taxType,
-    accountCode: account.accountCode,
-    accountName: account.accountName,
-
-    recordCount: recordsForType.length,
-
-    calculatedLiability,
-    recordedPayments,
-    taxCenterBalance,
-    glBalance,
-    reconciliationDifference,
-
-    reconciled:
-      Math.abs(reconciliationDifference) < 0.01,
-
-    ledgerTransactionCount:
-      ledgerForAccount.length,
-
-    unattributedLedgerTransactionCount:
-      unattributedForAccount.length,
-
-    warning:
-      unattributedForAccount.length > 0
-        ? `${unattributedForAccount.length} ledger transaction(s) in the date range have no entity or reporting-period attribution and were excluded.`
-        : "",
-
-    records: recordsForType.map((record) => ({
-      taxNumber: record.taxNumber,
-      entityCode: record.entityCode,
-      periodKey: record.periodKey,
-      status: record.status,
-      taxDue: roundMoney(record.taxDue),
-      amountPaid: roundMoney(
-        record.amountPaid
-      ),
-      balanceDue: roundMoney(
-        record.balanceDue
-      ),
-      journalEntryNumber:
-        record.journalEntryNumber || "",
-    })),
-
-    ledgerTransactions:
-      ledgerForAccount.map((transaction) => ({
-        ledgerNumber:
-          transaction.ledgerNumber,
-        entryNumber: transaction.entryNumber,
-        entryDate: transaction.entryDate,
-        reference: transaction.reference,
-        sourceModule:
-          transaction.sourceModule,
-        entityCode: transaction.entityCode,
-        reportingPeriodKey:
-          transaction.reportingPeriodKey,
-        debit: roundMoney(transaction.debit),
-        credit: roundMoney(
-          transaction.credit
-        ),
-        description:
-          transaction.description || "",
-      })),
-
-    unattributedLedgerTransactions:
-      unattributedForAccount.map(
-        (transaction) => ({
-          ledgerNumber:
-            transaction.ledgerNumber,
-          entryNumber:
-            transaction.entryNumber,
-          entryDate:
-            transaction.entryDate,
-          reference: transaction.reference,
-          sourceModule:
-            transaction.sourceModule,
-          debit: roundMoney(
-            transaction.debit
-          ),
-          credit: roundMoney(
-            transaction.credit
-          ),
-        })
-      ),
+    periodKey,
+    startDate,
+    endDate,
+    periodKeys,
   };
 };
 
@@ -292,284 +106,817 @@ const generateEntityPeriodTaxReconciliation =
     entityCode,
     periodKey,
     taxType = "",
+    session = null,
   }) => {
     const normalizedEntityCode =
-      cleanText(entityCode);
+      T.text(
+        entityCode,
+        "Business entity"
+      ).toUpperCase();
 
-    const normalizedPeriodKey =
-      cleanText(periodKey);
+    const scope =
+      getPeriodScope(periodKey);
 
-    const normalizedTaxType =
-      cleanText(taxType);
-
-    if (!normalizedEntityCode) {
-      const error = new Error(
-        "An entity code is required."
-      );
-
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const {
-      startDate,
-      endDate,
-    } = getPeriodDates(normalizedPeriodKey);
-
-    const entity = await BusinessEntity.findOne({
-      entityCode: normalizedEntityCode,
-    });
+    const entity =
+      await BusinessEntity.findOne({
+        entityCode:
+          normalizedEntityCode,
+      })
+        .session(session)
+        .lean();
 
     if (!entity) {
-      const error = new Error(
-        `Business entity ${normalizedEntityCode} was not found.`
+      T.fail(
+        "Business entity not found.",
+        404
       );
-
-      error.statusCode = 404;
-      throw error;
     }
-
-    validateEntityPeriod({
-      entity,
-      startDate,
-      endDate,
-    });
 
     if (
-      normalizedTaxType &&
-      !TAX_ACCOUNT_MAP[normalizedTaxType]
+      scope.endDate <
+        entity.effectiveFrom ||
+      (
+        entity.effectiveTo &&
+        scope.startDate >
+          entity.effectiveTo
+      )
     ) {
-      const error = new Error(
-        `Unsupported tax type ${normalizedTaxType}.`
+      T.fail(
+        "The selected business entity does not overlap this reporting period.",
+        409
       );
-
-      error.statusCode = 400;
-      throw error;
     }
+
+    const normalizedTaxType =
+      taxType
+        ? T.canonical(
+            T.text(
+              taxType,
+              "Tax type"
+            )
+          )
+        : "";
 
     const selectedTaxTypes =
       normalizedTaxType
         ? [normalizedTaxType]
         : Object.keys(TAX_ACCOUNT_MAP);
 
-    const selectedAccountCodes =
+    if (
+      selectedTaxTypes.some(
+        (type) =>
+          !TAX_ACCOUNT_MAP[type]
+      )
+    ) {
+      T.fail(
+        "No supported payable mapping exists for the selected tax type."
+      );
+    }
+
+    const accountCodes =
       selectedTaxTypes.map(
-        (selectedType) =>
-          TAX_ACCOUNT_MAP[selectedType]
+        (type) =>
+          TAX_ACCOUNT_MAP[type]
             .accountCode
       );
 
-    const [
-      taxRecords,
-      ledgerTransactions,
-      unattributedTransactions,
-    ] = await Promise.all([
-      TaxRecord.find({
-        entityCode: normalizedEntityCode,
-        periodKey: normalizedPeriodKey,
+    const acceptedTaxNames =
+      selectedTaxTypes.flatMap(
+        T.variants
+      );
+
+    const includedStatuses = [
+      "Reviewed",
+      "Approved",
+      "Submitted",
+      "Partially Paid",
+      "Paid",
+      "Reconciled",
+      "Overdue",
+    ];
+
+    const taxRecords =
+      await TaxRecord.find({
+        entityCode:
+          normalizedEntityCode,
+
+        periodKey: {
+          $in: scope.periodKeys,
+        },
 
         taxType: {
-          $in: selectedTaxTypes,
+          $in: acceptedTaxNames,
         },
 
         status: {
-          $nin: ["Cancelled", "Reversed"],
+          $in: includedStatuses,
         },
-      }).sort({
-        taxType: 1,
-        taxNumber: 1,
-      }),
+      })
+        .session(session)
+        .lean();
 
-      GeneralLedgerTransaction.find({
-        entityCode: normalizedEntityCode,
+    const unattributedTaxRecords =
+      await TaxRecord.find({
+        entityCode: {
+          $in: ["", null],
+        },
 
-        reportingPeriodKey:
-          normalizedPeriodKey,
+        periodKey: {
+          $in: scope.periodKeys,
+        },
+
+        taxType: {
+          $in: acceptedTaxNames,
+        },
+
+        status: {
+          $in: includedStatuses,
+        },
+      })
+        .session(session)
+        .lean();
+
+    const ledgerTransactions =
+      await GeneralLedgerTransaction.find({
+        entityCode:
+          normalizedEntityCode,
+
+        reportingPeriodKey: {
+          $in: scope.periodKeys,
+        },
 
         accountCode: {
-          $in: selectedAccountCodes,
+          $in: accountCodes,
         },
-      }).sort({
-        entryDate: 1,
-        ledgerNumber: 1,
-      }),
+      })
+        .session(session)
+        .lean();
 
-      GeneralLedgerTransaction.find({
+    const unattributedTransactions =
+      await GeneralLedgerTransaction.find({
         accountCode: {
-          $in: selectedAccountCodes,
+          $in: accountCodes,
         },
 
-        entryDate: {
-          $gte: startDate,
-          $lte: endDate,
-        },
+        $and: [
+          {
+            $or: [
+              {
+                entryDate: {
+                  $gte:
+                    scope.startDate,
 
-        $or: [
-          { entityCode: "" },
-          { entityCode: null },
-          {
-            entityCode: {
-              $exists: false,
-            },
+                  $lte:
+                    scope.endDate,
+                },
+              },
+              {
+                reportingPeriodKey: {
+                  $in:
+                    scope.periodKeys,
+                },
+              },
+            ],
           },
-          { reportingPeriodKey: "" },
           {
-            reportingPeriodKey: null,
-          },
-          {
-            reportingPeriodKey: {
-              $exists: false,
-            },
+            $or: [
+              {
+                entityCode: {
+                  $in: ["", null],
+                },
+              },
+              {
+                entityCode:
+                  normalizedEntityCode,
+
+                reportingPeriodKey: {
+                  $in: ["", null],
+                },
+              },
+            ],
           },
         ],
-      }).sort({
-        entryDate: 1,
-        ledgerNumber: 1,
-      }),
-    ]);
+      })
+        .session(session)
+        .lean();
 
-    const data = selectedTaxTypes.map(
-      (selectedType) =>
-        buildAccountReconciliation({
-          taxType: selectedType,
-          account:
-            TAX_ACCOUNT_MAP[selectedType],
-          taxRecords,
-          ledgerTransactions,
-          unattributedTransactions,
-        })
+    const journalNumbers = [
+      ...new Set(
+        ledgerTransactions.map(
+          (transaction) =>
+            transaction.entryNumber
+        )
+      ),
+    ];
+
+    const journals =
+      await JournalEntry.find({
+        entryNumber: {
+          $in: journalNumbers,
+        },
+      })
+        .session(session)
+        .lean();
+
+    const journalMap = new Map(
+      journals.map(
+        (journal) => [
+          journal.entryNumber,
+          journal,
+        ]
+      )
     );
 
-    const summary = data.reduce(
-      (totals, item) => ({
-        calculatedLiability: roundMoney(
-          totals.calculatedLiability +
-            item.calculatedLiability
-        ),
+    const data = [];
 
-        recordedPayments: roundMoney(
-          totals.recordedPayments +
-            item.recordedPayments
-        ),
+    for (
+      const currentTaxType
+      of selectedTaxTypes
+    ) {
+      const account =
+        TAX_ACCOUNT_MAP[
+          currentTaxType
+        ];
 
-        taxCenterBalance: roundMoney(
-          totals.taxCenterBalance +
-            item.taxCenterBalance
-        ),
+      const recordsForType =
+        taxRecords.filter(
+          (record) =>
+            T.canonical(
+              record.taxType
+            ) === currentTaxType
+        );
 
-        glBalance: roundMoney(
-          totals.glBalance +
-            item.glBalance
-        ),
+      const missingEntityRecords =
+        unattributedTaxRecords.filter(
+          (record) =>
+            T.canonical(
+              record.taxType
+            ) === currentTaxType
+        );
 
-        absoluteDifference: roundMoney(
-          totals.absoluteDifference +
-            Math.abs(
-              item.reconciliationDifference
+      const ledgerForAccount =
+        ledgerTransactions.filter(
+          (transaction) =>
+            transaction.accountCode ===
+            account.accountCode
+        );
+
+      const unattributedForAccount =
+        unattributedTransactions.filter(
+          (transaction) =>
+            transaction.accountCode ===
+            account.accountCode
+        );
+
+      const issues = [];
+
+      let calculatedLiability = 0;
+      let recordedPayments = 0;
+      let taxCenterBalance = 0;
+
+      for (
+        const record
+        of recordsForType
+      ) {
+        const taxDue = T.amount(
+          record.taxDue,
+          "Recorded tax due"
+        );
+
+        const amountPaid = T.amount(
+          record.amountPaid,
+          "Recorded payments"
+        );
+
+        const balanceDue = T.amount(
+          record.balanceDue,
+          "Recorded tax balance"
+        );
+
+        calculatedLiability +=
+          taxDue;
+
+        recordedPayments +=
+          amountPaid;
+
+        taxCenterBalance +=
+          balanceDue;
+
+        if (
+          amountPaid > taxDue ||
+          T.round(
+            taxDue - amountPaid
+          ) !== balanceDue
+        ) {
+          issues.push(
+            `${record.taxNumber}: recorded payment and balance amounts are inconsistent.`
+          );
+        }
+
+        if (
+          record.entitySnapshot
+            ?.entityCode &&
+          record.entitySnapshot
+            .entityCode !==
+            normalizedEntityCode
+        ) {
+          issues.push(
+            `${record.taxNumber}: entity snapshot conflicts with the recorded entity.`
+          );
+        }
+
+        let remittedAmount = 0;
+
+        for (
+          const remittance
+          of record.remittances || []
+        ) {
+          const amount = T.amount(
+            remittance.amount,
+            "Remittance amount"
+          );
+
+          remittedAmount += amount;
+
+          const transaction =
+            await AccountTransaction.findOne({
+              taxNumber:
+                record.taxNumber,
+
+              journalEntryNumber:
+                remittance.journalEntryNumber,
+
+              reference:
+                remittance.paymentReference,
+
+              transactionType:
+                "Tax Payment",
+            })
+              .session(session)
+              .lean();
+
+          const paymentJournal =
+            await JournalEntry.findOne({
+              entryNumber:
+                remittance.journalEntryNumber,
+
+              entityCode:
+                normalizedEntityCode,
+
+              status: "Posted",
+            })
+              .session(session)
+              .lean();
+
+          if (
+            !transaction ||
+            T.amount(
+              transaction.amount
+            ) !== amount ||
+            transaction.taxPeriodKey !==
+              record.periodKey ||
+            T.canonical(
+              transaction.taxType
+            ) !== currentTaxType ||
+            !paymentJournal ||
+            paymentJournal
+              .reversalEntryNumber ||
+            paymentJournal
+              .reportingPeriodKey !==
+              record.periodKey
+          ) {
+            issues.push(
+              `${record.taxNumber}: remittance transaction or journal evidence requires review.`
+            );
+
+            continue;
+          }
+
+          const payableLines =
+            (
+              paymentJournal.lines ||
+              []
+            ).filter(
+              (line) =>
+                line.accountCode ===
+                account.accountCode
+            );
+
+          const fundingLines =
+            (
+              paymentJournal.lines ||
+              []
+            ).filter(
+              (line) =>
+                line.accountCode ===
+                transaction.linkedChartAccountCode
+            );
+
+          if (
+            !transaction
+              .linkedChartAccountCode ||
+            sumSide(
+              payableLines,
+              "debit"
+            ) !== amount ||
+            sumSide(
+              payableLines,
+              "credit"
+            ) !== 0 ||
+            sumSide(
+              fundingLines,
+              "credit"
+            ) !== amount ||
+            sumSide(
+              fundingLines,
+              "debit"
+            ) !== 0
+          ) {
+            issues.push(
+              `${record.taxNumber}: the payment journal does not match the remittance amount and account mapping.`
+            );
+          }
+        }
+
+        if (
+          T.round(
+            remittedAmount
+          ) !== amountPaid
+        ) {
+          issues.push(
+            `${record.taxNumber}: remittances do not equal the recorded amount paid.`
+          );
+        }
+      }
+
+      const glDebit = sumSide(
+        ledgerForAccount,
+        "debit"
+      );
+
+      const glCredit = sumSide(
+        ledgerForAccount,
+        "credit"
+      );
+
+      const glBalance = T.round(
+        glCredit - glDebit
+      );
+
+      const entriesForAccount = [
+        ...new Set(
+          ledgerForAccount.map(
+            (line) =>
+              line.entryNumber
+          )
+        ),
+      ];
+
+      for (
+        const entryNumber
+        of entriesForAccount
+      ) {
+        const journal =
+          journalMap.get(
+            entryNumber
+          );
+
+        const ledgerLines =
+          ledgerForAccount.filter(
+            (line) =>
+              line.entryNumber ===
+              entryNumber
+          );
+
+        if (
+          !journal ||
+          ![
+            "Posted",
+            "Reversed",
+          ].includes(
+            journal.status
+          ) ||
+          journal.entityCode !==
+            normalizedEntityCode ||
+          ledgerLines.some(
+            (line) =>
+              line.reportingPeriodKey !==
+              journal.reportingPeriodKey
+          )
+        ) {
+          issues.push(
+            `${entryNumber}: journal status or entity/period attribution requires review.`
+          );
+
+          continue;
+        }
+
+        if (
+          journal.status ===
+            "Reversed" &&
+          !journal.reversalEntryNumber
+        ) {
+          issues.push(
+            `${entryNumber}: the reversed journal has no reversal reference.`
+          );
+        }
+
+        const journalLines =
+          (
+            journal.lines || []
+          ).filter(
+            (line) =>
+              line.accountCode ===
+              account.accountCode
+          );
+
+        if (
+          sumSide(
+            journalLines,
+            "debit"
+          ) !==
+            sumSide(
+              ledgerLines,
+              "debit"
+            ) ||
+          sumSide(
+            journalLines,
+            "credit"
+          ) !==
+            sumSide(
+              ledgerLines,
+              "credit"
             )
-        ),
+        ) {
+          issues.push(
+            `${entryNumber}: journal and ledger debit/credit amounts disagree.`
+          );
+        }
+      }
 
-        reconciledAccountCount:
-          totals.reconciledAccountCount +
-          (item.reconciled ? 1 : 0),
+      if (
+        unattributedForAccount.length
+      ) {
+        issues.push(
+          `${unattributedForAccount.length} ledger transaction(s) have missing entity or reporting-period attribution and were excluded.`
+        );
+      }
 
-        unreconciledAccountCount:
-          totals.unreconciledAccountCount +
-          (item.reconciled ? 0 : 1),
+      if (
+        missingEntityRecords.length
+      ) {
+        issues.push(
+          `${missingEntityRecords.length} tax record(s) have no confirmed business entity and were excluded.`
+        );
+      }
+
+      if (
+        recordsForType.length > 0 &&
+        ledgerForAccount.length === 0 &&
+        calculatedLiability > 0
+      ) {
+        issues.push(
+          "No supporting liability ledger entries were found."
+        );
+      }
+
+      calculatedLiability =
+        T.round(
+          calculatedLiability
+        );
+
+      recordedPayments =
+        T.round(
+          recordedPayments
+        );
+
+      taxCenterBalance =
+        T.round(
+          taxCenterBalance
+        );
+
+      const difference = T.round(
+        taxCenterBalance -
+          glBalance
+      );
+
+      const uniqueIssues = [
+        ...new Set(issues),
+      ];
+
+      const hasActivity =
+        recordsForType.length > 0 ||
+        ledgerForAccount.length > 0;
+
+      const reconciled =
+        hasActivity &&
+        difference === 0 &&
+        uniqueIssues.length === 0;
+
+      const status =
+        uniqueIssues.length > 0
+          ? "Review required"
+          : !hasActivity
+            ? "No activity"
+            : reconciled
+              ? "Matched"
+              : "Difference";
+
+      data.push({
+        taxType:
+          currentTaxType,
+
+        accountCode:
+          account.accountCode,
+
+        accountName:
+          account.accountName,
+
+        recordCount:
+          recordsForType.length,
+
+        calculatedLiability,
+        recordedPayments,
+        taxCenterBalance,
+        glBalance,
+
+        reconciliationDifference:
+          difference,
+
+        reconciled,
+        status,
+
+        issues:
+          uniqueIssues,
+
+        ledgerTransactionCount:
+          ledgerForAccount.length,
 
         unattributedLedgerTransactionCount:
-          totals.unattributedLedgerTransactionCount +
-          item
-            .unattributedLedgerTransactionCount,
-      }),
-      {
-        calculatedLiability: 0,
-        recordedPayments: 0,
-        taxCenterBalance: 0,
-        glBalance: 0,
-        absoluteDifference: 0,
-        reconciledAccountCount: 0,
-        unreconciledAccountCount: 0,
-        unattributedLedgerTransactionCount: 0,
+          unattributedForAccount.length,
+
+        unattributedTaxRecordCount:
+          missingEntityRecords.length,
+
+        records:
+          recordsForType,
+
+        ledgerTransactions:
+          ledgerForAccount,
+
+        unattributedLedgerTransactions:
+          unattributedForAccount,
+
+        warning:
+          uniqueIssues.join(" "),
+      });
+    }
+
+    const summary = {
+      calculatedLiability: 0,
+      recordedPayments: 0,
+      taxCenterBalance: 0,
+      glBalance: 0,
+      absoluteDifference: 0,
+      reconciledAccountCount: 0,
+      unreconciledAccountCount: 0,
+      noActivityAccountCount: 0,
+      unattributedLedgerTransactionCount: 0,
+      unattributedTaxRecordCount: 0,
+    };
+
+    for (const row of data) {
+      for (
+        const field
+        of [
+          "calculatedLiability",
+          "recordedPayments",
+          "taxCenterBalance",
+          "glBalance",
+        ]
+      ) {
+        summary[field] = T.round(
+          summary[field] +
+            row[field]
+        );
       }
-    );
+
+      summary.absoluteDifference =
+        T.round(
+          summary.absoluteDifference +
+            Math.abs(
+              row.reconciliationDifference
+            )
+        );
+
+      summary.unattributedLedgerTransactionCount +=
+        row.unattributedLedgerTransactionCount;
+
+      summary.unattributedTaxRecordCount +=
+        row.unattributedTaxRecordCount;
+
+      if (
+        row.status === "No activity"
+      ) {
+        summary.noActivityAccountCount +=
+          1;
+      } else if (
+        row.reconciled
+      ) {
+        summary.reconciledAccountCount +=
+          1;
+      } else {
+        summary.unreconciledAccountCount +=
+          1;
+      }
+    }
+
+    summary.evidenceChecked = true;
+
+    summary.matched =
+      summary.reconciledAccountCount >
+        0 &&
+      summary.unreconciledAccountCount ===
+        0;
 
     return {
       filters: {
-        entityCode: normalizedEntityCode,
-        periodKey: normalizedPeriodKey,
-        taxType: normalizedTaxType,
+        entityCode:
+          normalizedEntityCode,
+
+        periodKey:
+          scope.periodKey,
+
+        taxType:
+          normalizedTaxType,
       },
 
-      entity: {
-        entityId: entity._id,
-        entityCode: entity.entityCode,
-        legalName: entity.legalName,
-        entityType: entity.entityType,
-        effectiveFrom: entity.effectiveFrom,
-        effectiveTo: entity.effectiveTo,
-      },
+      entity,
 
       period: {
-        periodKey: normalizedPeriodKey,
-        startDate,
-        endDate,
+        periodKey:
+          scope.periodKey,
+
+        startDate:
+          scope.startDate,
+
+        endDate:
+          scope.endDate,
       },
 
-      generatedAt: new Date(),
+      generatedAt:
+        new Date(),
+
       summary,
       data,
+
+      notice:
+        "Recorded Tax-to-GL comparison only. Matching balances do not establish source completeness or bank reconciliation. Later payments attributed to the selected reporting period are included.",
     };
   };
 
 const assertEntityPeriodTaxTypeReconciled =
-  async ({
-    entityCode,
-    periodKey,
-    taxType,
-  }) => {
+  async (options) => {
     const result =
-      await generateEntityPeriodTaxReconciliation({
-        entityCode,
-        periodKey,
-        taxType,
-      });
-
-    const reconciliation = result.data[0];
-
-    if (!reconciliation) {
-      const error = new Error(
-        `No reconciliation result was generated for ${taxType}, ${entityCode}, ${periodKey}.`
+      await generateEntityPeriodTaxReconciliation(
+        options
       );
 
-      error.statusCode = 409;
-      throw error;
-    }
+    const reconciliation =
+      result.data[0];
 
-    if (!reconciliation.reconciled) {
+    if (
+      !reconciliation?.reconciled
+    ) {
       const error = new Error(
-        `${taxType} for ${entityCode}, period ${periodKey}, cannot be reconciled. Tax Center balance is JMD ${reconciliation.taxCenterBalance.toFixed(
-          2
-        )}, GL balance is JMD ${reconciliation.glBalance.toFixed(
-          2
-        )}, and the difference is JMD ${reconciliation.reconciliationDifference.toFixed(
-          2
-        )}.`
+        "Tax-to-GL balances or supporting evidence require review before payment or reconciliation."
       );
 
       error.statusCode = 409;
 
       error.reconciliation = {
-        entityCode,
-        periodKey,
-        taxType,
+        filters:
+          result.filters,
+
         accountCode:
-          reconciliation.accountCode,
+          reconciliation
+            ?.accountCode,
+
         taxCenterBalance:
-          reconciliation.taxCenterBalance,
-        glBalance: reconciliation.glBalance,
-        reconciliationDifference:
-          reconciliation.reconciliationDifference,
+          reconciliation
+            ?.taxCenterBalance,
+
+        glBalance:
+          reconciliation
+            ?.glBalance,
+
+        difference:
+          reconciliation
+            ?.reconciliationDifference,
+
+        issues:
+          reconciliation
+            ?.issues || [],
       };
 
       throw error;

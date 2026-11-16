@@ -4,6 +4,30 @@ const Expense = require("../models/Expense");
 const Invoice = require("../models/Invoice");
 const FinancialAccount = require("../models/FinancialAccount");
 const AccountTransaction = require("../models/AccountTransaction");
+const ChartOfAccount = require(
+  "../models/ChartOfAccount"
+);
+
+const IncomeTaxEstimate = require(
+  "../models/IncomeTaxEstimate"
+);
+
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
+
+const T = require("../services/taxControl");
+
+const S = require(
+  "../services/taxScopeService"
+);
+
+const {
+  transact,
+  hash,
+} = require(
+  "../services/taxTransactionService"
+);
 const TaxDeadlineRule = require("../models/TaxDeadlineRule");
 const TaxRegistrationProfile = require("../models/TaxRegistrationProfile");
 const GctFilingPeriod = require("../models/GctFilingPeriod");
@@ -29,6 +53,12 @@ const {
   generateGctFilingPeriod,
   getGctRegister,
 } = require("../services/gctFilingService");
+
+const JournalEntry = require("../models/JournalEntry");
+
+const GctRegisterEntry = require("../models/GctRegisterEntry");
+const GeneralLedgerTransaction = require("../models/GeneralLedgerTransaction");
+const BusinessEntity = require("../models/BusinessEntity");
 
 const ACTIVE_PAYROLL_STATUSES = ["Approved", "Paid"];
 const PAY_PERIOD_PATTERN = /^\d{4}-\d{2}$/;
@@ -299,1005 +329,1834 @@ const buildLiabilityBreakdown = ({
   return breakdown;
 };
 
-const getTaxRecords = async (req, res) => {
-  try {
-    const {
-      taxType = "",
-      taxCategory = "",
-      status = "",
-      periodKey = "",
-      sourceType = "",
-    } = req.query;
+const getTaxRecords = T.handler(async (req, res) => {
+  const scope = await S.fromQuery(req);
 
-    const query = {};
+  const query = {
+    entityCode: scope.entityCode,
+    periodKey: scope.periodKey,
+  };
 
-    if (taxType) query.taxType = taxType;
-    if (taxCategory) query.taxCategory = taxCategory;
-    if (status) query.status = status;
-    if (periodKey) query.periodKey = periodKey;
-    if (sourceType) query.sourceType = sourceType;
+  for (const field of [
+    "taxCategory",
+    "status",
+    "sourceType",
+  ]) {
+    if (req.query[field]) {
+      query[field] = T.text(
+        req.query[field],
+        field
+      );
+    }
+  }
 
-    const records = await TaxRecord.find(query).sort({
+  if (req.query.taxType) {
+    const taxType = T.canonical(
+      T.text(req.query.taxType, "Tax type")
+    );
+
+    query.taxType = {
+      $in: T.variants(taxType),
+    };
+  }
+
+  const records = await TaxRecord.find(query)
+    .sort({
       periodStart: -1,
       taxType: 1,
-      createdAt: -1,
-    });
+      taxNumber: 1,
+    })
+    .lean();
 
-    const summary = records.reduce(
-      (sum, item) => {
-        sum.totalTaxDue += Number(item.taxDue || 0);
-        sum.totalPaid += Number(item.amountPaid || 0);
-        sum.totalBalance += Number(item.balanceDue || 0);
+  const includedStatuses = new Set([
+    "Reviewed",
+    "Approved",
+    "Submitted",
+    "Partially Paid",
+    "Paid",
+    "Reconciled",
+    "Overdue",
+  ]);
+
+  const includedRecords = records.filter(
+    (record) =>
+      includedStatuses.has(record.status)
+  );
+
+  const totalFor = (field) =>
+    T.round(
+      includedRecords.reduce(
+        (total, record) =>
+          total +
+          T.amount(
+            record[field] ?? 0,
+            `${record.taxNumber}: ${field}`
+          ),
+        0
+      )
+    );
+
+  return res.json({
+    success: true,
+    message: "Tax records retrieved successfully.",
+    filters: {
+      entityCode: scope.entityCode,
+      periodKey: scope.periodKey,
+    },
+    data: records,
+    summary: {
+      totalTaxDue: totalFor("taxDue"),
+      totalPaid: totalFor("amountPaid"),
+      totalBalance: totalFor("balanceDue"),
+      recordCount: records.length,
+
+      openCount: includedRecords.filter(
+        (record) =>
+          T.amount(
+            record.balanceDue ?? 0,
+            "Balance due"
+          ) > 0
+      ).length,
+
+      basis:
+        "Totals include reviewed and later obligations. Draft, calculated, and cancelled records are excluded.",
+    },
+  });
+});
+
+const createTaxRecord = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
+
+    const entityCode = T.text(
+      body.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const periodStart = T.date(
+      body.periodStart,
+      "Period start"
+    );
+
+    const periodEnd = T.date(
+      body.periodEnd,
+      "Period end"
+    );
+
+    if (periodEnd < periodStart) {
+      T.fail(
+        "Period end cannot be earlier than period start."
+      );
+    }
+
+    const taxType = T.canonical(
+      T.text(body.taxType, "Tax type")
+    );
+
+    if (!T.map[taxType] && taxType !== "Other") {
+      T.fail("Unsupported tax type.");
+    }
+
+    const taxableAmount = T.amount(
+      body.taxableAmount ?? 0,
+      "Taxable amount"
+    );
+
+    const taxRate = T.amount(
+      body.taxRate ?? 0,
+      "Tax rate"
+    );
+
+    if (taxRate > 100) {
+      T.fail(
+        "Tax rate cannot exceed 100 percent."
+      );
+    }
+
+    const taxDue =
+      body.taxDue === undefined
+        ? T.round(
+            (taxableAmount * taxRate) / 100
+          )
+        : T.amount(body.taxDue, "Tax due");
+
+    const filingFrequency = T.text(
+      body.filingFrequency || "Monthly",
+      "Filing frequency"
+    );
+
+    if (
+      ![
+        "Monthly",
+        "Quarterly",
+        "Annual",
+        "One-Time",
+        "Other",
+      ].includes(filingFrequency)
+    ) {
+      T.fail("Invalid filing frequency.");
+    }
+
+    if (
+      filingFrequency === "Monthly" &&
+      periodStart.slice(0, 7) !==
+        periodEnd.slice(0, 7)
+    ) {
+      T.fail(
+        "A monthly obligation must fall within one calendar month."
+      );
+    }
+
+    if (
+      filingFrequency === "Annual" &&
+      periodStart.slice(0, 4) !==
+        periodEnd.slice(0, 4)
+    ) {
+      T.fail(
+        "This annual obligation must fall within one calendar year."
+      );
+    }
+
+    const periodKey =
+      filingFrequency === "Annual"
+        ? periodStart.slice(0, 4)
+        : periodStart.slice(0, 7);
+
+    if (
+      body.periodKey !== undefined &&
+      T.text(body.periodKey, "Period key") !==
+        periodKey
+    ) {
+      T.fail(
+        "The selected period does not match the obligation dates."
+      );
+    }
+
+    const dueDate = body.dueDate
+      ? T.date(body.dueDate, "Due date")
+      : "";
+
+    const notes = T.text(
+      body.notes ?? "",
+      "Notes",
+      false
+    );
+
+    const data = await transact(
+      async (session) => {
+        const entity = await S.resolve(
+          entityCode,
+          periodStart,
+          periodEnd,
+          session,
+          true
+        );
 
         if (
-          item.status !== "Paid" &&
-          item.status !== "Reconciled" &&
-          item.status !== "Cancelled"
+          taxType === "Company Tax" &&
+          entity.taxTreatment?.incomeTaxType !==
+            "Company Income Tax"
         ) {
-          sum.openRecords += 1;
+          T.fail(
+            "Company Tax does not match this business entity's configured income-tax treatment.",
+            409
+          );
         }
 
-        return sum;
-      },
-      {
-        totalRecords: records.length,
-        openRecords: 0,
-        totalTaxDue: 0,
-        totalPaid: 0,
-        totalBalance: 0,
-      }
-    );
-
-    summary.totalTaxDue = roundMoney(summary.totalTaxDue);
-    summary.totalPaid = roundMoney(summary.totalPaid);
-    summary.totalBalance = roundMoney(summary.totalBalance);
-
-    res.json({
-      success: true,
-      summary,
-      data: records,
-    });
-  } catch (error) {
-    console.error("Tax records error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not retrieve tax records",
-      error: error.message,
-    });
-  }
-};
-
-const createTaxRecord = async (req, res) => {
-  try {
-    const {
-      taxType,
-      periodStart,
-      periodEnd,
-      taxableAmount,
-      taxRate,
-      taxDue: suppliedTaxDue,
-      dueDate,
-      notes,
-    } = req.body;
-
-    if (!taxType || !periodStart || !periodEnd) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Tax type, period start and period end are required.",
-      });
-    }
-
-    if (periodStart > periodEnd) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Period start cannot be later than period end.",
-      });
-    }
-
-    const calculatedTaxDue =
-      suppliedTaxDue !== undefined &&
-      suppliedTaxDue !== null &&
-      suppliedTaxDue !== ""
-        ? roundMoney(suppliedTaxDue)
-        : roundMoney(
-            Number(taxableAmount || 0) *
-              (Number(taxRate || 0) / 100)
+        if (
+          taxType === "Income Tax" &&
+          entity.taxTreatment?.incomeTaxType !==
+            "Individual Income Tax"
+        ) {
+          T.fail(
+            "Income Tax does not match this business entity's configured income-tax treatment.",
+            409
           );
+        }
 
-    const record = await TaxRecord.create({
-      taxNumber: `TAX-${Date.now()}`,
-      taxType,
-      taxCategory: getTaxCategory(taxType),
-      periodKey: String(periodStart).slice(0, 7),
-      periodStart,
-      periodEnd,
-      filingFrequency: "Monthly",
-      sourceType: "Manual",
-      sourceModule: "Tax Center",
-      taxableAmount: roundMoney(taxableAmount),
-      taxRate: Number(taxRate || 0),
-      taxDue: calculatedTaxDue,
-      amountPaid: 0,
-      balanceDue: calculatedTaxDue,
-      dueDate: dueDate || "",
-      status: "Draft",
-      notes: notes || "",
-      createdBy: getUserName(req.user),
-      updatedBy: getUserName(req.user),
-    });
+        let taxCategory = "Payroll Statutory";
 
-    res.status(201).json({
-      success: true,
-      message: "Tax record created successfully",
-      data: record,
-    });
-  } catch (error) {
-    console.error("Tax record creation error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not create tax record",
-      error: error.message,
-    });
-  }
-};
-
-const generatePayrollTaxSummary = async (req, res) => {
-  try {
-    const payPeriod = String(req.query.payPeriod || "").trim();
-
-    if (payPeriod && !PAY_PERIOD_PATTERN.test(payPeriod)) {
-      return res.status(400).json({
-        success: false,
-        message: "Pay period must use YYYY-MM format.",
-      });
-    }
-
-    const payrolls = await Payroll.find(
-      getPayrollQuery(payPeriod)
-    ).sort({
-      payPeriod: 1,
-      employeeName: 1,
-    });
-
-    const summary = calculatePayrollLiabilities(payrolls);
-
-    const periodQuery = {
-      sourceType: "Payroll",
-      taxCategory: "Payroll Statutory",
-      status: {
-        $ne: "Cancelled",
-      },
-    };
-
-    if (payPeriod) {
-      periodQuery.periodKey = payPeriod;
-    }
-
-    const taxRecords = await TaxRecord.find(periodQuery);
-
-    const recordedLiability = roundMoney(
-      taxRecords.reduce(
-        (sum, record) => sum + Number(record.taxDue || 0),
-        0
-      )
-    );
-
-    const amountPaid = roundMoney(
-      taxRecords.reduce(
-        (sum, record) => sum + Number(record.amountPaid || 0),
-        0
-      )
-    );
-
-    const balanceDue = roundMoney(
-      taxRecords.reduce(
-        (sum, record) => sum + Number(record.balanceDue || 0),
-        0
-      )
-    );
-
-    const reconciliationDifference = roundMoney(
-      summary.totalGovernmentLiability - recordedLiability
-    );
-
-    res.json({
-      success: true,
-      message:
-        "Payroll statutory summary generated successfully",
-      filters: {
-        payPeriod,
-        payrollStatuses: ACTIVE_PAYROLL_STATUSES,
-      },
-      data: {
-        ...summary,
-        payrollRecordCount: payrolls.length,
-        payrollNumbers: payrolls.map(
-          (payroll) => payroll.payrollNumber
-        ),
-        taxCenterRecordedLiability: recordedLiability,
-        taxCenterAmountPaid: amountPaid,
-        taxCenterBalanceDue: balanceDue,
-        reconciliationDifference,
-        reconciled:
-          payrolls.length > 0 &&
-          reconciliationDifference === 0,
-      },
-    });
-  } catch (error) {
-    console.error("Payroll tax summary error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not generate payroll tax summary",
-      error: error.message,
-    });
-  }
-};
-
-const generatePayrollLiabilities = async (req, res) => {
-  try {
-    const payPeriod = String(
-      req.body.payPeriod || ""
-    ).trim();
-
-    if (!PAY_PERIOD_PATTERN.test(payPeriod)) {
-      return res.status(400).json({
-        success: false,
-        message: "Pay period must use YYYY-MM format.",
-      });
-    }
-
-    const payrolls = await Payroll.find(
-      getPayrollQuery(payPeriod)
-    ).sort({
-      employeeName: 1,
-      payrollNumber: 1,
-    });
-
-    if (payrolls.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message:
-          `No Approved or Paid payroll records were found for ${payPeriod}.`,
-      });
-    }
-
-    const existingRecords = await TaxRecord.find({
-      sourceType: "Payroll",
-      sourceReference: `PAYROLL-${payPeriod}`,
-      status: {
-        $ne: "Cancelled",
-      },
-    });
-
-    if (existingRecords.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `Payroll statutory liabilities have already been generated for ${payPeriod}.`,
-        data: existingRecords,
-      });
-    }
-
-    const period = getPeriodDates(payPeriod);
-    const totals = calculatePayrollLiabilities(payrolls);
-
-    const payrollNumbers = payrolls.map(
-      (payroll) => payroll.payrollNumber
-    );
-
-    const ruleCodes = [
-      ...new Set(
-        payrolls
-          .map((payroll) => payroll.statutoryRuleCode)
-          .filter(Boolean)
-      ),
-    ];
-
-    const calculationRuleCode =
-      ruleCodes.length === 1
-        ? ruleCodes[0]
-        : ruleCodes.length > 1
-          ? "MULTIPLE-RULES"
-          : "";
-
-    const commonRecord = {
-      taxCategory: "Payroll Statutory",
-      businessType: "Sole Proprietorship",
-      businessName: "Eltham Konnect",
-
-      periodKey: period.periodKey,
-      periodStart: period.periodStart,
-      periodEnd: period.periodEnd,
-      filingFrequency: "Monthly",
-
-      sourceType: "Payroll",
-      sourceModule: "Payroll",
-      sourceReference: `PAYROLL-${payPeriod}`,
-
-      payrollNumbers,
-      payrollRecordCount: payrolls.length,
-
-      taxableAmount: totals.grossPay,
-      taxRate: 0,
-
-      amountPaid: 0,
-      adjustmentAmount: 0,
-      penaltyAmount: 0,
-      interestAmount: 0,
-
-      calculationRuleCode,
-
-      calculationSnapshot: {
-        payPeriod,
-        generatedAt: new Date(),
-        payrollStatuses: ACTIVE_PAYROLL_STATUSES,
-        payrollNumbers,
-        ruleCodes,
-        totals,
-      },
-
-      status: "Calculated",
-      notes:
-        `Generated from ${payrolls.length} Approved or Paid payroll record(s) for ${payPeriod}.`,
-
-      createdBy: getUserName(req.user),
-      updatedBy: getUserName(req.user),
-    };
-
-    const definitions = [
-      {
-        taxType: "NIS",
-        employeePortion: totals.nisEmployee,
-        employerPortion: totals.nisEmployer,
-      },
-      {
-        taxType: "NHT",
-        employeePortion: totals.nhtEmployee,
-        employerPortion: totals.nhtEmployer,
-      },
-      {
-        taxType: "Education Tax",
-        employeePortion: totals.educationTaxEmployee,
-        employerPortion: totals.educationTaxEmployer,
-      },
-      {
-        taxType: "PAYE",
-        employeePortion: totals.paye,
-        employerPortion: 0,
-      },
-      {
-        taxType: "HEART",
-        employeePortion: 0,
-        employerPortion: totals.heartEmployer,
-      },
-      {
-        taxType: "Pension",
-        employeePortion: totals.pensionEmployee,
-        employerPortion: totals.pensionEmployer,
-      },
-    ];
-
-    const timestamp = Date.now();
-
-    const recordsToCreate = definitions.map(
-      (definition, index) => {
-        const employeePortion = roundMoney(
-          definition.employeePortion
-        );
-
-        const employerPortion = roundMoney(
-          definition.employerPortion
-        );
-
-        const taxDue = roundMoney(
-          employeePortion + employerPortion
-        );
-
-        return {
-          ...commonRecord,
-
-          taxNumber:
-            `TAX-PAY-${payPeriod.replace("-", "")}-` +
-            `${String(index + 1).padStart(2, "0")}-${timestamp}`,
-
-          taxType: definition.taxType,
-          employeePortion,
-          employerPortion,
-          taxDue,
-          balanceDue: taxDue,
-
-          liabilityBreakdown: buildLiabilityBreakdown({
-            taxType: definition.taxType,
-            employeePortion,
-            employerPortion,
-          }),
-        };
-      }
-    );
-
-    const createdRecords = await TaxRecord.insertMany(
-      recordsToCreate
-    );
-
-    res.status(201).json({
-      success: true,
-      message:
-        `Payroll statutory liabilities generated successfully for ${payPeriod}.`,
-      summary: {
-        payPeriod,
-        payrollRecordCount: payrolls.length,
-        liabilityRecordCount: createdRecords.length,
-        totals,
-      },
-      data: createdRecords,
-    });
-  } catch (error) {
-    console.error(
-      "Payroll liability generation error:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not generate payroll statutory liabilities",
-      error: error.message,
-    });
-  }
-};
-
-const transitionTaxRecordWorkflow = async (req, res) => {
-  try {
-    const {
-      action,
-      taxNumbers = [],
-      periodKey = "",
-      sourceType = "",
-      notes = "",
-      filingReference = "",
-      filingMethod = "",
-      filedDate = "",
-    } = req.body;
-
-    const workflowAction =
-      TAX_WORKFLOW_ACTIONS[String(action || "").trim()];
-
-    if (!workflowAction) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Action must be Review, Approve, Submit, or Reconcile.",
-      });
-    }
-
-    const normalizedTaxNumbers = Array.isArray(taxNumbers)
-      ? taxNumbers
-          .map((taxNumber) =>
-            String(taxNumber || "").trim()
+        if (taxType === "GCT") {
+          taxCategory = "Consumption Tax";
+        } else if (
+          ["Income Tax", "Company Tax"].includes(
+            taxType
           )
-          .filter(Boolean)
-      : [];
-
-    const query = {
-      status: {
-        $ne: "Cancelled",
-      },
-    };
-
-    if (normalizedTaxNumbers.length > 0) {
-      query.taxNumber = {
-        $in: normalizedTaxNumbers,
-      };
-    } else {
-      if (!periodKey) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Provide taxNumbers or a periodKey.",
-        });
-      }
-
-      query.periodKey = String(periodKey).trim();
-
-      if (sourceType) {
-        query.sourceType = String(sourceType).trim();
-      }
-    }
-
-    const records = await TaxRecord.find(query).sort({
-      taxType: 1,
-      createdAt: 1,
-    });
-
-    if (records.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "No matching Tax Center records were found.",
-      });
-    }
-
-    if (
-      normalizedTaxNumbers.length > 0 &&
-      records.length !==
-        new Set(normalizedTaxNumbers).size
-    ) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "One or more selected tax records were not found.",
-      });
-    }
-
-        const invalidRecords = records.filter(
-      (record) => {
-        if (action === "Reconcile") {
-          return !(
-            record.status === "Paid" ||
-            (record.status === "Submitted" &&
-              Number(record.balanceDue || 0) === 0)
-          );
+        ) {
+          taxCategory = "Income Tax";
+        } else if (taxType === "Pension") {
+          taxCategory = "Pension";
+        } else if (taxType === "Other") {
+          taxCategory = "Other";
         }
 
-        return (
-          record.status !==
-          workflowAction.fromStatus
+        const userName = T.actor(req);
+
+        const [record] = await TaxRecord.create(
+          [
+            {
+              taxNumber: T.number("TAX"),
+
+              entityId: entity._id,
+              entityCode: entity.entityCode,
+              entitySnapshot: S.snapshot(entity),
+
+              businessType: entity.entityType,
+              businessName: entity.legalName,
+              businessTrn: entity.trn || "",
+
+              taxType,
+              taxCategory,
+
+              periodKey,
+              periodStart,
+              periodEnd,
+              filingFrequency,
+
+              sourceType: "Manual",
+              sourceModule: "Tax Center",
+
+              taxableAmount,
+              taxRate,
+              taxDue,
+
+              amountPaid: 0,
+              balanceDue: taxDue,
+
+              dueDate,
+              notes,
+
+              status: "Calculated",
+
+              createdBy: userName,
+              updatedBy: userName,
+            },
+          ],
+          { session }
         );
+
+        await writeAuditLog({
+          req,
+          session,
+          action: "CREATE_TAX_OBLIGATION",
+          module: "Tax Center",
+          description:
+            `Created ${record.taxNumber} for ` +
+            entity.entityCode,
+          targetType: "TaxRecord",
+          targetId: record.taxNumber,
+          afterValues: record.toObject(),
+        });
+
+        return record;
       }
     );
 
-    if (invalidRecords.length > 0) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${action} requires every selected record to have ` +
-          `${
-  action === "Reconcile"
-    ? "Paid status, or Submitted status with zero balance"
-    : `${workflowAction.fromStatus} status`
-}.`,
-        invalidRecords: invalidRecords.map((record) => ({
-          taxNumber: record.taxNumber,
-          taxType: record.taxType,
-          currentStatus: record.status,
-          requiredStatus:
-  action === "Reconcile"
-    ? "Paid, or Submitted with zero balance"
-    : workflowAction.fromStatus,
-        })),
-      });
+    return res.status(201).json({
+      success: true,
+      message:
+        "Tax obligation created for review. No accounting liability was posted.",
+      data,
+    });
+  }
+);
+
+const getScopedTaxPayrollData = async (
+  scope,
+  session = null
+) => {
+  const payrollRows = await Payroll.find({
+    payPeriod: scope.periodKey,
+    status: {
+      $in: ["Approved", "Paid"],
+    },
+  })
+    .session(session)
+    .lean();
+
+  const matchedPayroll = [];
+  const unattributedPayrollNumbers = [];
+
+  for (const payroll of payrollRows) {
+    const entityCodes = [
+      payroll.entityCode,
+      payroll.entitySnapshot?.entityCode,
+      payroll.businessEntitySnapshot?.entityCode,
+    ]
+      .filter(
+        (value) =>
+          value !== undefined &&
+          value !== null &&
+          String(value).trim() !== ""
+      )
+      .map((value) =>
+        T.text(
+          value,
+          "Payroll business entity"
+        ).toUpperCase()
+      );
+
+    const distinctCodes = [
+      ...new Set(entityCodes),
+    ];
+
+    if (distinctCodes.length !== 1) {
+      unattributedPayrollNumbers.push(
+        payroll.payrollNumber ||
+          String(payroll._id)
+      );
+
+      continue;
     }
 
     if (
-      action === "Submit" &&
-      !String(filingReference || "").trim()
+      distinctCodes[0] === scope.entityCode
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A filing or submission reference is required.",
-      });
+      matchedPayroll.push(payroll);
     }
+  }
 
-            if (action === "Reconcile") {
-      const reconciliationScopes = [
-        ...new Map(
-          records.map((record) => {
-            const scopeKey = [
-              record.entityCode,
-              record.periodKey,
-              record.taxType,
-            ].join("|");
+  const sourceFields = {
+    grossPay: "grossPay",
+    nisEmployee: "nisEmployee",
+    nisEmployer: "nisEmployer",
+    nhtEmployee: "nhtEmployee",
+    nhtEmployer: "nhtEmployer",
+    educationTaxEmployee: "educationTax",
+    educationTaxEmployer:
+      "educationTaxEmployer",
+    paye: "incomeTax",
+    heartEmployer: "heartEmployer",
+    pensionEmployee: "pensionEmployee",
+    netPay: "netPay",
+  };
 
-            return [
-              scopeKey,
-              {
-                entityCode: record.entityCode,
-                periodKey: record.periodKey,
-                taxType: record.taxType,
-              },
-            ];
-          })
-        ).values(),
-      ];
+  const totals = {};
 
-      for (const scope of reconciliationScopes) {
-        await assertEntityPeriodTaxTypeReconciled({
-          entityCode: scope.entityCode,
-          periodKey: scope.periodKey,
-          taxType: scope.taxType,
-        });
-      }
-    }
+  for (const [outputField, sourceField] of
+    Object.entries(sourceFields)) {
+    totals[outputField] = T.round(
+      matchedPayroll.reduce(
+        (total, payroll) =>
+          total +
+          T.amount(
+            payroll[sourceField] ?? 0,
+            `${payroll.payrollNumber || "Payroll"}: ${sourceField}`
+          ),
+        0
+      )
+    );
+  }
 
+  totals.totalEmployeeDeductions = T.round(
+    totals.nisEmployee +
+      totals.nhtEmployee +
+      totals.educationTaxEmployee +
+      totals.paye +
+      totals.pensionEmployee
+  );
 
-    const performedBy = getUserName(req.user);
-    const performedAt = new Date();
+  totals.totalGovernmentLiability = T.round(
+    totals.nisEmployee +
+      totals.nisEmployer +
+      totals.nhtEmployee +
+      totals.nhtEmployer +
+      totals.educationTaxEmployee +
+      totals.educationTaxEmployer +
+      totals.paye +
+      totals.heartEmployer
+  );
 
-    for (const record of records) {
-      const previousStatus = record.status;
+  return {
+    matchedPayroll,
+    unattributedPayrollNumbers,
+    totals,
+  };
+};
 
-      record.status = workflowAction.toStatus;
-      record.updatedBy = performedBy;
+const generatePayrollTaxSummary = T.handler(
+  async (req, res) => {
+    const scope = await S.fromQuery(req);
 
-      if (action === "Review") {
-        record.reviewedBy = performedBy;
-        record.reviewedAt = performedAt;
-        record.reviewNotes = String(notes || "").trim();
-      }
+    const payrollData =
+      await getScopedTaxPayrollData(scope);
 
-      if (action === "Approve") {
-        record.approvedBy = performedBy;
-        record.approvedAt = performedAt;
-        record.approvalNotes = String(notes || "").trim();
-      }
+    const scopeVerified =
+      payrollData.unattributedPayrollNumbers
+        .length === 0;
 
-      if (action === "Submit") {
-        record.submittedBy = performedBy;
-        record.submittedAt = performedAt;
-        record.submissionNotes = String(notes || "").trim();
-
-        record.filingReference = String(
-          filingReference || ""
-        ).trim();
-
-        record.filingMethod =
-          String(filingMethod || "").trim() ||
-          "TAJ Online";
-
-        record.filedDate =
-          String(filedDate || "").trim() ||
-          performedAt.toISOString().slice(0, 10);
-      }
-
-      record.workflowHistory.push({
-        fromStatus: previousStatus,
-        toStatus: workflowAction.toStatus,
-        action,
-        notes: String(notes || "").trim(),
-        performedBy,
-        performedAt,
-      });
-
-      await record.save();
-    }
-
-    res.json({
+    return res.json({
       success: true,
       message:
-        `${records.length} tax record(s) moved from ` +
-        `${workflowAction.fromStatus} to ` +
-        `${workflowAction.toStatus}.`,
-      data: records,
+        "Business-period payroll tax summary generated successfully.",
+
+      filters: {
+        entityCode: scope.entityCode,
+        periodKey: scope.periodKey,
+      },
+
+      data: {
+        ...payrollData.totals,
+
+        payrollRecordCount:
+          payrollData.matchedPayroll.length,
+
+        unattributedPayrollNumbers:
+          payrollData.unattributedPayrollNumbers,
+
+        scopeVerified,
+
+        notice: scopeVerified
+          ? "Totals include Approved and Paid payroll attributed to the selected business. This is a payroll summary, not a General Ledger or bank reconciliation."
+          : "Payroll with missing or conflicting employer attribution has been excluded. Displayed totals cover attributed records only and may be incomplete.",
+      },
     });
-    } catch (error) {
-    console.error(
-      "Tax workflow transition error:",
-      error
+  }
+);
+
+const generatePayrollLiabilities = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
+
+    const scope = {
+      entityCode: T.text(
+        body.entityCode,
+        "Business entity"
+      ).toUpperCase(),
+
+      periodKey: T.period(
+        body.payPeriod || body.periodKey
+      ),
+    };
+
+    const periodStart =
+      `${scope.periodKey}-01`;
+
+    const [year, month] = scope.periodKey
+      .split("-")
+      .map(Number);
+
+    const periodEnd = new Date(
+      Date.UTC(year, month, 0, 12)
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    const data = await transact(
+      async (session, Operation) => {
+        const entity = await S.resolve(
+          scope.entityCode,
+          periodStart,
+          periodEnd,
+          session,
+          true
+        );
+
+        const payrollData =
+          await getScopedTaxPayrollData(
+            scope,
+            session
+          );
+
+        if (
+          payrollData
+            .unattributedPayrollNumbers.length
+        ) {
+          T.fail(
+            "Payroll in this period has missing or conflicting employer attribution. Review those records before generating obligations.",
+            409
+          );
+        }
+
+        const payrollRows =
+          payrollData.matchedPayroll;
+
+        if (!payrollRows.length) {
+          T.fail(
+            "No Approved or Paid payroll is attributed to this business and period.",
+            409
+          );
+        }
+
+        if (
+          payrollRows.some(
+            (payroll) =>
+              payroll.status !== "Paid" ||
+              !payroll.journalEntryNumber
+          )
+        ) {
+          T.fail(
+            "Complete payroll payment and accounting posting before generating its tax obligations.",
+            409
+          );
+        }
+
+        const operationKey =
+          `payroll:${scope.entityCode}:` +
+          scope.periodKey;
+
+        const previousOperation =
+          await Operation.findById(
+            operationKey
+          ).session(session);
+
+        const existingObligation =
+          await TaxRecord.findOne({
+            periodKey: scope.periodKey,
+            sourceType: "Payroll",
+            status: {
+              $ne: "Cancelled",
+            },
+            $or: [
+              {
+                entityCode:
+                  scope.entityCode,
+              },
+              { entityCode: "" },
+              { entityCode: null },
+            ],
+          }).session(session);
+
+        if (
+          previousOperation ||
+          existingObligation
+        ) {
+          T.fail(
+            "Payroll obligations already exist, or historical obligations require entity review. No duplicate was created.",
+            409
+          );
+        }
+
+        const checkedJournalNumbers =
+          new Set();
+
+        for (const payroll of payrollRows) {
+          const entryNumber =
+            payroll.journalEntryNumber;
+
+          if (
+            checkedJournalNumbers.has(
+              entryNumber
+            )
+          ) {
+            continue;
+          }
+
+          const journal =
+            await JournalEntry.findOne({
+              entryNumber,
+              entityCode:
+                scope.entityCode,
+              reportingPeriodKey:
+                scope.periodKey,
+              status: "Posted",
+            }).session(session);
+
+          if (
+            !journal ||
+            journal.reversalEntryNumber
+          ) {
+            T.fail(
+              `Payroll journal ${entryNumber} must be posted, unreversed, and attributed to the selected business and period.`,
+              409
+            );
+          }
+
+          checkedJournalNumbers.add(
+            entryNumber
+          );
+        }
+
+        const totals = payrollData.totals;
+
+        const liabilityItems = [
+          ["PAYE", totals.paye, 0],
+
+          [
+            "NIS",
+            totals.nisEmployee,
+            totals.nisEmployer,
+          ],
+
+          [
+            "NHT",
+            totals.nhtEmployee,
+            totals.nhtEmployer,
+          ],
+
+          [
+            "Education Tax",
+            totals.educationTaxEmployee,
+            totals.educationTaxEmployer,
+          ],
+
+          [
+            "HEART",
+            0,
+            totals.heartEmployer,
+          ],
+
+          [
+            "Pension",
+            totals.pensionEmployee,
+            0,
+          ],
+        ];
+
+        const payrollNumbers =
+          payrollRows.map(
+            (payroll) =>
+              payroll.payrollNumber
+          );
+
+        const userName = T.actor(req);
+
+        const payload =
+          liabilityItems.map(
+            ([
+              taxType,
+              employeePortion,
+              employerPortion,
+            ]) => {
+              const taxDue = T.round(
+                employeePortion +
+                  employerPortion
+              );
+
+              return {
+                taxNumber:
+                  T.number("TAX-PAY"),
+
+                entityId: entity._id,
+                entityCode:
+                  entity.entityCode,
+
+                entitySnapshot:
+                  S.snapshot(entity),
+
+                businessType:
+                  entity.entityType,
+
+                businessName:
+                  entity.legalName,
+
+                businessTrn:
+                  entity.trn || "",
+
+                taxType,
+
+                taxCategory:
+                  taxType === "Pension"
+                    ? "Pension"
+                    : "Payroll Statutory",
+
+                periodKey:
+                  scope.periodKey,
+
+                periodStart,
+                periodEnd,
+                filingFrequency:
+                  "Monthly",
+
+                sourceType: "Payroll",
+                sourceModule: "Payroll",
+                sourceReference:
+                  operationKey,
+
+                payrollNumbers,
+                payrollRecordCount:
+                  payrollRows.length,
+
+                employeePortion,
+                employerPortion,
+
+                taxDue,
+                amountPaid: 0,
+                balanceDue: taxDue,
+
+                status: "Calculated",
+
+                calculationSnapshot: {
+                  entityCode:
+                    entity.entityCode,
+
+                  periodKey:
+                    scope.periodKey,
+
+                  payrollNumbers,
+
+                  journalEntryNumbers: [
+                    ...checkedJournalNumbers,
+                  ],
+
+                  totals,
+                },
+
+                createdBy: userName,
+                updatedBy: userName,
+              };
+            }
+          );
+
+        const records =
+          await TaxRecord.create(
+            payload,
+            { session }
+          );
+
+        await Operation.create(
+          [
+            {
+              _id: operationKey,
+
+              result: {
+                entityCode:
+                  scope.entityCode,
+
+                periodKey:
+                  scope.periodKey,
+
+                taxNumbers: records.map(
+                  (record) =>
+                    record.taxNumber
+                ),
+              },
+            },
+          ],
+          { session }
+        );
+
+        await writeAuditLog({
+          req,
+          session,
+          action:
+            "GENERATE_PAYROLL_TAX_OBLIGATIONS",
+          module: "Tax Center",
+
+          description:
+            `Generated payroll obligations for ` +
+            `${scope.entityCode} ${scope.periodKey}`,
+
+          metadata: {
+            entityCode:
+              scope.entityCode,
+
+            periodKey:
+              scope.periodKey,
+
+            payrollNumbers,
+
+            taxNumbers: records.map(
+              (record) =>
+                record.taxNumber
+            ),
+          },
+        });
+
+        return records;
+      }
+    );
+
+    return res.status(201).json({
+      success: true,
+
+      message:
+        "Payroll obligations generated from attributed posted payroll. No second liability journal was created.",
+
+      totalRecords: data.length,
+      data,
+    });
+  }
+);
+
+const transitionTaxRecordWorkflow = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
+
+    const action = T.text(
+      body.action,
+      "Workflow action"
+    );
+
+    const transitions = {
+      Review: {
+        from: "Calculated",
+        to: "Reviewed",
+      },
+
+      Approve: {
+        from: "Reviewed",
+        to: "Approved",
+      },
+
+      Submit: {
+        from: "Approved",
+        to: "Submitted",
+      },
+
+      Reconcile: {
+        from: "Paid",
+        to: "Reconciled",
+      },
+    };
+
+    const transition =
+      transitions[action];
+
+    if (!transition) {
+      T.fail(
+        "Action must be Review, Approve, Submit, or Reconcile."
+      );
+    }
+
+    if (
+      !Array.isArray(body.taxNumbers) ||
+      body.taxNumbers.length === 0 ||
+      body.taxNumbers.length > 50
+    ) {
+      T.fail(
+        "Select between 1 and 50 tax records."
+      );
+    }
+
+    const taxNumbers =
+      body.taxNumbers.map(
+        (value) =>
+          T.text(value, "Tax number")
+      );
+
+    if (
+      new Set(taxNumbers).size !==
+      taxNumbers.length
+    ) {
+      T.fail(
+        "The selected tax records contain duplicates."
+      );
+    }
+
+    const notes = T.text(
+      body.notes ?? "",
+      "Workflow notes",
+      false
+    );
+
+    let filingReference = "";
+    let filingMethod = "";
+    let filedDate = "";
+
+    if (action === "Submit") {
+      filingReference = T.text(
+        body.filingReference,
+        "Filing reference"
+      );
+
+      filingMethod = T.text(
+        body.filingMethod,
+        "Filing method"
+      );
+
+      if (
+        ![
+          "TAJ Online",
+          "Manual Submission",
+          "Tax Agent",
+          "Other",
+        ].includes(filingMethod)
+      ) {
+        T.fail(
+          "Choose TAJ Online, Manual Submission, Tax Agent, or Other as the filing method."
+        );
+      }
+
+      filedDate = T.date(
+        body.filedDate,
+        "Filed date"
+      );
+
+      if (filedDate > T.today()) {
+        T.fail(
+          "Filed date cannot be in the future."
+        );
+      }
+    }
+
+    const data = await transact(
+      async (session) => {
+        const records =
+          await TaxRecord.find({
+            taxNumber: {
+              $in: taxNumbers,
+            },
+          })
+            .sort({ taxNumber: 1 })
+            .session(session);
+
+        if (
+          records.length !==
+          taxNumbers.length
+        ) {
+          T.fail(
+            "One or more selected tax records were not found.",
+            404
+          );
+        }
+
+        const entityCodes =
+          new Set(
+            records.map(
+              (record) =>
+                record.entityCode
+            )
+          );
+
+        const periodKeys =
+          new Set(
+            records.map(
+              (record) =>
+                record.periodKey
+            )
+          );
+
+        if (
+          entityCodes.size !== 1 ||
+          !records[0].entityCode
+        ) {
+          T.fail(
+            "Select attributed tax records belonging to one business.",
+            409
+          );
+        }
+
+        if (
+          periodKeys.size !== 1 ||
+          !records[0].periodKey
+        ) {
+          T.fail(
+            "Select tax records belonging to one reporting period.",
+            409
+          );
+        }
+
+        const userName = T.actor(req);
+
+        for (const record of records) {
+          const previousStatus =
+            record.status;
+
+          const zeroBalanceSubmitted =
+            action === "Reconcile" &&
+            previousStatus ===
+              "Submitted" &&
+            T.amount(
+              record.balanceDue,
+              "Balance due"
+            ) === 0;
+
+          if (
+            previousStatus !==
+              transition.from &&
+            !zeroBalanceSubmitted
+          ) {
+            T.fail(
+              `${record.taxNumber} is not eligible for ${action} while its status is ${previousStatus}.`,
+              409
+            );
+          }
+
+          await S.resolve(
+            record.entityCode,
+            record.periodStart,
+            record.periodEnd,
+            session
+          );
+
+          const taxDue = T.amount(
+            record.taxDue,
+            "Tax due"
+          );
+
+          const amountPaid = T.amount(
+            record.amountPaid,
+            "Amount paid"
+          );
+
+          const balanceDue = T.amount(
+            record.balanceDue,
+            "Balance due"
+          );
+
+          if (
+            amountPaid > taxDue ||
+            T.round(
+              taxDue - amountPaid
+            ) !== balanceDue
+          ) {
+            T.fail(
+              `${record.taxNumber} has inconsistent balances. Review it before continuing.`,
+              409
+            );
+          }
+
+          if (
+            action === "Submit" &&
+            [
+              "GCT Return",
+              "Income Tax Estimate",
+            ].includes(
+              record.sourceType
+            )
+          ) {
+            T.fail(
+              `${record.taxNumber} must be submitted through its source filing workflow.`,
+              409
+            );
+          }
+
+          const beforeValues =
+            record.toObject();
+
+          const performedAt =
+            new Date();
+
+          if (action === "Review") {
+            record.reviewedBy =
+              userName;
+
+            record.reviewedAt =
+              performedAt;
+          }
+
+          if (action === "Approve") {
+            record.approvedBy =
+              userName;
+
+            record.approvedAt =
+              performedAt;
+          }
+
+          if (action === "Submit") {
+            record.filingReference =
+              filingReference;
+
+            record.filingMethod =
+              filingMethod;
+
+            record.filedDate =
+              filedDate;
+
+            record.submittedBy =
+              userName;
+
+            record.submittedAt =
+              performedAt;
+          }
+
+          if (
+            action === "Reconcile"
+          ) {
+            if (
+              balanceDue !== 0 ||
+              !record.filingReference ||
+              !record.submittedAt
+            ) {
+              T.fail(
+                `${record.taxNumber} requires a zero balance and recorded filing evidence before reconciliation.`,
+                409
+              );
+            }
+
+            await assertEntityPeriodTaxTypeReconciled({
+              entityCode:
+                record.entityCode,
+
+              periodKey:
+                record.periodKey,
+
+              taxType:
+                record.taxType,
+
+              session,
+            });
+
+            record.reconciledBy =
+              userName;
+
+            record.reconciledAt =
+              performedAt;
+          }
+
+          record.status =
+            transition.to;
+
+          record.updatedBy =
+            userName;
+
+          record.workflowHistory.push({
+            fromStatus:
+              previousStatus,
+
+            toStatus:
+              record.status,
+
+            action,
+            notes,
+
+            performedBy:
+              userName,
+
+            performedAt,
+          });
+
+          await record.save({
+            session,
+          });
+
+          await writeAuditLog({
+            req,
+            session,
+
+            action:
+              `TAX_${action.toUpperCase()}`,
+
+            module: "Tax Center",
+
+            description:
+              `${action}: ${record.taxNumber}`,
+
+            targetType: "TaxRecord",
+            targetId:
+              record.taxNumber,
+
+            beforeValues,
+
+            afterValues:
+              record.toObject(),
+          });
+        }
+
+        return records;
+      }
+    );
+
+    return res.json({
+      success: true,
+
+      message:
+        `${action} completed for ` +
+        `${data.length} selected tax record(s).`,
+
+      totalRecords: data.length,
+      data,
+    });
+  }
+);
+
+const payTaxRecord = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
+
+    const taxNumber = T.text(
+      req.params.taxNumber,
+      "Tax number"
+    );
+
+    const paymentAmount = T.amount(
+      body.amount,
+      "Payment amount",
+      true
+    );
+
+    const paymentReference = T.text(
+      body.paymentReference,
+      "Payment reference"
+    );
+
+    const paymentAccountNumber = T.text(
+      body.paymentAccountNumber,
+      "Payment account"
+    );
+
+    const paymentDate = T.date(
+      body.paymentDate || T.today(),
+      "Payment date"
+    );
+
+    const paymentMethod = T.text(
+      body.paymentMethod ?? "",
+      "Payment method",
+      false
+    );
+
+    const notes = T.text(
+      body.notes ?? "",
+      "Payment notes",
+      false
+    );
+
+    const receiptUrl = T.text(
+      body.receiptUrl ?? "",
+      "Receipt reference",
+      false
+    );
+
+    if (paymentDate > T.today()) {
+      T.fail(
+        "Future tax payments cannot be recorded."
+      );
+    }
+
+    const requestHash = hash({
+      taxNumber,
+      paymentAmount,
+      paymentReference,
+      paymentAccountNumber,
+      paymentDate,
+      paymentMethod,
+      notes,
+      receiptUrl,
+    });
+
+    const operationKey =
+      `payment:${hash(paymentReference)}`;
+
+    const result = await transact(
+      async (
+        session,
+        TaxControlledOperation
+      ) => {
+        const previousOperation =
+          await TaxControlledOperation.findById(
+            operationKey
+          ).session(session);
+
+        if (previousOperation) {
+          if (
+            previousOperation.hash !==
+            requestHash
+          ) {
+            T.fail(
+              "This payment reference has already been used with different payment details.",
+              409
+            );
+          }
+
+          return {
+            ...previousOperation.result,
+            replayed: true,
+          };
+        }
+
+        const existingReference =
+          await TaxRecord.findOne({
+            "remittances.paymentReference":
+              paymentReference,
+          }).session(session);
+
+        if (existingReference) {
+          T.fail(
+            "This payment reference already exists. Review its recorded remittance before retrying.",
+            409
+          );
+        }
+
+        const record =
+          await TaxRecord.findOne({
+            taxNumber,
+          }).session(session);
+
+        if (!record) {
+          T.fail(
+            "Tax record not found.",
+            404
+          );
+        }
+
+        const payableStatuses = [
+          "Submitted",
+          "Partially Paid",
+          "Overdue",
+        ];
+
+        if (
+          !payableStatuses.includes(
+            record.status
+          ) ||
+          !record.filingReference ||
+          !record.submittedAt
+        ) {
+          T.fail(
+            "Only a submitted obligation with filing evidence can be paid.",
+            409
+          );
+        }
+
+        if (!record.entityCode) {
+          T.fail(
+            "This historical tax record requires reviewed business-entity attribution before payment.",
+            409
+          );
+        }
+
+        await S.resolve(
+          record.entityCode,
+          record.periodStart,
+          record.periodEnd,
+          session
+        );
+
+        const taxDue = T.amount(
+          record.taxDue,
+          "Recorded tax due"
+        );
+
+        const previouslyPaid = T.amount(
+          record.amountPaid,
+          "Recorded payments"
+        );
+
+        const outstandingBalance = T.round(
+          taxDue - previouslyPaid
+        );
+
+        if (
+          outstandingBalance <= 0 ||
+          outstandingBalance !==
+            T.amount(
+              record.balanceDue,
+              "Recorded balance"
+            ) ||
+          paymentAmount >
+            outstandingBalance
+        ) {
+          T.fail(
+            "The payment exceeds the verified outstanding balance, or the tax record balances are inconsistent.",
+            409
+          );
+        }
+
+        await assertEntityPeriodTaxTypeReconciled({
+          entityCode: record.entityCode,
+          periodKey: record.periodKey,
+          taxType: record.taxType,
+          session,
+        });
+
+        const paymentAccount =
+          await FinancialAccount.findOne({
+            accountNumber:
+              paymentAccountNumber,
+            status: "Active",
+          }).session(session);
+
+        if (
+          !paymentAccount ||
+          !["Cash", "Bank"].includes(
+            paymentAccount.accountType
+          ) ||
+          paymentAccount.currency !==
+            "JMD" ||
+          paymentAccount.baseCurrency !==
+            "JMD"
+        ) {
+          T.fail(
+            "Choose an Active JMD Cash or Bank account. Foreign-currency and credit-card tax funding require a separately reviewed workflow.",
+            409
+          );
+        }
+
+        const linkedAccountCode = T.text(
+          paymentAccount.linkedChartAccountCode,
+          "Linked chart account"
+        );
+
+        const linkedFinancialAccounts =
+          await FinancialAccount.find({
+            linkedChartAccountCode:
+              linkedAccountCode,
+          }).session(session);
+
+        const paymentChartAccount =
+          await ChartOfAccount.findOne({
+            accountCode:
+              linkedAccountCode,
+            status: "Active",
+            accountCategory: "Asset",
+            normalBalance: "Debit",
+          }).session(session);
+
+        if (
+          !paymentChartAccount ||
+          linkedFinancialAccounts.length !==
+            1 ||
+          linkedFinancialAccounts[0]
+            .accountNumber !==
+            paymentAccountNumber
+        ) {
+          T.fail(
+            "The payment account must have a unique link to an Active debit-balance Asset account.",
+            409
+          );
+        }
+
+        const financialBalance = Number(
+          paymentAccount.currentBalance
+        );
+
+        const chartBalance = Number(
+          paymentChartAccount.currentBalance
+        );
+
+        if (
+          !Number.isFinite(
+            financialBalance
+          ) ||
+          !Number.isFinite(
+            chartBalance
+          ) ||
+          T.round(financialBalance) !==
+            T.round(chartBalance) ||
+          financialBalance <
+            paymentAmount
+        ) {
+          T.fail(
+            "The payment-account balances disagree or recorded funds are insufficient. Review Banking before recording this payment.",
+            409
+          );
+        }
+
+        const payableAccountCode =
+          T.map[
+            T.canonical(
+              record.taxType
+            )
+          ];
+
+        if (!payableAccountCode) {
+          T.fail(
+            "No supported tax payable mapping exists for this obligation.",
+            409
+          );
+        }
+
+        if (
+          linkedAccountCode ===
+          payableAccountCode
+        ) {
+          T.fail(
+            "The payment account cannot be the tax payable account.",
+            409
+          );
+        }
+
+        const payableChartAccount =
+          await ChartOfAccount.findOne({
+            accountCode:
+              payableAccountCode,
+            status: "Active",
+            accountCategory:
+              "Liability",
+            normalBalance: "Credit",
+          }).session(session);
+
+        if (!payableChartAccount) {
+          T.fail(
+            "The tax payable mapping requires an Active credit-balance Liability account.",
+            409
+          );
+        }
+
+        const incorrectlyLinkedAccounts =
+          await FinancialAccount.find({
+            linkedChartAccountCode:
+              payableAccountCode,
+          }).session(session);
+
+        if (
+          incorrectlyLinkedAccounts.length >
+          0
+        ) {
+          T.fail(
+            "The tax payable account must not also be linked as a financial payment account.",
+            409
+          );
+        }
+
+        const beforeValues =
+          record.toObject();
+
+        const journalEntry =
+          await postTaxLiabilityPayment({
+            taxRecord: record,
+            paymentAccount,
+            amount: paymentAmount,
+            paymentDate,
+            paymentReference,
+            user: req.user,
+            session,
+          });
+
+        const transactionNumber =
+          T.number("TRN");
+
+        const remittanceNumber =
+          T.number("TAXPAY");
+
+        await AccountTransaction.create(
+          [
+            {
+              transactionNumber,
+
+              accountNumber:
+                paymentAccount.accountNumber,
+
+              accountName:
+                paymentAccount.accountName,
+
+              linkedChartAccountCode:
+                linkedAccountCode,
+
+              journalEntryNumber:
+                journalEntry.entryNumber,
+
+              ledgerReference:
+                journalEntry.entryNumber,
+
+              transactionType:
+                "Tax Payment",
+
+              transactionDirection:
+                "Withdrawal",
+
+              amount: paymentAmount,
+              paymentMethod,
+              reference:
+                paymentReference,
+
+              transactionDate:
+                new Date(
+                  `${paymentDate}T12:00:00.000Z`
+                ),
+
+              taxNumber:
+                record.taxNumber,
+
+              taxType:
+                record.taxType,
+
+              taxPeriodKey:
+                record.periodKey,
+
+              notes,
+            },
+          ],
+          {
+            session,
+          }
+        );
+
+        record.amountPaid = T.round(
+          previouslyPaid +
+            paymentAmount
+        );
+
+        record.balanceDue = T.round(
+          outstandingBalance -
+            paymentAmount
+        );
+
+        record.status =
+          record.balanceDue === 0
+            ? "Paid"
+            : "Partially Paid";
+
+        record.updatedBy =
+          T.actor(req);
+
+        record.remittances.push({
+          remittanceNumber,
+          paymentDate,
+          amount: paymentAmount,
+          paymentMethod,
+          paymentReference,
+
+          paymentAccountNumber:
+            paymentAccount.accountNumber,
+
+          paymentAccountName:
+            paymentAccount.accountName,
+
+          journalEntryNumber:
+            journalEntry.entryNumber,
+
+          receiptUrl,
+          notes,
+
+          recordedBy:
+            T.actor(req),
+
+          recordedAt:
+            new Date(),
+        });
+
+        record.workflowHistory.push({
+          fromStatus:
+            beforeValues.status,
+
+          toStatus:
+            record.status,
+
+          action: "Payment",
+
+          notes:
+            `${remittanceNumber}: ` +
+            `${paymentReference}`,
+
+          performedBy:
+            T.actor(req),
+
+          performedAt:
+            new Date(),
+        });
+
+        await record.save({
+          session,
+        });
+
+        const linkedEstimate =
+          await IncomeTaxEstimate.findOne({
+            taxRecordId:
+              record._id,
+          }).session(session);
+
+        if (linkedEstimate) {
+          if (
+            linkedEstimate.entityCode !==
+              record.entityCode ||
+            T.amount(
+              linkedEstimate.estimatedTaxDue
+            ) !== taxDue
+          ) {
+            T.fail(
+              "The linked estimate and tax obligation have different entities or amounts.",
+              409
+            );
+          }
+
+          linkedEstimate.amountPaid =
+            record.amountPaid;
+
+          linkedEstimate.balanceDue =
+            record.balanceDue;
+
+          linkedEstimate.status =
+            record.status;
+
+          await linkedEstimate.save({
+            session,
+          });
+        }
+
+        const linkedGctFiling =
+          await GctFilingPeriod.findOne({
+            taxRecordId:
+              record._id,
+          }).session(session);
+
+        if (
+          linkedGctFiling &&
+          record.status === "Paid"
+        ) {
+          linkedGctFiling.status =
+            "Paid";
+
+          await linkedGctFiling.save({
+            session,
+          });
+        }
+
+        await writeAuditLog({
+          req,
+          session,
+
+          action:
+            "PAY_TAX_OBLIGATION",
+
+          module:
+            "Tax Center",
+
+          description:
+            `Paid ${record.taxNumber}`,
+
+          targetType:
+            "TaxRecord",
+
+          targetId:
+            record.taxNumber,
+
+          beforeValues,
+
+          afterValues:
+            record.toObject(),
+
+          journalEntryNumber:
+            journalEntry.entryNumber,
+        });
+
+        const paymentResult = {
+          taxNumber:
+            record.taxNumber,
+
+          remittanceNumber,
+          transactionNumber,
+
+          journalEntryNumber:
+            journalEntry.entryNumber,
+
+          balanceDue:
+            record.balanceDue,
+        };
+
+        await TaxControlledOperation.create(
+          [
+            {
+              _id:
+                operationKey,
+
+              hash:
+                requestHash,
+
+              result:
+                paymentResult,
+            },
+          ],
+          {
+            session,
+          }
+        );
+
+        return paymentResult;
+      }
     );
 
     return res
-      .status(error.statusCode || 500)
+      .status(
+        result.replayed ? 200 : 201
+      )
       .json({
-        success: false,
-        message:
-          error.message ||
-          "Could not update the Tax Center workflow",
+        success: true,
 
-        ...(error.reconciliation
-          ? {
-              reconciliation:
-                error.reconciliation,
-            }
-          : {}),
+        paymentRequestReplayed:
+          Boolean(result.replayed),
+
+        message:
+          result.replayed
+            ? "Previously recorded payment returned. No duplicate payment was posted."
+            : "Tax payment and accounting records saved successfully.",
+
+        data: result,
       });
   }
-};
-
-const payTaxRecord = async (req, res) => {
-  try {
-    const { taxNumber } = req.params;
-
-    const {
-      amount,
-      paymentAccountNumber,
-      paymentDate,
-      paymentMethod = "",
-      paymentReference,
-      receiptUrl = "",
-      notes = "",
-    } = req.body;
-
-    if (!taxNumber) {
-      return res.status(400).json({
-        success: false,
-        message: "Tax number is required.",
-      });
-    }
-
-    if (!paymentAccountNumber) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A payment account is required.",
-      });
-    }
-
-    if (!paymentReference) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A payment confirmation or reference is required.",
-      });
-    }
-
-    const paymentAmount = roundMoney(amount);
-
-    if (paymentAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Payment amount must be greater than zero.",
-      });
-    }
-
-    const record = await TaxRecord.findOne({
-      taxNumber,
-    });
-
-    if (!record) {
-      return res.status(404).json({
-        success: false,
-        message: "Tax record not found.",
-      });
-    }
-
-    const payableStatuses = [
-      "Submitted",
-      "Partially Paid",
-      "Overdue",
-    ];
-
-    if (!payableStatuses.includes(record.status)) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${record.taxType} ${record.taxNumber} cannot be paid ` +
-          `while its status is ${record.status}. ` +
-          "It must be Submitted first.",
-      });
-    }
-
-    const outstandingBalance = roundMoney(
-      record.balanceDue
-    );
-
-    if (outstandingBalance <= 0) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This tax obligation has no outstanding balance.",
-      });
-    }
-
-    if (paymentAmount > outstandingBalance) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `Payment cannot exceed the outstanding balance of ` +
-          `JMD ${outstandingBalance.toFixed(2)}.`,
-      });
-    }
-
-    const duplicateReference = await TaxRecord.findOne({
-      "remittances.paymentReference":
-        String(paymentReference).trim(),
-    });
-
-    if (duplicateReference) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "That tax payment reference has already been recorded.",
-      });
-    }
-
-    const paymentAccount =
-      await FinancialAccount.findOne({
-        accountNumber: paymentAccountNumber,
-        status: "Active",
-      });
-
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "Active payment account not found.",
-      });
-    }
-
-    if (!paymentAccount.linkedChartAccountCode) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `${paymentAccount.accountName} is not linked to the Chart of Accounts.`,
-      });
-    }
-
-    if (
-      paymentAccount.accountType !== "Credit Card" &&
-      roundMoney(paymentAccount.currentBalance) <
-        paymentAmount
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "The selected payment account has insufficient funds.",
-      });
-    }
-
-    const normalizedPaymentDate =
-      String(paymentDate || "").trim() ||
-      new Date().toISOString().slice(0, 10);
-
-    const journalEntry =
-      await postTaxLiabilityPayment({
-        taxRecord: record,
-        paymentAccount,
-        amount: paymentAmount,
-        paymentDate: normalizedPaymentDate,
-        paymentReference:
-          String(paymentReference).trim(),
-        user: req.user,
-      });
-
-    const remittanceNumber =
-      `TAXPAY-${Date.now()}`;
-
-    const accountTransaction =
-      await AccountTransaction.create({
-        transactionNumber:
-          `TRN-${Date.now()}-TAX`,
-
-        accountNumber:
-          paymentAccount.accountNumber,
-
-        accountName:
-          paymentAccount.accountName,
-
-        linkedChartAccountCode:
-          paymentAccount.linkedChartAccountCode,
-
-        journalEntryNumber:
-          journalEntry.entryNumber,
-
-        ledgerReference:
-          journalEntry.entryNumber,
-
-        transactionType: "Tax Payment",
-
-        amount: paymentAmount,
-
-        paymentMethod:
-          String(paymentMethod || "").trim(),
-
-        reference:
-          String(paymentReference).trim(),
-
-        notes:
-          String(notes || "").trim() ||
-          `${record.taxType} payment for ${record.periodKey}`,
-
-        transactionDate:
-          new Date(
-            `${normalizedPaymentDate}T12:00:00.000Z`
-          ),
-
-        taxNumber: record.taxNumber,
-        taxType: record.taxType,
-        taxPeriodKey: record.periodKey,
-      });
-
-    const performedBy = getUserName(req.user);
-    const previousStatus = record.status;
-
-    record.amountPaid = roundMoney(
-      Number(record.amountPaid || 0) +
-        paymentAmount
-    );
-
-    record.balanceDue = roundMoney(
-      Number(record.taxDue || 0) -
-        record.amountPaid
-    );
-
-    record.status =
-      record.balanceDue === 0
-        ? "Paid"
-        : "Partially Paid";
-
-    record.journalEntryNumber =
-      journalEntry.entryNumber;
-
-    record.updatedBy = performedBy;
-
-    record.remittances.push({
-      remittanceNumber,
-      paymentDate: normalizedPaymentDate,
-      amount: paymentAmount,
-      paymentMethod:
-        String(paymentMethod || "").trim(),
-      paymentReference:
-        String(paymentReference).trim(),
-
-      paymentAccountNumber:
-        paymentAccount.accountNumber,
-
-      paymentAccountName:
-        paymentAccount.accountName,
-
-      journalEntryNumber:
-        journalEntry.entryNumber,
-
-      receiptUrl:
-        String(receiptUrl || "").trim(),
-
-      notes:
-        String(notes || "").trim(),
-
-      recordedBy: performedBy,
-      recordedAt: new Date(),
-    });
-
-    record.workflowHistory.push({
-      fromStatus: previousStatus,
-      toStatus: record.status,
-      action: "Payment",
-      notes:
-        `${remittanceNumber} - JMD ` +
-        `${paymentAmount.toFixed(2)} paid from ` +
-        `${paymentAccount.accountName}.`,
-      performedBy,
-      performedAt: new Date(),
-    });
-
-    await record.save();
-
-    res.status(201).json({
-      success: true,
-      message:
-        `${record.taxType} payment recorded successfully.`,
-      data: {
-        taxRecord: record,
-        remittanceNumber,
-        journalEntryNumber:
-          journalEntry.entryNumber,
-        transactionNumber:
-          accountTransaction.transactionNumber,
-        paymentAccount: {
-          accountNumber:
-            paymentAccount.accountNumber,
-          accountName:
-            paymentAccount.accountName,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Tax payment error:", error);
-
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not process the tax payment",
-      error: error.message,
-    });
-  }
-};
+);
 
 const getTaxDeadlineRules = async (req, res) => {
   try {
@@ -1537,712 +2396,1142 @@ const activateTaxDeadlineRule = async (
   }
 };
 
-const applyTaxDeadlines = async (req, res) => {
-  try {
-    const {
-      periodKey,
-      sourceType = "",
-    } = req.body;
+const applyTaxDeadlines = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
 
-    if (!periodKey) {
-      return res.status(400).json({
-        success: false,
-        message: "Period key is required.",
-      });
+    const entityCode = T.text(
+      body.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const periodKey = T.text(
+      body.periodKey,
+      "Reporting period"
+    );
+
+    if (/^\d{4}$/.test(periodKey)) {
+      T.date(
+        `${periodKey}-01-01`,
+        "Reporting year"
+      );
+    } else {
+      T.period(periodKey);
     }
 
     const query = {
-      periodKey: String(periodKey).trim(),
+      entityCode,
+      periodKey,
+
       status: {
-        $ne: "Cancelled",
+        $nin: [
+          "Paid",
+          "Reconciled",
+          "Cancelled",
+        ],
       },
     };
 
-    if (sourceType) {
-      query.sourceType =
-        String(sourceType).trim();
+    if (body.sourceType) {
+      query.sourceType = T.text(
+        body.sourceType,
+        "Source type"
+      );
     }
 
-    const records = await TaxRecord.find(query).sort({
-      taxType: 1,
-    });
+    const data = await transact(
+      async (session) => {
+        const records =
+          await TaxRecord.find(query)
+            .sort({
+              taxType: 1,
+              taxNumber: 1,
+            })
+            .session(session);
 
-    if (records.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "No matching Tax Center records were found.",
-      });
-    }
+        if (!records.length) {
+          T.fail(
+            "No eligible obligations were found for this business and period.",
+            404
+          );
+        }
 
-    const updatedRecords = [];
-    const failedRecords = [];
-    const today =
-      new Date().toISOString().slice(0, 10);
-    const performedBy = getUserName(req.user);
+        const userName =
+          T.actor(req);
 
-    for (const record of records) {
-      try {
-        await applyDeadlineRuleToRecord(record);
+        for (const record of records) {
+          const entity = await S.resolve(
+            record.entityCode,
+            record.periodStart,
+            record.periodEnd,
+            session
+          );
 
-        if (
-          record.dueDate &&
-          record.dueDate < today &&
-          Number(record.balanceDue || 0) > 0 &&
-          ![
-            "Paid",
-            "Reconciled",
-            "Cancelled",
-          ].includes(record.status)
-        ) {
-          const previousStatus = record.status;
+          if (
+            record.businessType !==
+            entity.entityType
+          ) {
+            T.fail(
+              `${record.taxNumber} has a business-type mismatch. Review its attribution before applying deadlines.`,
+              409
+            );
+          }
 
-          record.status = "Overdue";
+          const beforeValues =
+            record.toObject();
+
+          await applyDeadlineRuleToRecord(
+            record,
+            session
+          );
+
+          record.updatedBy =
+            userName;
 
           record.workflowHistory.push({
-            fromStatus: previousStatus,
-            toStatus: "Overdue",
-            action: "Deadline Assessment",
+            fromStatus:
+              record.status,
+
+            toStatus:
+              record.status,
+
+            action:
+              "Deadline Assessment",
+
             notes:
-              `Outstanding obligation became overdue on ${record.dueDate}.`,
-            performedBy,
-            performedAt: new Date(),
+              `Due date confirmed as ${record.dueDate}. Workflow status preserved.`,
+
+            performedBy:
+              userName,
+
+            performedAt:
+              new Date(),
+          });
+
+          await record.save({
+            session,
+          });
+
+          await writeAuditLog({
+            req,
+            session,
+
+            action:
+              "APPLY_TAX_DEADLINE",
+
+            module: "Tax Center",
+
+            description:
+              `Applied deadline to ${record.taxNumber}`,
+
+            targetType:
+              "TaxRecord",
+
+            targetId:
+              record.taxNumber,
+
+            beforeValues,
+
+            afterValues:
+              record.toObject(),
           });
         }
 
-        record.updatedBy = performedBy;
-        await record.save();
-
-        updatedRecords.push(record);
-      } catch (error) {
-        failedRecords.push({
-          taxNumber: record.taxNumber,
-          taxType: record.taxType,
-          message: error.message,
-        });
+        return records;
       }
-    }
-
-    res.status(
-      failedRecords.length > 0 ? 207 : 200
-    ).json({
-      success: failedRecords.length === 0,
-
-      message:
-        failedRecords.length === 0
-          ? "Tax deadlines applied successfully."
-          : "Tax deadline application completed with missing or invalid rules.",
-
-      summary: {
-        requestedRecords: records.length,
-        updatedRecords: updatedRecords.length,
-        failedRecords: failedRecords.length,
-      },
-
-      data: updatedRecords,
-      errors: failedRecords,
-    });
-  } catch (error) {
-    console.error(
-      "Apply tax deadlines error:",
-      error
     );
 
-    res.status(500).json({
-      success: false,
+    return res.json({
+      success: true,
+
       message:
-        "Could not apply Tax Center deadlines",
-      error: error.message,
+        "Tax deadlines applied successfully. Approval and submission statuses were preserved.",
+
+      filters: {
+        entityCode,
+        periodKey,
+      },
+
+      summary: {
+        requestedRecords:
+          data.length,
+
+        updatedRecords:
+          data.length,
+
+        failedRecords: 0,
+      },
+
+      data,
+      errors: [],
     });
   }
-};
+);
 
-const transitionGctFilingWorkflow = async (
-  req,
-  res
-) => {
-  try {
-    const { filingNumber } = req.params;
+const transitionGctFilingWorkflow = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
 
-    const {
-      action,
-      notes = "",
-      filingReference = "",
-      filingMethod = "TAJ Online",
-      filedDate = "",
-    } = req.body;
+    const filingNumber = T.text(
+      req.params.filingNumber,
+      "Filing number"
+    );
 
-    const workflowActions = {
-      Review: {
-        fromStatus: "Calculated",
-        toStatus: "Reviewed",
-      },
+    const action = T.text(
+      body.action,
+      "Workflow action"
+    ).toLowerCase();
 
-      Approve: {
-        fromStatus: "Reviewed",
-        toStatus: "Approved",
-      },
-
-      Submit: {
-        fromStatus: "Approved",
-        toStatus: "Submitted",
-      },
+    const transitions = {
+      review: ["Calculated", "Reviewed"],
+      approve: ["Reviewed", "Approved"],
+      submit: ["Approved", "Submitted"],
+      reconcile: ["Paid", "Reconciled"],
     };
 
-    const workflowAction =
-      workflowActions[
-        String(action || "").trim()
-      ];
-
-    if (!workflowAction) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Action must be Review, Approve, or Submit.",
-      });
+    if (!transitions[action]) {
+      T.fail(
+        "Action must be Review, Approve, Submit, or Reconcile."
+      );
     }
 
-    const filingPeriod =
-      await GctFilingPeriod.findOne({
-        filingNumber,
-      });
+    const notes = T.text(
+      body.notes ?? "",
+      "Workflow notes",
+      false
+    );
 
-    if (!filingPeriod) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "GCT filing period not found.",
-      });
-    }
+    const data = await transact(
+      async (session) => {
+        const filing =
+          await GctFilingPeriod.findOne({
+            filingNumber,
+          }).session(session);
 
-    if (
-      filingPeriod.calculationMode !==
-        "Compliance" ||
-      filingPeriod.registrationStatus !==
-        "Registered" ||
-      !filingPeriod.canFileReturn
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "This is a Preview-only GCT period. A return cannot enter the compliance workflow unless an effective Registered profile applies.",
-      });
-    }
-
-    if (
-      filingPeriod.status !==
-      workflowAction.fromStatus
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${action} requires ${workflowAction.fromStatus} status. ` +
-          `The current status is ${filingPeriod.status}.`,
-      });
-    }
-
-    if (action === "Review") {
-      if (
-        Number(
-          filingPeriod.unreviewedInvoiceCount ||
-            0
-        ) > 0
-      ) {
-        return res.status(409).json({
-          success: false,
-          message:
-            `${filingPeriod.unreviewedInvoiceCount} invoice classification(s) still require review.`,
-        });
-      }
-
-      if (
-        Number(
-          filingPeriod.inputGctSummary
-            ?.pendingVerificationInputGct ||
-            0
-        ) > 0
-      ) {
-        return res.status(409).json({
-          success: false,
-          message:
-            "Input GCT remains pending supplier-document verification.",
-        });
-      }
-    }
-
-    if (
-      action === "Submit" &&
-      !String(filingReference).trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A GCT filing or submission reference is required.",
-      });
-    }
-
-    const performedBy =
-      getUserName(req.user);
-
-    const performedAt = new Date();
-    const previousStatus =
-      filingPeriod.status;
-
-    let settlementJournal = null;
-    let taxRecord = null;
-
-    if (action === "Submit") {
-      filingPeriod.filingReference =
-        String(filingReference).trim();
-
-      filingPeriod.filingMethod =
-        String(filingMethod || "").trim() ||
-        "TAJ Online";
-
-      filingPeriod.filedDate =
-        String(filedDate || "").trim() ||
-        performedAt
-          .toISOString()
-          .slice(0, 10);
-
-      filingPeriod.submittedBy =
-        performedBy;
-
-      filingPeriod.submittedAt =
-        performedAt;
-
-      if (
-        !filingPeriod
-          .settlementJournalEntryNumber
-      ) {
-        settlementJournal =
-          await postGctFilingSettlement({
-            filingPeriod,
-            postingDate:
-              filingPeriod.filedDate,
-            user: req.user,
-          });
-
-        if (settlementJournal) {
-          filingPeriod.settlementJournalEntryNumber =
-            settlementJournal.entryNumber;
-
-          filingPeriod.settlementPostedAt =
-            performedAt;
-
-          filingPeriod.settlementPostedBy =
-            performedBy;
+        if (!filing) {
+          T.fail(
+            "GCT filing not found.",
+            404
+          );
         }
-      }
 
-      if (Number(filingPeriod.netGct || 0) > 0) {
-        taxRecord =
-          await TaxRecord.findOne({
-            sourceType: "GCT Return",
-            sourceReference:
-              filingPeriod.filingNumber,
-            status: {
-              $ne: "Cancelled",
-            },
-          });
+        if (
+          filing.status !==
+          transitions[action][0]
+        ) {
+          T.fail(
+            `This filing cannot ${action} while its status is ${filing.status}.`,
+            409
+          );
+        }
 
-        if (!taxRecord) {
-          const netGct =
-            roundMoney(
-              filingPeriod.netGct
+        if (
+          filing.calculationMode !==
+            "Compliance" ||
+          filing.registrationStatus !==
+            "Registered" ||
+          !filing.canFileReturn
+        ) {
+          T.fail(
+            "A Preview filing cannot enter the compliance workflow.",
+            409
+          );
+        }
+
+        const entity = await S.resolve(
+          filing.entityCode,
+          filing.periodStart,
+          filing.periodEnd,
+          session
+        );
+
+        const rows =
+          await GctRegisterEntry.find({
+            filingNumber,
+          })
+            .session(session)
+            .lean();
+
+        const outputRows = rows.filter(
+          (row) =>
+            row.registerType ===
+            "Output GCT"
+        );
+
+        const inputRows = rows.filter(
+          (row) =>
+            row.registerType ===
+            "Input GCT"
+        );
+
+        if (
+          outputRows.length !==
+            filing.invoiceCount ||
+          inputRows.length !==
+            filing.expenseCount ||
+          rows.length !==
+            outputRows.length +
+              inputRows.length
+        ) {
+          T.fail(
+            "Register counts differ from the filing. Recalculate and review it.",
+            409
+          );
+        }
+
+        if (
+          rows.some(
+            (row) =>
+              row.entityCode !==
+                filing.entityCode ||
+              row.periodKey !==
+                filing.periodKey ||
+              String(
+                row.filingPeriodId
+              ) !==
+                String(filing._id) ||
+              row.calculationMode !==
+                "Compliance" ||
+              row.registrationStatus !==
+                "Registered"
+          )
+        ) {
+          T.fail(
+            "Register attribution or filing links are inconsistent.",
+            409
+          );
+        }
+
+        if (
+          outputRows.some(
+            (row) =>
+              ![
+                "Reviewed",
+                "Adjusted",
+              ].includes(
+                row.classificationStatus
+              ) ||
+              row.classification ===
+                "Pending Review"
+          ) ||
+          inputRows.some(
+            (row) =>
+              T.amount(
+                row.pendingVerificationGctAmount ??
+                  0
+              ) > 0
+          )
+        ) {
+          T.fail(
+            "Complete invoice classifications and supplier-evidence review before continuing.",
+            409
+          );
+        }
+
+        const sum = (items, field) =>
+          T.round(
+            items.reduce(
+              (total, item) =>
+                total +
+                T.amount(
+                  item[field] ?? 0,
+                  field
+                ),
+              0
+            )
+          );
+
+        const output = T.amount(
+          filing.outputGct,
+          "Output GCT"
+        );
+
+        const input = T.amount(
+          filing.inputGctCredit,
+          "Input GCT credit"
+        );
+
+        if (
+          sum(
+            outputRows,
+            "gctAmount"
+          ) !== output ||
+          sum(
+            inputRows,
+            "claimableGctAmount"
+          ) !== input ||
+          T.round(
+            output - input
+          ) !==
+            Number(filing.netGct)
+        ) {
+          T.fail(
+            "Filing totals differ from the register. Adjusted filings require a separately reviewed adjustment workflow.",
+            409
+          );
+        }
+
+        const stable = (value) => {
+          if (Array.isArray(value)) {
+            return value.map(stable);
+          }
+
+          if (
+            value &&
+            typeof value === "object" &&
+            !(value instanceof Date)
+          ) {
+            return Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map(
+                  (key) => [
+                    key,
+                    stable(value[key]),
+                  ]
+                )
+            );
+          }
+
+          return value;
+        };
+
+        const equivalent = (
+          first,
+          second
+        ) =>
+          JSON.stringify(
+            stable(
+              JSON.parse(
+                JSON.stringify(first)
+              )
+            )
+          ) ===
+          JSON.stringify(
+            stable(
+              JSON.parse(
+                JSON.stringify(second)
+              )
+            )
+          );
+
+        for (const row of rows) {
+          const isInvoice =
+            row.registerType ===
+            "Output GCT";
+
+          const source =
+            await (
+              isInvoice
+                ? Invoice
+                : Expense
+            )
+              .findById(
+                row.sourceDocumentId
+              )
+              .session(session)
+              .lean();
+
+          if (
+            !source ||
+            [
+              "Draft",
+              "Cancelled",
+              "Refunded",
+            ].includes(source.status)
+          ) {
+            T.fail(
+              "A filing source is unavailable or no longer eligible.",
+              409
+            );
+          }
+
+          const snapshot =
+            row.sourceSnapshot || {};
+
+          const sourceDate = T.date(
+            isInvoice
+              ? source.createdAt
+              : source.date,
+
+            "Source date"
+          );
+
+          const savedDate =
+            isInvoice
+              ? snapshot.invoiceDate
+              : snapshot.expenseDate;
+
+          const codes = [
+            source.entityCode,
+            source.entitySnapshot
+              ?.entityCode,
+            source.businessEntitySnapshot
+              ?.entityCode,
+          ]
+            .filter(Boolean)
+            .map(
+              (code) =>
+                String(code)
+                  .trim()
+                  .toUpperCase()
             );
 
-          taxRecord =
-            await TaxRecord.create({
-              taxNumber:
-                `TAX-GCT-${filingPeriod.periodKey.replace(
-                  "-",
-                  ""
-                )}-${Date.now()}`,
+          if (
+            new Set(codes).size !== 1 ||
+            codes[0] !==
+              filing.entityCode ||
+            sourceDate !== savedDate ||
+            sourceDate <
+              filing.periodStart ||
+            sourceDate >
+              filing.periodEnd ||
+            source.status !==
+              snapshot.status
+          ) {
+            T.fail(
+              "A source date, status, or business identity changed after calculation.",
+              409
+            );
+          }
 
-              taxType: "GCT",
-              taxCategory:
-                "Consumption Tax",
+          const amountField =
+            isInvoice
+              ? "finalTotal"
+              : "amount";
 
-              businessType:
-                filingPeriod.businessType,
+          if (
+            T.amount(
+              source[amountField]
+            ) !==
+            T.amount(
+              snapshot[amountField]
+            ) ||
+            !equivalent(
+              snapshot.gctTreatment ||
+                {},
+              source.gctTreatment ||
+                {}
+            ) ||
+            (
+              isInvoice &&
+              !equivalent(
+                snapshot
+                  .turnoverClassification ||
+                  {},
+                source
+                  .turnoverClassification ||
+                  {}
+              )
+            )
+          ) {
+            T.fail(
+              "A source amount or GCT review changed after calculation. Recalculation and review are required.",
+              409
+            );
+          }
+        }
 
-              businessName:
-                filingPeriod.entityName,
+        const beforeValues =
+          filing.toObject();
 
-              businessTrn:
-                filingPeriod.businessTrn ||
-                "",
+        const userName =
+          T.actor(req);
 
-              periodKey:
-                filingPeriod.periodKey,
+        const now = new Date();
 
-              periodStart:
-                filingPeriod.periodStart,
+        if (action === "review") {
+          filing.reviewedBy =
+            userName;
 
-              periodEnd:
-                filingPeriod.periodEnd,
+          filing.reviewedAt = now;
+          filing.reviewNotes = notes;
+        }
 
-              filingFrequency:
-                filingPeriod.filingFrequency,
+        if (action === "approve") {
+          filing.approvedBy =
+            userName;
 
+          filing.approvedAt = now;
+          filing.approvalNotes = notes;
+        }
+
+        if (action === "submit") {
+          if (
+            filing.taxRecordId ||
+            filing.taxNumber ||
+            filing
+              .settlementJournalEntryNumber
+          ) {
+            T.fail(
+              "This filing already has accounting links requiring review.",
+              409
+            );
+          }
+
+          const existing =
+            await TaxRecord.findOne({
               sourceType:
                 "GCT Return",
 
+              sourceReference:
+                filingNumber,
+            }).session(session);
+
+          const existingSettlement =
+            await JournalEntry.findOne({
+              reference:
+                filingNumber,
+
               sourceModule:
                 "Tax Center",
+            }).session(session);
 
-              sourceReference:
-                filingPeriod.filingNumber,
+          if (
+            existing ||
+            existingSettlement
+          ) {
+            T.fail(
+              "Existing filing accounting requires review. No duplicate was posted.",
+              409
+            );
+          }
 
-              taxableAmount:
-                roundMoney(
-                  filingPeriod
-                    .outputGctSummary
-                    ?.taxableSales
-                ),
+          const filingReference =
+            T.text(
+              body.filingReference,
+              "Official filing reference"
+            );
 
-              taxRate:
-                Number(
-                  filingPeriod.standardRate ||
-                    0
-                ),
+          const filingMethod =
+            T.text(
+              body.filingMethod,
+              "Filing method"
+            );
 
-              taxDue: netGct,
-              amountPaid: 0,
-              balanceDue: netGct,
+          if (
+            ![
+              "TAJ Online",
+              "Manual Submission",
+              "Tax Agent",
+              "Other",
+            ].includes(filingMethod)
+          ) {
+            T.fail(
+              "Invalid GCT filing method."
+            );
+          }
 
-              liabilityBreakdown: {
-                gctOutputTax:
-                  roundMoney(
-                    filingPeriod.outputGct
-                  ),
+          const filedDate = T.date(
+            body.filedDate,
+            "Filed date"
+          );
 
-                gctInputTaxCredit:
-                  roundMoney(
-                    filingPeriod
-                      .inputGctCredit
-                  ),
-              },
+          if (
+            filedDate > T.today()
+          ) {
+            T.fail(
+              "Filed date cannot be in the future."
+            );
+          }
 
-              calculationRuleCode:
-                filingPeriod.rateRuleCode ||
-                filingPeriod
-                  .registrationCode,
+          for (const [
+            accountCode,
+            requiredAmount,
+            sign,
+          ] of [
+            ["2160", output, 1],
+            ["1170", input, -1],
+          ]) {
+            const ledgerRows =
+              await GeneralLedgerTransaction.find({
+                entityCode:
+                  filing.entityCode,
 
-              calculationSnapshot: {
-                filingNumber:
-                  filingPeriod.filingNumber,
+                reportingPeriodKey:
+                  filing.periodKey,
 
-                registrationSnapshot:
-                  filingPeriod
-                    .registrationSnapshot,
+                accountCode,
+              })
+                .session(session)
+                .lean();
 
-                outputGctSummary:
-                  filingPeriod
-                    .outputGctSummary,
+            const recordedAmount =
+              T.round(
+                ledgerRows.reduce(
+                  (total, row) =>
+                    total +
+                    sign *
+                      (
+                        T.amount(
+                          row.credit ?? 0
+                        ) -
+                        T.amount(
+                          row.debit ?? 0
+                        )
+                      ),
+                  0
+                )
+              );
 
-                inputGctSummary:
-                  filingPeriod
-                    .inputGctSummary,
+            if (
+              recordedAmount <
+              requiredAmount
+            ) {
+              T.fail(
+                `Ledger account ${accountCode} does not contain enough recorded source tax to support this settlement.`,
+                409
+              );
+            }
 
-                outputGct:
-                  filingPeriod.outputGct,
+            for (const row of ledgerRows) {
+              const journal =
+                await JournalEntry.findOne({
+                  entryNumber:
+                    row.entryNumber,
 
-                inputGctCredit:
-                  filingPeriod
-                    .inputGctCredit,
+                  entityCode:
+                    filing.entityCode,
 
-                netGct:
-                  filingPeriod.netGct,
+                  reportingPeriodKey:
+                    filing.periodKey,
 
-                netPosition:
-                  filingPeriod.netPosition,
-              },
+                  status: {
+                    $in: [
+                      "Posted",
+                      "Reversed",
+                    ],
+                  },
+                }).session(session);
 
-              filedDate:
-                filingPeriod.filedDate,
+              if (
+                !journal ||
+                (
+                  journal.status ===
+                    "Reversed" &&
+                  !journal
+                    .reversalEntryNumber
+                )
+              ) {
+                T.fail(
+                  "A supporting tax journal is missing, unposted, or has incomplete reversal evidence.",
+                  409
+                );
+              }
+            }
+          }
 
-              filingReference:
-                filingPeriod
-                  .filingReference,
-
-              filingMethod:
-                filingPeriod
-                  .filingMethod,
-
-              status: "Submitted",
-
-              submittedBy:
-                performedBy,
-
-              submittedAt:
-                performedAt,
-
-              submissionNotes:
-                String(notes || "").trim(),
-
-              journalEntryNumber:
-                filingPeriod
-                  .settlementJournalEntryNumber ||
-                "",
-
-              notes:
-                `Generated from GCT filing ${filingPeriod.filingNumber}.`,
-
-              createdBy:
-                performedBy,
-
-              updatedBy:
-                performedBy,
-
-              workflowHistory: [
-                {
-                  fromStatus:
-                    "Calculated",
-
-                  toStatus:
-                    "Submitted",
-
-                  action:
-                    "GCT Return Submission",
-
-                  notes:
-                    String(
-                      notes || ""
-                    ).trim(),
-
-                  performedBy,
-
-                  performedAt,
-                },
-              ],
+          const journal =
+            await postGctFilingSettlement({
+              filingPeriod: filing,
+              postingDate:
+                filedDate,
+              user: req.user,
+              session,
             });
+
+          if (journal) {
+            filing.settlementJournalEntryNumber =
+              journal.entryNumber;
+
+            filing.settlementPostedAt =
+              now;
+
+            filing.settlementPostedBy =
+              userName;
+          }
+
+          const payable =
+            Math.max(
+              0,
+              T.round(
+                output - input
+              )
+            );
+
+          if (payable > 0) {
+            const [record] =
+              await TaxRecord.create(
+                [
+                  {
+                    taxNumber:
+                      T.number("TAX-GCT"),
+
+                    entityId:
+                      entity._id,
+
+                    entityCode:
+                      entity.entityCode,
+
+                    entitySnapshot:
+                      S.snapshot(entity),
+
+                    businessType:
+                      entity.entityType,
+
+                    businessName:
+                      entity.legalName,
+
+                    businessTrn:
+                      entity.trn || "",
+
+                    taxType: "GCT",
+
+                    taxCategory:
+                      "Consumption Tax",
+
+                    periodKey:
+                      filing.periodKey,
+
+                    periodStart:
+                      filing.periodStart,
+
+                    periodEnd:
+                      filing.periodEnd,
+
+                    filingFrequency:
+                      filing.filingFrequency,
+
+                    sourceType:
+                      "GCT Return",
+
+                    sourceModule:
+                      "Tax Center",
+
+                    sourceReference:
+                      filingNumber,
+
+                    taxDue:
+                      payable,
+
+                    amountPaid: 0,
+                    balanceDue:
+                      payable,
+
+                    status:
+                      "Submitted",
+
+                    filingReference,
+                    filingMethod,
+                    filedDate,
+
+                    reviewedBy:
+                      filing.reviewedBy,
+
+                    reviewedAt:
+                      filing.reviewedAt,
+
+                    approvedBy:
+                      filing.approvedBy,
+
+                    approvedAt:
+                      filing.approvedAt,
+
+                    submittedBy:
+                      userName,
+
+                    submittedAt: now,
+
+                    journalEntryNumber:
+                      journal
+                        ?.entryNumber ||
+                      "",
+
+                    createdBy:
+                      userName,
+
+                    updatedBy:
+                      userName,
+                  },
+                ],
+                { session }
+              );
+
+            filing.taxRecordId =
+              record._id;
+
+            filing.taxNumber =
+              record.taxNumber;
+
+            await writeAuditLog({
+              req,
+              session,
+
+              action:
+                "CREATE_GCT_OBLIGATION",
+
+              module: "Tax Center",
+
+              description:
+                `Created ${record.taxNumber}`,
+
+              targetType:
+                "TaxRecord",
+
+              targetId:
+                record.taxNumber,
+
+              afterValues:
+                record.toObject(),
+            });
+          }
+
+          filing.filingReference =
+            filingReference;
+
+          filing.filingMethod =
+            filingMethod;
+
+          filing.filedDate =
+            filedDate;
+
+          filing.submittedBy =
+            userName;
+
+          filing.submittedAt =
+            now;
         }
 
-        filingPeriod.taxRecordId =
-          taxRecord._id;
+        if (
+          action === "reconcile"
+        ) {
+          const record =
+            filing.taxRecordId
+              ? await TaxRecord.findById(
+                  filing.taxRecordId
+                ).session(session)
+              : null;
 
-        filingPeriod.taxNumber =
-          taxRecord.taxNumber;
+          if (
+            !record ||
+            record.status !==
+              "Reconciled" ||
+            record.entityCode !==
+              filing.entityCode ||
+            record.periodKey !==
+              filing.periodKey ||
+            record.taxNumber !==
+              filing.taxNumber ||
+            T.amount(
+              record.taxDue
+            ) !==
+              Math.max(
+                0,
+                T.round(
+                  output - input
+                )
+              ) ||
+            T.amount(
+              record.balanceDue
+            ) !== 0
+          ) {
+            T.fail(
+              "Reconcile the matching zero-balance tax obligation first.",
+              409
+            );
+          }
+
+          await assertEntityPeriodTaxTypeReconciled({
+            entityCode:
+              record.entityCode,
+
+            periodKey:
+              record.periodKey,
+
+            taxType: "GCT",
+            session,
+          });
+
+          filing.reconciledBy =
+            userName;
+
+          filing.reconciledAt =
+            now;
+
+          filing.reconciliationNotes =
+            notes;
+        }
+
+        filing.status =
+          transitions[action][1];
+
+        filing.workflowHistory.push({
+          fromStatus:
+            beforeValues.status,
+
+          toStatus:
+            filing.status,
+
+          action,
+          notes,
+
+          performedBy:
+            userName,
+
+          performedAt: now,
+        });
+
+        await filing.save({
+          session,
+        });
+
+        await writeAuditLog({
+          req,
+          session,
+
+          action:
+            `GCT_${action.toUpperCase()}`,
+
+          module: "Tax Center",
+
+          description:
+            `${action}: ${filingNumber}`,
+
+          targetType:
+            "GctFilingPeriod",
+
+          targetId:
+            filingNumber,
+
+          beforeValues,
+
+          afterValues:
+            filing.toObject(),
+        });
+
+        return filing;
+      }
+    );
+
+    return res.json({
+      success: true,
+
+      message:
+        `GCT filing ${action} completed.`,
+
+      data: {
+        filingPeriod: data,
+      },
+    });
+  }
+);
+
+const getGctFilingPeriods = T.handler(
+  async (req, res) => {
+    const entityCode = T.text(
+      req.query.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const periodKey = T.period(
+      req.query.periodKey
+    );
+
+    const query = {
+      entityCode,
+      periodKey,
+    };
+
+    for (const field of [
+      "status",
+      "calculationMode",
+    ]) {
+      if (req.query[field]) {
+        query[field] = T.text(
+          req.query[field],
+          field
+        );
       }
     }
 
-    if (action === "Review") {
-      filingPeriod.reviewedBy =
-        performedBy;
-
-      filingPeriod.reviewedAt =
-        performedAt;
-
-      filingPeriod.reviewNotes =
-        String(notes || "").trim();
-    }
-
-    if (action === "Approve") {
-      filingPeriod.approvedBy =
-        performedBy;
-
-      filingPeriod.approvedAt =
-        performedAt;
-
-      filingPeriod.approvalNotes =
-        String(notes || "").trim();
-    }
-
-    filingPeriod.status =
-      workflowAction.toStatus;
-
-    filingPeriod.updatedBy =
-      performedBy;
-
-    filingPeriod.workflowHistory.push({
-      fromStatus: previousStatus,
-      toStatus:
-        workflowAction.toStatus,
-      action,
-      notes:
-        String(notes || "").trim(),
-      performedBy,
-      performedAt,
-    });
-
-    await filingPeriod.save();
-
-    res.json({
-      success: true,
-
-      message:
-        `GCT filing ${filingPeriod.filingNumber} moved from ` +
-        `${previousStatus} to ${filingPeriod.status}.`,
-
-      data: {
-        filingPeriod,
-
-        taxRecord,
-
-        settlementJournalEntryNumber:
-          filingPeriod
-            .settlementJournalEntryNumber ||
-          "",
-      },
-    });
-  } catch (error) {
-    console.error(
-      "GCT filing workflow error:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not update the GCT filing workflow",
-      error: error.message,
-    });
-  }
-};
-
-const getGctFilingPeriods = async (req, res) => {
-  try {
-    const {
-      entityCode = "EK-SP-2026",
-      periodKey = "",
-      status = "",
-      calculationMode = "",
-    } = req.query;
-
-    const query = {
-      entityCode: String(entityCode).trim(),
-    };
-
-    if (periodKey) {
-      query.periodKey =
-        String(periodKey).trim();
-    }
-
-    if (status) {
-      query.status =
-        String(status).trim();
-    }
-
-    if (calculationMode) {
-      query.calculationMode =
-        String(calculationMode).trim();
-    }
-
     const filingPeriods =
-      await GctFilingPeriod.find(query).sort({
-        periodStart: -1,
-        createdAt: -1,
-      });
+      await GctFilingPeriod.find(
+        query
+      )
+        .sort({
+          periodStart: -1,
+          createdAt: -1,
+        })
+        .lean();
 
-    res.json({
+    return res.json({
       success: true,
+
       message:
-        "GCT filing periods retrieved successfully",
-      totalRecords: filingPeriods.length,
+        "GCT filing periods retrieved successfully.",
+
+      filters: {
+        entityCode,
+        periodKey,
+      },
+
+      totalRecords:
+        filingPeriods.length,
+
       data: filingPeriods,
     });
-  } catch (error) {
-    console.error(
-      "Get GCT filing periods error:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not retrieve GCT filing periods",
-      error: error.message,
-    });
   }
-};
+);
 
-const calculateGctFilingPeriod = async (
-  req,
-  res
-) => {
-  try {
-    const {
-      entityCode = "EK-SP-2026",
-      periodKey,
-    } = req.body;
+const calculateGctFilingPeriod = T.handler(
+  async (req, res) => {
+    const body = req.body || {};
 
-    if (!periodKey) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A GCT filing period using YYYY-MM is required.",
-      });
-    }
+    const entityCode = T.text(
+      body.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const periodKey = T.period(
+      body.periodKey
+    );
 
     const result =
       await generateGctFilingPeriod({
-        entityCode:
-          String(entityCode).trim(),
-        periodKey:
-          String(periodKey).trim(),
+        entityCode,
+        periodKey,
         user: req.user,
       });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
 
       message:
-        result.filingPeriod.calculationMode ===
-        "Preview"
-          ? "Preview GCT filing period generated successfully. No GCT liability or filing was created."
-          : "GCT filing period calculated successfully.",
+        result.filingPeriod
+          .calculationMode === "Preview"
+          ? "Preview saved. No payable obligation or accounting settlement was posted."
+          : "GCT calculation and register saved together for review. No payable obligation or accounting settlement was posted.",
 
-      data: result.filingPeriod,
-      summary: result.summary,
-    });
-  } catch (error) {
-    console.error(
-      "Calculate GCT filing period error:",
-      error
-    );
+      filters: {
+        entityCode,
+        periodKey,
+      },
 
-    const conflict =
-      String(error.message || "").includes(
-        "cannot be recalculated"
-      );
+      data:
+        result.filingPeriod,
 
-    const missingProfile =
-      String(error.message || "").includes(
-        "No active GCT registration profile"
-      );
-
-    res.status(
-      conflict
-        ? 409
-        : missingProfile
-          ? 404
-          : 500
-    ).json({
-      success: false,
-      message:
-        "Could not calculate the GCT filing period",
-      error: error.message,
+      summary:
+        result.summary,
     });
   }
-};
+);
 
-const getGctFilingRegister = async (
-  req,
-  res
-) => {
-  try {
-    const { periodKey } = req.params;
+const getGctFilingRegister = T.handler(
+  async (req, res) => {
+    const entityCode = T.text(
+      req.query.entityCode,
+      "Business entity"
+    ).toUpperCase();
 
-    const entityCode = String(
-      req.query.entityCode ||
-        "EK-SP-2026"
-    ).trim();
+    const periodKey = T.period(
+      req.params.periodKey
+    );
 
-    const registerType = String(
-      req.query.registerType || ""
-    ).trim();
+    const registerType = T.text(
+      req.query.registerType ?? "",
+      "Register type",
+      false
+    );
 
     if (
       registerType &&
@@ -2251,25 +3540,22 @@ const getGctFilingRegister = async (
         "Input GCT",
       ].includes(registerType)
     ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Register type must be Output GCT or Input GCT.",
-      });
+      T.fail(
+        "Register type must be Output GCT or Input GCT."
+      );
     }
 
     const filingPeriod =
       await GctFilingPeriod.findOne({
         entityCode,
         periodKey,
-      });
+      }).lean();
 
     if (!filingPeriod) {
-      return res.status(404).json({
-        success: false,
-        message:
-          `No GCT filing period exists for ${periodKey}.`,
-      });
+      T.fail(
+        `No GCT filing exists for ${entityCode} and ${periodKey}.`,
+        404
+      );
     }
 
     const register =
@@ -2279,78 +3565,79 @@ const getGctFilingRegister = async (
         registerType,
       });
 
-    const summary = register.reduce(
-      (totals, entry) => {
-        totals.grossAmount +=
-          Number(entry.grossAmount || 0);
+    if (
+      register.some(
+        (entry) =>
+          entry.filingNumber !==
+            filingPeriod.filingNumber ||
+          String(
+            entry.filingPeriodId
+          ) !==
+            String(filingPeriod._id)
+      )
+    ) {
+      T.fail(
+        "Register entries have inconsistent filing links and require review.",
+        409
+      );
+    }
 
-        totals.taxableAmount +=
-          Number(entry.taxableAmount || 0);
-
-        totals.gctAmount +=
-          Number(entry.gctAmount || 0);
-
-        totals.claimableGctAmount +=
-          Number(
-            entry.claimableGctAmount || 0
-          );
-
-        totals.disallowedGctAmount +=
-          Number(
-            entry.disallowedGctAmount || 0
-          );
-
-        totals.pendingVerificationGctAmount +=
-          Number(
-            entry.pendingVerificationGctAmount ||
-              0
-          );
-
-        if (
-          entry.classificationStatus ===
-          "Preliminary"
-        ) {
-          totals.preliminaryEntries += 1;
-        }
-
-        if (
-          entry.eligibility
-            ?.includedInReturn
-        ) {
-          totals.includedInReturn += 1;
-        }
-
-        return totals;
-      },
-      {
-        recordCount: register.length,
-        preliminaryEntries: 0,
-        includedInReturn: 0,
-        grossAmount: 0,
-        taxableAmount: 0,
-        gctAmount: 0,
-        claimableGctAmount: 0,
-        disallowedGctAmount: 0,
-        pendingVerificationGctAmount: 0,
-      }
-    );
-
-    [
+    const moneyFields = [
       "grossAmount",
       "taxableAmount",
       "gctAmount",
       "claimableGctAmount",
       "disallowedGctAmount",
       "pendingVerificationGctAmount",
-    ].forEach((field) => {
-      summary[field] =
-        roundMoney(summary[field]);
-    });
+    ];
 
-    res.json({
+    const summary = {
+      recordCount:
+        register.length,
+
+      preliminaryEntries: 0,
+      includedInReturn: 0,
+
+      grossAmount: 0,
+      taxableAmount: 0,
+      gctAmount: 0,
+      claimableGctAmount: 0,
+      disallowedGctAmount: 0,
+      pendingVerificationGctAmount: 0,
+    };
+
+    for (const entry of register) {
+      for (const field of moneyFields) {
+        summary[field] = T.round(
+          summary[field] +
+            T.amount(
+              entry[field] ?? 0,
+              field
+            )
+        );
+      }
+
+      if (
+        entry.classificationStatus ===
+        "Preliminary"
+      ) {
+        summary.preliminaryEntries += 1;
+      }
+
+      if (
+        entry.eligibility
+          ?.includedInReturn === true
+      ) {
+        summary.includedInReturn += 1;
+      }
+    }
+
+    return res.json({
       success: true,
+
       message:
-        "GCT register retrieved successfully",
+        "GCT register retrieved successfully.",
+
       filingPeriod: {
         filingNumber:
           filingPeriod.filingNumber,
@@ -2377,6 +3664,7 @@ const getGctFilingRegister = async (
       filters: {
         entityCode,
         periodKey,
+
         registerType:
           registerType || "All",
       },
@@ -2384,20 +3672,8 @@ const getGctFilingRegister = async (
       summary,
       data: register,
     });
-  } catch (error) {
-    console.error(
-      "Get GCT filing register error:",
-      error
-    );
-
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not retrieve the GCT filing register",
-      error: error.message,
-    });
   }
-};
+);
 
 const getGctRegistrationProfiles = async (req, res) => {
   try {
@@ -2446,865 +3722,969 @@ const getGctRegistrationProfiles = async (req, res) => {
   }
 };
 
-const createGctRegistrationProfile = async (req, res) => {
-  try {
-    const {
-      registrationCode,
-      entityCode = "EK-SP-2026",
-      entityName = "Eltham Konnect",
-      businessType = "Sole Proprietorship",
-      registrationStatus = "Not Registered",
-      registrationNumber = "",
-      trn = "",
-      effectiveFrom,
-      effectiveTo = null,
-      thresholdAmount,
-      thresholdCurrency = "JMD",
-      monitoringMonths = 12,
-      standardRate = 0,
-      thresholdRuleEffectiveFrom = null,
-      thresholdRuleEffectiveTo = null,
-      sourceName = "",
-      sourceUrl = "",
-      sourceReference = "",
-      sourceVerifiedAt = null,
-      notes = "",
-    } = req.body;
-
-    if (!registrationCode || !effectiveFrom) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Registration code and effective-from date are required.",
-      });
-    }
-
-    if (
-      thresholdAmount === undefined ||
-      thresholdAmount === null ||
-      thresholdAmount === "" ||
-      Number(thresholdAmount) <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A valid GCT registration threshold is required.",
-      });
-    }
-
-    const normalizedRegistrationCode =
-      String(registrationCode).trim();
-
-    const existingProfile =
-      await TaxRegistrationProfile.findOne({
-        registrationCode: normalizedRegistrationCode,
-      });
-
-    if (existingProfile) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `GCT registration profile ${normalizedRegistrationCode} already exists.`,
-      });
-    }
-
-    const performedBy = getUserName(req.user);
-
-    const profile = await TaxRegistrationProfile.create({
-      registrationCode: normalizedRegistrationCode,
-
-      entityCode: String(entityCode).trim(),
-      entityName: String(entityName).trim(),
-      businessType,
-
-      countryCode: "JM",
-      taxType: "GCT",
-
-      registrationStatus,
-      registrationNumber:
-        String(registrationNumber).trim(),
-      trn: String(trn).trim(),
-
-      effectiveFrom,
-      effectiveTo,
-
-            turnoverThreshold: {
-        amount: roundMoney(thresholdAmount),
-        currency:
-          String(thresholdCurrency || "JMD")
-            .trim()
-            .toUpperCase(),
-        monitoringMonths:
-          Number(monitoringMonths || 12),
-        effectiveFrom:
-          thresholdRuleEffectiveFrom || effectiveFrom,
-        effectiveTo:
-          thresholdRuleEffectiveTo || null,
-        ruleCode: "JM-GCT-THRESHOLD-2025-15M",
-      },
-
-      sourceName: String(sourceName).trim(),
-      sourceUrl: String(sourceUrl).trim(),
-      sourceReference:
-        String(sourceReference).trim(),
-      sourceVerifiedAt,
-
-      notes: String(notes).trim(),
-
-      status: "Draft",
-      createdBy: performedBy,
-      updatedBy: performedBy,
-    });
-
-    res.status(201).json({
-      success: true,
-      message:
-        "Draft GCT registration profile created successfully",
-      data: profile,
-    });
-  } catch (error) {
-    console.error("Create GCT registration profile error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not create GCT registration profile",
-      error: error.message,
-    });
+const requireTaxConfigurationAdmin = (req) => {
+  if (req.user?.role !== "Admin") {
+    T.fail(
+      "Only an administrator can change tax configuration.",
+      403
+    );
   }
 };
 
-const updateDraftGctRegistrationProfile = async (
-  req,
-  res
+const gctDate = (
+  value,
+  label,
+  required = true
 ) => {
-  try {
-    const { registrationCode } = req.params;
+  if (
+    !required &&
+    (
+      value === undefined ||
+      value === null ||
+      value === ""
+    )
+  ) {
+    return null;
+  }
 
-    const profile = await TaxRegistrationProfile.findOne({
-      registrationCode,
-      taxType: "GCT",
-    });
+  return new Date(
+    `${T.date(value, label)}T12:00:00.000Z`
+  );
+};
 
-    if (!profile) {
-      return res.status(404).json({
-        success: false,
-        message: "GCT registration profile not found.",
-      });
-    }
+const gctDateText = (value) =>
+  value
+    ? new Date(value)
+        .toISOString()
+        .slice(0, 10)
+    : "";
 
-    if (profile.status !== "Draft") {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Only a Draft GCT registration profile can be corrected.",
-      });
-    }
+const buildGctProfileValues = (
+  body,
+  entity
+) => {
+  const registrationStatus = T.text(
+    body.registrationStatus ||
+      "Not Registered",
+    "Registration status"
+  );
 
-    const {
-      registrationStatus,
-      registrationNumber,
-      trn,
-      effectiveFrom,
-      effectiveTo,
-      thresholdAmount,
-      thresholdCurrency,
+  if (
+    ![
+      "Not Registered",
+      "Registration Review",
+      "Application In Progress",
+      "Registered",
+      "Suspended",
+      "Deregistered",
+    ].includes(registrationStatus)
+  ) {
+    T.fail(
+      "Invalid GCT registration status."
+    );
+  }
+
+  const effectiveFrom = gctDate(
+    body.effectiveFrom,
+    "Profile effective-from date"
+  );
+
+  const effectiveTo = gctDate(
+    body.effectiveTo,
+    "Profile effective-to date",
+    false
+  );
+
+  if (
+    effectiveTo &&
+    effectiveTo < effectiveFrom
+  ) {
+    T.fail(
+      "Profile end date cannot precede its start."
+    );
+  }
+
+  const thresholdFrom = gctDate(
+    body.thresholdRuleEffectiveFrom,
+    "Threshold effective-from date"
+  );
+
+  const thresholdTo = gctDate(
+    body.thresholdRuleEffectiveTo,
+    "Threshold effective-to date",
+    false
+  );
+
+  if (
+    thresholdTo &&
+    thresholdTo < thresholdFrom
+  ) {
+    T.fail(
+      "Threshold end date cannot precede its start."
+    );
+  }
+
+  const currency = T.text(
+    body.thresholdCurrency || "JMD",
+    "Threshold currency"
+  ).toUpperCase();
+
+  if (currency !== "JMD") {
+    T.fail(
+      "This GCT configuration requires a JMD threshold."
+    );
+  }
+
+  const monitoringMonths = Number(
+    body.monitoringMonths ?? 12
+  );
+
+  if (
+    !Number.isInteger(
+      monitoringMonths
+    ) ||
+    monitoringMonths < 1 ||
+    monitoringMonths > 120
+  ) {
+    T.fail(
+      "Monitoring months must be a whole number between 1 and 120."
+    );
+  }
+
+  if (
+    body.monitoringEnabled !== undefined &&
+    typeof body.monitoringEnabled !==
+      "boolean"
+  ) {
+    T.fail(
+      "Monitoring enabled must be true or false."
+    );
+  }
+
+  const rawRate =
+    body.standardRate ?? 0;
+
+  if (
+    !["number", "string"].includes(
+      typeof rawRate
+    ) ||
+    (
+      typeof rawRate === "string" &&
+      !rawRate.trim()
+    )
+  ) {
+    T.fail(
+      "Standard rate must be a decimal between zero and one."
+    );
+  }
+
+  const standardRate =
+    Number(rawRate);
+
+  if (
+    !Number.isFinite(
+      standardRate
+    ) ||
+    standardRate < 0 ||
+    standardRate > 1
+  ) {
+    T.fail(
+      "Standard rate must be a decimal between zero and one."
+    );
+  }
+
+  const registrationNumber = T.text(
+    body.registrationNumber ?? "",
+    "GCT registration number",
+    false
+  );
+
+  if (
+    registrationStatus ===
+      "Registered" &&
+    !registrationNumber
+  ) {
+    T.fail(
+      "A Registered GCT profile requires its registration number."
+    );
+  }
+
+  const sourceVerifiedAt = gctDate(
+    body.sourceVerifiedAt,
+    "Source verification date",
+    false
+  );
+
+  if (
+    sourceVerifiedAt &&
+    gctDateText(
+      sourceVerifiedAt
+    ) > T.today()
+  ) {
+    T.fail(
+      "Source verification date cannot be in the future."
+    );
+  }
+
+  return {
+    entityCode:
+      entity.entityCode,
+
+    entityName:
+      entity.legalName,
+
+    businessType:
+      entity.entityType,
+
+    trn:
+      entity.trn || "",
+
+    taxType: "GCT",
+
+    registrationStatus,
+
+    registrationNumber:
+      registrationStatus ===
+      "Not Registered"
+        ? ""
+        : registrationNumber,
+
+    effectiveFrom,
+    effectiveTo,
+
+    standardRate:
+      registrationStatus ===
+      "Not Registered"
+        ? 0
+        : standardRate,
+
+    rateRuleCode: T.text(
+      body.rateRuleCode ?? "",
+      "Rate rule code",
+      false
+    ),
+
+    turnoverThreshold: {
+      amount: T.amount(
+        body.thresholdAmount,
+        "Turnover threshold",
+        true
+      ),
+
+      currency,
       monitoringMonths,
-      thresholdRuleEffectiveFrom,
-      thresholdRuleEffectiveTo,
-      thresholdRuleCode,
-      standardRate,
-      sourceName,
-      sourceUrl,
-      sourceReference,
-      sourceVerifiedAt,
-      monitoringEnabled,
-      notes,
-    } = req.body;
 
-    if (registrationStatus !== undefined) {
-      profile.registrationStatus =
-        String(registrationStatus).trim();
-    }
+      effectiveFrom:
+        thresholdFrom,
 
-    if (registrationNumber !== undefined) {
-      profile.registrationNumber =
-        String(registrationNumber || "").trim();
-    }
+      effectiveTo:
+        thresholdTo,
 
-    if (trn !== undefined) {
-      profile.trn = String(trn || "").trim();
-    }
+      ruleCode: T.text(
+        body.thresholdRuleCode,
+        "Threshold rule code"
+      ),
+    },
 
-    if (effectiveFrom !== undefined) {
-      profile.effectiveFrom = effectiveFrom;
-    }
+    sourceName: T.text(
+      body.sourceName ?? "",
+      "Source name",
+      false
+    ),
 
-    if (effectiveTo !== undefined) {
-      profile.effectiveTo = effectiveTo || null;
-    }
+    sourceUrl: T.text(
+      body.sourceUrl ?? "",
+      "Source URL",
+      false
+    ),
 
-    if (thresholdAmount !== undefined) {
-      const normalizedThreshold =
-        roundMoney(thresholdAmount);
+    sourceReference: T.text(
+      body.sourceReference ?? "",
+      "Source reference",
+      false
+    ),
 
-      if (normalizedThreshold <= 0) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "The GCT monitoring threshold must be greater than zero.",
+    sourceVerifiedAt,
+
+    monitoringEnabled:
+      body.monitoringEnabled ??
+      true,
+
+    notes: T.text(
+      body.notes ?? "",
+      "Profile notes",
+      false
+    ),
+  };
+};
+
+const createGctRegistrationProfile = T.handler(
+  async (req, res) => {
+    requireTaxConfigurationAdmin(req);
+
+    const body = req.body || {};
+
+    const registrationCode = T.text(
+      body.registrationCode,
+      "Registration profile code"
+    ).toUpperCase();
+
+    const entityCode = T.text(
+      body.entityCode,
+      "Business entity"
+    ).toUpperCase();
+
+    const data = await transact(
+      async (session) => {
+        const entity =
+          await BusinessEntity.findOne({
+            entityCode,
+          }).session(session);
+
+        if (!entity) {
+          T.fail(
+            "Business entity not found.",
+            404
+          );
+        }
+
+        const existing =
+          await TaxRegistrationProfile.findOne({
+            registrationCode,
+          }).session(session);
+
+        if (existing) {
+          T.fail(
+            "This registration profile code already exists.",
+            409
+          );
+        }
+
+        const values =
+          buildGctProfileValues(
+            body,
+            entity
+          );
+
+        const [profile] =
+          await TaxRegistrationProfile.create(
+            [
+              {
+                ...values,
+                registrationCode,
+                status: "Draft",
+                createdBy:
+                  T.actor(req),
+                updatedBy:
+                  T.actor(req),
+              },
+            ],
+            { session }
+          );
+
+        await writeAuditLog({
+          req,
+          session,
+          action:
+            "CREATE_GCT_PROFILE",
+          module: "Tax Center",
+          description:
+            `Created ${registrationCode}`,
+          targetType:
+            "TaxRegistrationProfile",
+          targetId:
+            registrationCode,
+          afterValues:
+            profile.toObject(),
         });
+
+        return profile;
       }
-
-      profile.turnoverThreshold.amount =
-        normalizedThreshold;
-    }
-
-    if (thresholdCurrency !== undefined) {
-      profile.turnoverThreshold.currency =
-        String(thresholdCurrency || "JMD")
-          .trim()
-          .toUpperCase();
-    }
-
-    if (monitoringMonths !== undefined) {
-      const normalizedMonths =
-        Number(monitoringMonths);
-
-      if (
-        !Number.isInteger(normalizedMonths) ||
-        normalizedMonths <= 0
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Monitoring months must be a positive whole number.",
-        });
-      }
-
-      profile.turnoverThreshold.monitoringMonths =
-        normalizedMonths;
-    }
-
-    if (thresholdRuleEffectiveFrom !== undefined) {
-      profile.turnoverThreshold.effectiveFrom =
-        thresholdRuleEffectiveFrom || null;
-    }
-
-    if (thresholdRuleEffectiveTo !== undefined) {
-      profile.turnoverThreshold.effectiveTo =
-        thresholdRuleEffectiveTo || null;
-    }
-
-    if (thresholdRuleCode !== undefined) {
-      profile.turnoverThreshold.ruleCode =
-        String(thresholdRuleCode || "").trim();
-    }
-
-    if (standardRate !== undefined) {
-      profile.standardRate =
-        Number(standardRate || 0);
-    }
-
-    if (sourceName !== undefined) {
-      profile.sourceName =
-        String(sourceName || "").trim();
-    }
-
-    if (sourceUrl !== undefined) {
-      profile.sourceUrl =
-        String(sourceUrl || "").trim();
-    }
-
-    if (sourceReference !== undefined) {
-      profile.sourceReference =
-        String(sourceReference || "").trim();
-    }
-
-    if (sourceVerifiedAt !== undefined) {
-      profile.sourceVerifiedAt =
-        sourceVerifiedAt || null;
-    }
-
-    if (monitoringEnabled !== undefined) {
-      profile.monitoringEnabled =
-        Boolean(monitoringEnabled);
-    }
-
-    if (notes !== undefined) {
-      profile.notes =
-        String(notes || "").trim();
-    }
-
-    profile.updatedBy = getUserName(req.user);
-
-    await profile.save();
-
-    res.json({
-      success: true,
-      message:
-        "Draft GCT registration profile updated successfully",
-      data: profile,
-    });
-  } catch (error) {
-    console.error(
-      "Update Draft GCT registration profile error:",
-      error
     );
 
-    res.status(500).json({
-      success: false,
+    return res.status(201).json({
+      success: true,
       message:
-        "Could not update the Draft GCT registration profile",
-      error: error.message,
+        "Draft GCT profile created. Business activation and invoice tax treatment were not changed.",
+      data,
     });
   }
-};
+);
 
-const activateGctRegistrationProfile = async (req, res) => {
-  try {
-    const { registrationCode } = req.params;
+const updateDraftGctRegistrationProfile = T.handler(
+  async (req, res) => {
+    requireTaxConfigurationAdmin(req);
 
-    const profile = await TaxRegistrationProfile.findOne({
-      registrationCode,
-      taxType: "GCT",
-    });
+    const body = req.body || {};
 
-    if (!profile) {
-      return res.status(404).json({
-        success: false,
-        message: "GCT registration profile not found.",
-      });
-    }
+    const registrationCode = T.text(
+      req.params.registrationCode,
+      "Registration profile code"
+    ).toUpperCase();
 
-    if (profile.status === "Active") {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${profile.registrationCode} is already active.`,
-      });
-    }
+    const data = await transact(
+      async (session) => {
+        const profile =
+          await TaxRegistrationProfile.findOne({
+            registrationCode,
+            taxType: "GCT",
+          }).session(session);
 
-    if (
-      !profile.sourceName ||
-      (!profile.sourceUrl &&
-        !profile.sourceReference) ||
-      !profile.sourceVerifiedAt
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "The GCT profile cannot be activated until its official source and verification date are recorded.",
-      });
-    }
+        if (!profile) {
+          T.fail(
+            "GCT profile not found.",
+            404
+          );
+        }
 
-    if (
-      profile.registrationStatus === "Registered" &&
-      !profile.registrationNumber
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A GCT registration number is required for a Registered profile.",
-      });
-    }
+        if (
+          profile.status !== "Draft"
+        ) {
+          T.fail(
+            "Only a Draft GCT profile can be edited.",
+            409
+          );
+        }
 
-    const overlappingProfile =
-      await TaxRegistrationProfile.findOne({
-        _id: {
-          $ne: profile._id,
-        },
+        if (
+          body.entityCode !== undefined &&
+          T.text(
+            body.entityCode,
+            "Business entity"
+          ).toUpperCase() !==
+            profile.entityCode
+        ) {
+          T.fail(
+            "A profile cannot be moved to another business.",
+            409
+          );
+        }
 
-        entityCode: profile.entityCode,
-        taxType: "GCT",
-        status: "Active",
+        const entity =
+          await BusinessEntity.findOne({
+            entityCode:
+              profile.entityCode,
+          }).session(session);
 
-        effectiveFrom: {
-          $lte:
-            profile.effectiveTo ||
-            new Date("9999-12-31T23:59:59.999Z"),
-        },
+        if (!entity) {
+          T.fail(
+            "Business entity not found.",
+            404
+          );
+        }
 
-        $or: [
-          {
-            effectiveTo: null,
-          },
-          {
-            effectiveTo: {
-              $gte: profile.effectiveFrom,
+        const beforeValues =
+          profile.toObject();
+
+        const existing = {
+          registrationStatus:
+            profile.registrationStatus,
+          registrationNumber:
+            profile.registrationNumber,
+
+          effectiveFrom:
+            gctDateText(
+              profile.effectiveFrom
+            ),
+
+          effectiveTo:
+            gctDateText(
+              profile.effectiveTo
+            ),
+
+          standardRate:
+            profile.standardRate,
+
+          rateRuleCode:
+            profile.rateRuleCode,
+
+          thresholdAmount:
+            profile.turnoverThreshold
+              ?.amount,
+
+          thresholdCurrency:
+            profile.turnoverThreshold
+              ?.currency,
+
+          monitoringMonths:
+            profile.turnoverThreshold
+              ?.monitoringMonths,
+
+          thresholdRuleEffectiveFrom:
+            gctDateText(
+              profile.turnoverThreshold
+                ?.effectiveFrom
+            ),
+
+          thresholdRuleEffectiveTo:
+            gctDateText(
+              profile.turnoverThreshold
+                ?.effectiveTo
+            ),
+
+          thresholdRuleCode:
+            profile.turnoverThreshold
+              ?.ruleCode,
+
+          sourceName:
+            profile.sourceName,
+
+          sourceUrl:
+            profile.sourceUrl,
+
+          sourceReference:
+            profile.sourceReference,
+
+          sourceVerifiedAt:
+            gctDateText(
+              profile.sourceVerifiedAt
+            ),
+
+          monitoringEnabled:
+            profile.monitoringEnabled,
+
+          notes:
+            profile.notes,
+        };
+
+        Object.assign(
+          profile,
+
+          buildGctProfileValues(
+            {
+              ...existing,
+              ...body,
             },
-          },
-        ],
-      });
+            entity
+          ),
 
-    if (overlappingProfile) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `${profile.registrationCode} overlaps active profile ${overlappingProfile.registrationCode}.`,
-      });
-    }
+          {
+            updatedBy:
+              T.actor(req),
+          }
+        );
 
-    profile.status = "Active";
-    profile.updatedBy = getUserName(req.user);
+        await profile.save({
+          session,
+        });
 
-    await profile.save();
+        await writeAuditLog({
+          req,
+          session,
+          action:
+            "UPDATE_DRAFT_GCT_PROFILE",
+          module: "Tax Center",
+          description:
+            `Updated ${registrationCode}`,
+          targetType:
+            "TaxRegistrationProfile",
+          targetId:
+            registrationCode,
+          beforeValues,
+          afterValues:
+            profile.toObject(),
+        });
 
-    res.json({
+        return profile;
+      }
+    );
+
+    return res.json({
       success: true,
       message:
-        `${profile.registrationCode} activated successfully.`,
-      data: profile,
-    });
-  } catch (error) {
-    console.error("Activate GCT registration profile error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not activate GCT registration profile",
-      error: error.message,
+        "Draft GCT profile updated.",
+      data,
     });
   }
-};
+);
 
-const getGctTurnoverMonitor = async (req, res) => {
-  try {
-    const entityCode = String(
-      req.query.entityCode || "EK-SP-2026"
-    ).trim();
+const activateGctRegistrationProfile = T.handler(
+  async (req, res) => {
+    requireTaxConfigurationAdmin(req);
 
-    const asOfDate = String(
-      req.query.asOfDate || ""
-    ).trim();
+    const registrationCode = T.text(
+      req.params.registrationCode,
+      "Registration profile code"
+    ).toUpperCase();
 
-    const monitor = await generateGctTurnoverMonitor({
-      entityCode,
-      asOfDate: asOfDate || new Date(),
-    });
+    const data = await transact(
+      async (session) => {
+        const profile =
+          await TaxRegistrationProfile.findOne({
+            registrationCode,
+            taxType: "GCT",
+          }).session(session);
 
-    res.json({
+        if (!profile) {
+          T.fail(
+            "GCT profile not found.",
+            404
+          );
+        }
+
+        if (
+          profile.status !== "Draft"
+        ) {
+          T.fail(
+            "Only a Draft profile can be activated.",
+            409
+          );
+        }
+
+        const entity =
+          await BusinessEntity.findOne({
+            entityCode:
+              profile.entityCode,
+          }).session(session);
+
+        if (
+          !entity ||
+          entity.entityType !==
+            profile.businessType ||
+          entity.legalName !==
+            profile.entityName
+        ) {
+          T.fail(
+            "Profile business details do not match the selected business.",
+            409
+          );
+        }
+
+        if (
+          !profile.sourceName?.trim() ||
+          (
+            !profile.sourceUrl?.trim() &&
+            !profile.sourceReference?.trim()
+          ) ||
+          !profile.sourceVerifiedAt
+        ) {
+          T.fail(
+            "Verified source information is required before activation.",
+            409
+          );
+        }
+
+        if (
+          profile.registrationStatus ===
+            "Registered" &&
+          (
+            !profile.registrationNumber ||
+            !profile.rateRuleCode
+          )
+        ) {
+          T.fail(
+            "A Registered profile requires its GCT registration number and rate rule reference.",
+            409
+          );
+        }
+
+        const overlapping =
+          await TaxRegistrationProfile.findOne({
+            _id: {
+              $ne: profile._id,
+            },
+
+            entityCode:
+              profile.entityCode,
+
+            taxType: "GCT",
+            status: "Active",
+
+            effectiveFrom: {
+              $lte:
+                profile.effectiveTo ||
+                new Date(
+                  "9999-12-31T12:00:00.000Z"
+                ),
+            },
+
+            $or: [
+              { effectiveTo: null },
+              {
+                effectiveTo: {
+                  $gte:
+                    profile.effectiveFrom,
+                },
+              },
+            ],
+          }).session(session);
+
+        if (overlapping) {
+          T.fail(
+            `This profile overlaps Active profile ${overlapping.registrationCode}. Existing profiles will not be changed automatically.`,
+            409
+          );
+        }
+
+        const beforeValues =
+          profile.toObject();
+
+        profile.status =
+          "Active";
+
+        profile.updatedBy =
+          T.actor(req);
+
+        await profile.save({
+          session,
+        });
+
+        await writeAuditLog({
+          req,
+          session,
+          action:
+            "ACTIVATE_GCT_PROFILE",
+          module: "Tax Center",
+          description:
+            `Activated ${registrationCode}`,
+          targetType:
+            "TaxRegistrationProfile",
+          targetId:
+            registrationCode,
+          beforeValues,
+          afterValues:
+            profile.toObject(),
+        });
+
+        return profile;
+      }
+    );
+
+    return res.json({
       success: true,
-      message: "GCT turnover monitor generated successfully",
-      data: monitor,
-    });
-  } catch (error) {
-    console.error("GCT turnover monitor error:", error);
-
-    const notFound =
-      String(error.message || "").includes(
-        "registration profile"
-      );
-
-    res.status(notFound ? 404 : 500).json({
-      success: false,
-      message: "Could not generate the GCT turnover monitor",
-      error: error.message,
+      message:
+        "GCT profile activated. The operating business was not switched.",
+      data,
     });
   }
-};
+);
 
-const getTaxCenterDashboard = async (req, res) => {
-  try {
-    const today = new Date()
-      .toISOString()
-      .slice(0, 10);
+const getGctTurnoverMonitor = T.handler(
+  async (req, res) => {
+    const entityCode = T.text(
+      req.query.entityCode,
+      "Business entity"
+    ).toUpperCase();
 
-    const entityCode = String(
-      req.query.entityCode || ""
-    ).trim();
+    const asOfDate = req.query.asOfDate
+      ? T.date(
+          req.query.asOfDate,
+          "As-of date"
+        )
+      : T.today();
 
-    const periodKey = String(
-      req.query.periodKey || ""
-    ).trim();
-
-    if (
-      periodKey &&
-      !PAY_PERIOD_PATTERN.test(periodKey)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Reporting period must use YYYY-MM format.",
+    const result =
+      await generateGctTurnoverMonitor({
+        entityCode,
+        asOfDate,
       });
-    }
 
-    const period = periodKey
-      ? getPeriodDates(periodKey)
-      : null;
+    return res.json({
+      success: true,
 
-    const taxRecordQuery = {
+      message:
+        "Business-specific GCT turnover monitor generated successfully.",
+
+      filters: {
+        entityCode,
+        asOfDate,
+      },
+
+      data: result,
+    });
+  }
+);
+
+const getTaxCenterDashboard = T.handler(
+  async (req, res) => {
+    const scope = await S.fromQuery(req);
+
+    const records = await TaxRecord.find({
+      entityCode: scope.entityCode,
+      periodKey: scope.periodKey,
       status: {
         $ne: "Cancelled",
       },
-    };
+    }).lean();
 
-    if (entityCode) {
-      taxRecordQuery.entityCode = entityCode;
-    }
-
-    if (periodKey) {
-      taxRecordQuery.periodKey = periodKey;
-    }
-
-    const payrollQuery = periodKey
-      ? getPayrollQuery(periodKey)
-      : getPayrollQuery();
-
-    const expenseQuery = {};
-    const invoiceQuery = {};
-
-    if (entityCode) {
-      expenseQuery[
-        "businessEntitySnapshot.entityCode"
-      ] = entityCode;
-
-      invoiceQuery[
-        "businessEntitySnapshot.entityCode"
-      ] = entityCode;
-    }
-
-    if (period) {
-      expenseQuery.date = {
-        $gte: period.periodStart,
-        $lte: period.periodEnd,
-      };
-
-      invoiceQuery.createdAt = {
-        $gte: period.periodStart,
-        $lte: period.periodEnd,
-      };
-    }
-
-    const [
-      taxRecords,
-      payrolls,
-      expenses,
-      invoices,
-    ] = await Promise.all([
-      TaxRecord.find(taxRecordQuery),
-      Payroll.find(payrollQuery),
-      Expense.find(expenseQuery),
-      Invoice.find(invoiceQuery),
+    const includedStatuses = new Set([
+      "Reviewed",
+      "Approved",
+      "Submitted",
+      "Partially Paid",
+      "Paid",
+      "Reconciled",
+      "Overdue",
     ]);
 
-    const totalRevenue = roundMoney(
-      invoices
-        .filter((invoice) => invoice.status === "Paid")
-        .reduce(
-          (sum, invoice) =>
-            sum + Number(invoice.finalTotal || 0),
+    const includedRecords = records.filter(
+      (record) =>
+        includedStatuses.has(record.status)
+    );
+
+    const sumRecords = (rows, field) =>
+      T.round(
+        rows.reduce(
+          (total, record) =>
+            total +
+            T.amount(
+              record[field] ?? 0,
+              `${record.taxNumber}: ${field}`
+            ),
           0
         )
+      );
+
+    const currentDate = T.today();
+
+    const upcomingCutoff = new Date(
+      `${currentDate}T12:00:00.000Z`
     );
 
-    const totalExpenses = roundMoney(
-      expenses.reduce(
-        (sum, expense) =>
-          sum + Number(expense.amount || 0),
-        0
-      )
-    );
-
-    const payrollLiabilities =
-      calculatePayrollLiabilities(payrolls);
-
-    const totalTaxDue = roundMoney(
-      taxRecords.reduce(
-        (sum, record) => sum + Number(record.taxDue || 0),
-        0
-      )
-    );
-
-    const totalPaid = roundMoney(
-      taxRecords.reduce(
-        (sum, record) =>
-          sum + Number(record.amountPaid || 0),
-        0
-      )
-    );
-
-    const currentLiabilities = roundMoney(
-      taxRecords.reduce(
-        (sum, record) =>
-          sum + Number(record.balanceDue || 0),
-        0
-      )
-    );
-
-    const overdueRecords = taxRecords.filter(
-      (record) =>
-        record.dueDate &&
-        record.dueDate < today &&
-        Number(record.balanceDue || 0) > 0 &&
-        record.status !== "Paid" &&
-        record.status !== "Reconciled"
-    );
-
-        const overdueAmount = roundMoney(
-      overdueRecords.reduce(
-        (sum, record) =>
-          sum + Number(record.balanceDue || 0),
-        0
-      )
-    );
-
-    const upcomingCutoff = new Date();
     upcomingCutoff.setUTCDate(
       upcomingCutoff.getUTCDate() + 30
     );
 
-    const upcomingCutoffYmd =
-      upcomingCutoff.toISOString().slice(0, 10);
+    const cutoffDate = upcomingCutoff
+      .toISOString()
+      .slice(0, 10);
 
-    const upcomingRecords = taxRecords.filter(
-      (record) =>
-        record.dueDate &&
-        record.dueDate >= today &&
-        record.dueDate <= upcomingCutoffYmd &&
-        Number(record.balanceDue || 0) > 0 &&
-        ![
-          "Paid",
-          "Reconciled",
-          "Cancelled",
-        ].includes(record.status)
-    );
+    const overdueRecords = [];
+    const upcomingRecords = [];
+    const missingDeadlineRecords = [];
 
-    const upcomingAmount = roundMoney(
-      upcomingRecords.reduce(
-        (sum, record) =>
-          sum + Number(record.balanceDue || 0),
-        0
-      )
-    );
-
-    const unfiledRecords = taxRecords.filter(
-      (record) =>
-        !record.filingReference &&
-        ![
-          "Submitted",
-          "Paid",
-          "Reconciled",
-          "Cancelled",
-        ].includes(record.status)
-    );
-
-    const missingDeadlineRecords =
-      taxRecords.filter(
-        (record) =>
-          !record.dueDate &&
-          Number(record.balanceDue || 0) > 0 &&
-          ![
-            "Paid",
-            "Reconciled",
-            "Cancelled",
-          ].includes(record.status)
+    for (const record of includedRecords) {
+      const balanceDue = T.amount(
+        record.balanceDue ?? 0,
+        `${record.taxNumber}: balance due`
       );
 
-    const statusCounts = taxRecords.reduce(
-      (counts, record) => {
-        counts[record.status] =
-          Number(counts[record.status] || 0) + 1;
-
-        return counts;
-      },
-      {}
-    );
-
-            let gctPosition = {
-      configured: false,
-      entityCode,
-      registrationStatus: "Not Configured",
-      canChargeGct: false,
-      thresholdAmount: 0,
-      monitoredTurnover: 0,
-      thresholdUtilization: 0,
-      remainingBeforeThreshold: 0,
-      alertLevel: "Not Configured",
-      invoiceCount: 0,
-      unreviewedInvoices: 0,
-      monitoringPeriod: null,
-      notice:
-        "No active GCT monitoring profile is configured.",
-    };
-
-    try {
-                  if (!entityCode) {
-        throw new Error(
-          "A business entity is required for GCT monitoring."
-        );
+      if (balanceDue === 0) {
+        continue;
       }
 
-      const gctMonitor =
-        await generateGctTurnoverMonitor({
-          entityCode,
-          asOfDate: period
-            ? period.periodEnd
-            : today,
-        });
+      if (!record.dueDate) {
+        missingDeadlineRecords.push(record);
+        continue;
+      }
 
-      gctPosition = {
-        configured: true,
-
-        entityCode:
-          gctMonitor.entity.entityCode,
-
-        entityName:
-          gctMonitor.entity.entityName,
-
-        businessType:
-          gctMonitor.entity.businessType,
-
-        registrationStatus:
-          gctMonitor.registration.registrationStatus,
-
-        registrationNumber:
-          gctMonitor.registration.registrationNumber,
-
-        canChargeGct:
-          gctMonitor.canChargeGct,
-
-        thresholdAmount:
-          gctMonitor.threshold.amount,
-
-        thresholdCurrency:
-          gctMonitor.threshold.currency,
-
-        thresholdRuleCode:
-          gctMonitor.threshold.ruleCode,
-
-        monitoredTurnover:
-          gctMonitor.totals.potentiallyTaxableTurnover,
-
-        grossInvoiceAmount:
-          gctMonitor.totals.grossInvoiceAmount,
-
-        customerPurchaseRecovery:
-          gctMonitor.totals.customerPurchaseRecovery,
-
-        customsRecovery:
-          gctMonitor.totals.customsRecovery,
-
-        outputGct:
-          gctMonitor.totals.outputGct,
-
-        thresholdUtilization:
-          gctMonitor.thresholdUtilization,
-
-        remainingBeforeThreshold:
-          gctMonitor.remainingBeforeThreshold,
-
-        alertLevel:
-          gctMonitor.alertLevel,
-
-        invoiceCount:
-          gctMonitor.totals.invoiceCount,
-
-        unreviewedInvoices:
-          gctMonitor.totals.unreviewedInvoices,
-
-        monitoringPeriod:
-          gctMonitor.monitoringPeriod,
-
-        notice:
-          gctMonitor.notice,
-      };
-    } catch (gctError) {
-      console.error(
-        "Tax dashboard GCT monitor warning:",
-        gctError.message
+      const dueDate = T.date(
+        record.dueDate,
+        `${record.taxNumber}: due date`
       );
 
-      gctPosition.notice =
-        `GCT monitoring is unavailable: ${gctError.message}`;
+      if (dueDate < currentDate) {
+        overdueRecords.push(record);
+      } else if (dueDate <= cutoffDate) {
+        upcomingRecords.push(record);
+      }
     }
 
-    res.json({
+    const unfiledPeriodKeys = new Set(
+      records
+        .filter(
+          (record) =>
+            !record.filingReference ||
+            !record.submittedAt
+        )
+        .map((record) => record.periodKey)
+    );
+
+    const payrollData =
+      await getScopedTaxPayrollData(scope);
+
+    const payrollScopeVerified =
+      payrollData.unattributedPayrollNumbers
+        .length === 0;
+
+    return res.json({
       success: true,
+      message:
+        "Business-period Tax Center dashboard generated successfully.",
+
+      filters: {
+        entityCode: scope.entityCode,
+        periodKey: scope.periodKey,
+      },
+
       data: {
-        totalRevenue,
-        totalExpenses,
+        currentLiabilities: sumRecords(
+          includedRecords,
+          "balanceDue"
+        ),
 
-        payrollDeductions:
-          payrollLiabilities.totalEmployeeDeductions,
+        totalPaid: sumRecords(
+          includedRecords,
+          "amountPaid"
+        ),
 
-        payrollGovernmentLiability:
-          payrollLiabilities.totalGovernmentLiability,
+        totalTaxDue: sumRecords(
+          includedRecords,
+          "taxDue"
+        ),
 
-        totalTaxDue,
-        totalPaid,
-        currentLiabilities,
+        taxRecordCount: records.length,
 
-        taxBalanceDue: currentLiabilities,
-        taxRecordCount: taxRecords.length,
+        calculatedObligationCount:
+          records.filter(
+            (record) =>
+              record.status === "Calculated"
+          ).length,
 
-               overdueObligationCount:
+        overdueAmount: sumRecords(
+          overdueRecords,
+          "balanceDue"
+        ),
+
+        overdueObligationCount:
           overdueRecords.length,
-        overdueAmount,
+
+        upcomingAmount: sumRecords(
+          upcomingRecords,
+          "balanceDue"
+        ),
 
         upcomingDeadlineCount:
           upcomingRecords.length,
-        upcomingAmount,
 
         unfiledPeriodCount:
-          unfiledRecords.length,
+          unfiledPeriodKeys.size,
 
-                missingDeadlineRuleCount:
+        missingDueDateCount:
           missingDeadlineRecords.length,
 
-        statusCounts,
+        payrollGovernmentLiability:
+          payrollScopeVerified
+            ? payrollData.totals
+                .totalGovernmentLiability
+            : null,
 
-        gctPosition,
+        payrollDeductions:
+          payrollScopeVerified
+            ? payrollData.totals
+                .totalEmployeeDeductions
+            : null,
 
-        upcomingDeadlines:
-          upcomingRecords.map((record) => ({
-            taxNumber: record.taxNumber,
-            taxType: record.taxType,
-            periodKey: record.periodKey,
-            dueDate: record.dueDate,
-            balanceDue: record.balanceDue,
-            status: record.status,
-          })),
+        payrollScopeVerified,
 
-        overdueObligations:
-          overdueRecords.map((record) => ({
-            taxNumber: record.taxNumber,
-            taxType: record.taxType,
-            periodKey: record.periodKey,
-            dueDate: record.dueDate,
-            balanceDue: record.balanceDue,
-            status: record.status,
-          })),
+        attributedPayrollCount:
+          payrollData.matchedPayroll.length,
 
-        unfiledPeriods:
-          unfiledRecords.map((record) => ({
-            taxNumber: record.taxNumber,
-            taxType: record.taxType,
-            periodKey: record.periodKey,
-            balanceDue: record.balanceDue,
-            status: record.status,
-          })),
+        unattributedPayrollCount:
+          payrollData
+            .unattributedPayrollNumbers.length,
 
-        missingDeadlineRules:
-          missingDeadlineRecords.map(
-            (record) => ({
-              taxNumber: record.taxNumber,
-              taxType: record.taxType,
-              periodKey: record.periodKey,
-              balanceDue: record.balanceDue,
-              status: record.status,
-            })
-          ),
+        unattributedPayrollNumbers:
+          payrollData.unattributedPayrollNumbers,
+
+        asOfDate: currentDate,
+
+        notice:
+          "Balances include reviewed and later obligations for the selected business and period. Calculated obligations remain available for review. Payroll totals are unavailable when employer attribution is unresolved. These figures do not establish filing completeness or bank reconciliation.",
       },
     });
-  } catch (error) {
-    console.error("Tax dashboard error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not load tax center dashboard",
-      error: error.message,
-    });
   }
-};
+);
 
 module.exports = {
   getTaxCenterDashboard,

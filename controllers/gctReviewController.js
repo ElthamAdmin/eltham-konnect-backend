@@ -1,474 +1,707 @@
 const Invoice = require("../models/Invoice");
 const Expense = require("../models/Expense");
+
 const TaxRegistrationProfile = require(
   "../models/TaxRegistrationProfile"
 );
 
-const roundMoney = (value) =>
-  Math.round(
-    (Number(value || 0) + Number.EPSILON) * 100
-  ) / 100;
+const GctRegisterEntry = require(
+  "../models/GctRegisterEntry"
+);
 
-const getUserName = (user) =>
-  user?.fullName ||
-  user?.name ||
-  user?.email ||
-  "System User";
+const GctFilingPeriod = require(
+  "../models/GctFilingPeriod"
+);
 
-const getActiveProfile = async (
-  entityCode,
-  documentDate
-) => {
-  const effectiveDate = new Date(
-    `${documentDate}T12:00:00.000Z`
-  );
+const TaxDocument = require(
+  "../models/TaxDocument"
+);
 
-  return TaxRegistrationProfile.findOne({
-    entityCode,
-    taxType: "GCT",
-    status: "Active",
-    effectiveFrom: {
-      $lte: effectiveDate,
-    },
-    $or: [
-      {
-        effectiveTo: null,
-      },
-      {
-        effectiveTo: {
-          $gte: effectiveDate,
-        },
-      },
-    ],
-  }).sort({
-    effectiveFrom: -1,
-  });
-};
+const T = require("../services/taxControl");
+const S = require("../services/taxScopeService");
 
-const reviewInvoiceTurnoverClassification = async (
-  req,
-  res
-) => {
-  try {
-    const { invoiceNumber } = req.params;
+const {
+  transact,
+} = require(
+  "../services/taxTransactionService"
+);
 
-    const {
-      customerPurchaseRecovery = 0,
-      exemptTurnover = 0,
-      zeroRatedTurnover = 0,
-      outsideScopeAmount = 0,
-      classificationNotes = "",
-    } = req.body;
+const {
+  writeAuditLog,
+} = require("../utils/auditLogger");
 
-    const invoice = await Invoice.findOne({
-      invoiceNumber,
-    });
+const reviewSource = (sourceType) =>
+  T.handler(async (req, res) => {
+    const body = req.body || {};
 
-    if (!invoice) {
-      return res.status(404).json({
-        success: false,
-        message: "Invoice not found.",
-      });
-    }
+    const isInvoice =
+      sourceType === "Invoice";
 
-    const grossInvoiceAmount =
-      roundMoney(invoice.finalTotal);
+    const Model = isInvoice
+      ? Invoice
+      : Expense;
 
-    const recovery =
-      Math.max(
-        0,
-        roundMoney(customerPurchaseRecovery)
-      );
+    const referenceField = isInvoice
+      ? "invoiceNumber"
+      : "expenseNumber";
 
-    const customsRecovery =
-      roundMoney(
-        Number(invoice.customsDuty || 0) +
-          Number(
-            invoice.customerPurchaseCustomsDuty ||
-              0
-          )
-      );
-
-    const exempt =
-      Math.max(
-        0,
-        roundMoney(exemptTurnover)
-      );
-
-    const zeroRated =
-      Math.max(
-        0,
-        roundMoney(zeroRatedTurnover)
-      );
-
-    const outsideScope =
-      Math.max(
-        0,
-        roundMoney(outsideScopeAmount)
-      );
-
-    const totalExcluded =
-      roundMoney(
-        recovery +
-          customsRecovery +
-          exempt +
-          zeroRated +
-          outsideScope
-      );
-
-    if (totalExcluded > grossInvoiceAmount) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Recoveries and excluded turnover cannot exceed the invoice total.",
-      });
-    }
-
-    const potentiallyTaxableTurnover =
-      Math.max(
-        0,
-        roundMoney(
-          grossInvoiceAmount -
-            totalExcluded
-        )
-      );
-
-    const documentDate =
-      String(invoice.createdAt).slice(0, 10);
-
-    const entityCode =
-      invoice.businessEntitySnapshot
-        ?.entityCode ||
-      "EK-SP-2026";
-
-    const profile =
-      await getActiveProfile(
-        entityCode,
-        documentDate
-      );
-
-    if (!profile) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "No active GCT profile applies to this invoice.",
-      });
-    }
-
-    invoice.turnoverClassification = {
-      grossInvoiceAmount,
-      customerPurchaseRecovery:
-        recovery,
-
-      serviceRevenue:
-        potentiallyTaxableTurnover,
-
-      potentiallyTaxableTurnover,
-      exemptTurnover: exempt,
-      zeroRatedTurnover: zeroRated,
-      outsideScopeAmount:
-        outsideScope,
-
-      classificationStatus:
-        "Reviewed",
-
-      classificationNotes:
-        String(classificationNotes).trim(),
-
-      classifiedAt: new Date(),
-
-      classifiedBy:
-        getUserName(req.user),
-    };
-
-    if (
-      profile.registrationStatus !==
-      "Registered"
-    ) {
-      invoice.gctTreatment = {
-        registrationStatus:
-          "Not Registered",
-
-        registrationNumber: "",
-
-        registrationEffectiveDate:
-          profile.effectiveFrom
-            ? profile.effectiveFrom
-                .toISOString()
-                .slice(0, 10)
-            : "",
-
-        treatment:
-          "Not Registered",
-
-        rate: 0,
-        taxableAmount:
-          potentiallyTaxableTurnover,
-
-        outputGct: 0,
-
-        reason:
-          "Turnover reviewed for monitoring only. The business was not registered for GCT.",
-
-        ruleCode:
-          profile.registrationCode,
-
-        calculatedAt:
-          new Date(),
-      };
-    }
-
-    await invoice.save();
-
-    res.json({
-      success: true,
-      message:
-        "Invoice turnover classification reviewed successfully",
-      data: {
-        invoiceNumber:
-          invoice.invoiceNumber,
-
-        entityCode,
-
-        gctRegistrationStatus:
-          profile.registrationStatus,
-
-        turnoverClassification:
-          invoice.turnoverClassification,
-
-        gctTreatment:
-          invoice.gctTreatment,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Review invoice GCT classification error:",
-      error
+    const reference = T.text(
+      req.params[referenceField],
+      referenceField
     );
 
-    res.status(500).json({
-      success: false,
-      message:
-        "Could not review the invoice turnover classification",
-      error: error.message,
-    });
-  }
-};
+    const selectedEntityCode =
+      T.text(
+        body.entityCode,
+        "Selected business"
+      ).toUpperCase();
 
-const reviewExpenseInputGct = async (
-  req,
-  res
-) => {
-  try {
-    const { expenseNumber } = req.params;
+    const data = await transact(
+      async (session) => {
+        const source =
+          await Model.findOne({
+            [referenceField]:
+              reference,
+          }).session(session);
 
-    const {
-      supplierName = "",
-      supplierTrn = "",
-      supplierGctRegistrationNumber = "",
-      supplierInvoiceNumber = "",
-      amountExcludingGct = 0,
-      inputGctPaid = 0,
-      supportingDocumentVerified = false,
-      notes = "",
-    } = req.body;
+        if (!source) {
+          T.fail(
+            "Source record not found.",
+            404
+          );
+        }
 
-    const expense = await Expense.findOne({
-      expenseNumber,
-    });
+        if (
+          [
+            "Draft",
+            "Cancelled",
+            "Refunded",
+          ].includes(source.status)
+        ) {
+          T.fail(
+            "This source is not eligible for GCT review.",
+            409
+          );
+        }
 
-    if (!expense) {
-      return res.status(404).json({
-        success: false,
-        message: "Expense not found.",
-      });
-    }
-
-    const grossAmount =
-      roundMoney(expense.amount);
-
-    const inputTax =
-      Math.max(
-        0,
-        roundMoney(inputGctPaid)
-      );
-
-    const amountBeforeTax =
-      amountExcludingGct
-        ? Math.max(
-            0,
-            roundMoney(
-              amountExcludingGct
-            )
+        const codes = [
+          source.entityCode,
+          source.entitySnapshot
+            ?.entityCode,
+          source.businessEntitySnapshot
+            ?.entityCode,
+        ]
+          .filter(
+            (value) =>
+              value !== undefined &&
+              value !== null &&
+              String(value).trim() !== ""
           )
-        : Math.max(
-            0,
-            roundMoney(
-              grossAmount - inputTax
-            )
+          .map((value) =>
+            T.text(
+              value,
+              "Source business"
+            ).toUpperCase()
           );
 
-    if (
-      roundMoney(
-        amountBeforeTax + inputTax
-      ) > grossAmount
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "The amount excluding GCT plus input GCT cannot exceed the expense amount.",
-      });
-    }
+        const distinctCodes = [
+          ...new Set(codes),
+        ];
 
-    const entityCode =
-      expense.businessEntitySnapshot
-        ?.entityCode ||
-      "EK-SP-2026";
+        if (
+          distinctCodes.length !== 1 ||
+          distinctCodes[0] !==
+            selectedEntityCode
+        ) {
+          T.fail(
+            "Source attribution is missing, conflicting, or belongs to a different selected business.",
+            409
+          );
+        }
 
-    const documentDate =
-      String(expense.date).slice(0, 10);
+        const entityCode =
+          distinctCodes[0];
 
-    const profile =
-      await getActiveProfile(
-        entityCode,
-        documentDate
-      );
+        const sourceDate = T.date(
+          isInvoice
+            ? source.createdAt
+            : source.date,
 
-    if (!profile) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "No active GCT profile applies to this expense.",
-      });
-    }
+          "Source date"
+        );
 
-    const registered =
-      profile.registrationStatus ===
-      "Registered";
+        await S.resolve(
+          entityCode,
+          sourceDate,
+          sourceDate,
+          session
+        );
 
-    const evidenceComplete =
-      Boolean(
-        String(
-          supplierGctRegistrationNumber
-        ).trim()
-      ) &&
-      Boolean(
-        String(
-          supplierInvoiceNumber
-        ).trim()
-      ) &&
-      Boolean(
-        supportingDocumentVerified
-      );
+        const registers =
+          await GctRegisterEntry.find({
+            sourceDocumentId:
+              source._id,
+          }).session(session);
 
-    const inputGctClaimable =
-      registered &&
-      inputTax > 0 &&
-      evidenceComplete;
+        for (const register of registers) {
+          if (
+            register.entityCode !==
+            entityCode
+          ) {
+            T.fail(
+              "The source register has conflicting business attribution.",
+              409
+            );
+          }
 
-    expense.gctTreatment = {
-      businessRegistrationStatus:
-        profile.registrationStatus,
+          const filingQuery =
+            register.filingPeriodId
+              ? {
+                  _id:
+                    register.filingPeriodId,
+                }
+              : {
+                  filingNumber:
+                    register.filingNumber,
+                };
 
-      supplierName:
-        String(supplierName).trim(),
+          const filing =
+            await GctFilingPeriod.findOne(
+              filingQuery
+            ).session(session);
 
-      supplierTrn:
-        String(supplierTrn).trim(),
+          if (
+            !filing ||
+            [
+              "Reviewed",
+              "Approved",
+              "Submitted",
+              "Paid",
+              "Reconciled",
+            ].includes(filing.status)
+          ) {
+            T.fail(
+              "This source has a missing or locked filing link. Use a reviewed correction instead of rewriting its evidence.",
+              409
+            );
+          }
+        }
 
-      supplierGctRegistrationNumber:
-        String(
-          supplierGctRegistrationNumber
-        ).trim(),
+        const effectiveDate =
+          new Date(
+            `${sourceDate}T12:00:00.000Z`
+          );
 
-      supplierInvoiceNumber:
-        String(
-          supplierInvoiceNumber
-        ).trim(),
+        const profiles =
+          await TaxRegistrationProfile.find({
+            entityCode,
+            taxType: "GCT",
+            status: "Active",
 
-      amountExcludingGct:
-        amountBeforeTax,
+            effectiveFrom: {
+              $lte: effectiveDate,
+            },
 
-      inputGctPaid:
-        inputTax,
+            $or: [
+              { effectiveTo: null },
+              {
+                effectiveTo: {
+                  $gte: effectiveDate,
+                },
+              },
+            ],
+          }).session(session);
 
-      inputGctClaimable,
+        if (profiles.length !== 1) {
+          T.fail(
+            "Exactly one Active GCT profile must cover this source date.",
+            409
+          );
+        }
 
-      claimStatus:
-        inputGctClaimable
-          ? "Potentially Claimable"
-          : "Not Claimable",
+        const profile = profiles[0];
 
-      nonClaimReason:
-        inputGctClaimable
-          ? ""
-          : !registered
-            ? "Business was not registered for GCT on the expense date."
-            : inputTax <= 0
-              ? "No input GCT was recorded."
-              : "Supplier tax-invoice evidence is incomplete.",
+        if (
+          !profile.sourceName?.trim() ||
+          (
+            !profile.sourceUrl?.trim() &&
+            !profile.sourceReference?.trim()
+          ) ||
+          !profile.sourceVerifiedAt
+        ) {
+          T.fail(
+            "The applicable GCT profile requires verified source information.",
+            409
+          );
+        }
 
-      supportingDocumentVerified:
-        Boolean(
-          supportingDocumentVerified
-        ),
+        const beforeValues =
+          source.toObject();
 
-      verifiedBy:
-        supportingDocumentVerified
-          ? getUserName(req.user)
-          : "",
+        const userName =
+          T.actor(req);
 
-      verifiedAt:
-        supportingDocumentVerified
-          ? new Date()
-          : null,
+        const now = new Date();
 
-      filingPeriodKey:
-        documentDate.slice(0, 7),
-    };
+        if (isInvoice) {
+          const gross =
+            T.amount(
+              source.finalTotal,
+              "Invoice total"
+            );
 
-    if (notes) {
-      expense.description =
-        `${expense.description} | GCT review: ${String(
-          notes
-        ).trim()}`;
-    }
+          const recovery =
+            T.amount(
+              body.customerPurchaseRecovery ??
+                0,
 
-    await expense.save();
+              "Customer purchase recovery"
+            );
 
-    res.json({
-      success: true,
-      message:
-        "Expense input-GCT evidence reviewed successfully",
-      data: {
-        expenseNumber:
-          expense.expenseNumber,
+          const customs =
+            source.invoiceSource ===
+            "Customer Purchases"
+              ? T.amount(
+                  source
+                    .customerPurchaseCustomsDuty ??
+                    source.customsDuty ??
+                    0,
 
-        entityCode,
+                  "Customs recovery"
+                )
+              : T.amount(
+                  source.customsDuty ??
+                    0,
 
-        registrationStatus:
-          profile.registrationStatus,
+                  "Customs recovery"
+                );
 
-        gctTreatment:
-          expense.gctTreatment,
-      },
-    });
-  } catch (error) {
-    console.error(
-      "Review expense input GCT error:",
-      error
+          const exempt =
+            T.amount(
+              body.exemptTurnover ?? 0,
+              "Exempt turnover"
+            );
+
+          const zeroRated =
+            T.amount(
+              body.zeroRatedTurnover ??
+                0,
+
+              "Zero-rated turnover"
+            );
+
+          const outsideScope =
+            T.amount(
+              body.outsideScopeAmount ??
+                0,
+
+              "Outside-scope amount"
+            );
+
+          const outputGct =
+            T.amount(
+              source.gctTreatment
+                ?.outputGct ?? 0,
+
+              "Recorded output GCT"
+            );
+
+          if (
+            outputGct !==
+            T.amount(
+              source.gct ?? 0,
+              "Invoice GCT"
+            )
+          ) {
+            T.fail(
+              "The invoice GCT fields disagree. Review source accounting before classification.",
+              409
+            );
+          }
+
+          const exclusions =
+            T.round(
+              recovery +
+                customs +
+                exempt +
+                zeroRated +
+                outsideScope +
+                outputGct
+            );
+
+          if (exclusions > gross) {
+            T.fail(
+              "Recoveries, excluded turnover, and recorded output GCT cannot exceed the invoice total."
+            );
+          }
+
+          const taxableTurnover =
+            T.round(
+              gross - exclusions
+            );
+
+          const registered =
+            profile.registrationStatus ===
+            "Registered";
+
+          if (
+            !registered &&
+            outputGct > 0
+          ) {
+            T.fail(
+              "An unregistered-period invoice contains output GCT and requires source-accounting review.",
+              409
+            );
+          }
+
+          if (registered) {
+            const treatment =
+              source.gctTreatment
+                ?.treatment;
+
+            if (
+              ![
+                "Taxable Supply",
+                "Zero-Rated Supply",
+                "Exempt Supply",
+                "Outside Scope",
+                "Mixed Supply",
+              ].includes(treatment)
+            ) {
+              T.fail(
+                "The registered-period invoice requires a reviewed supply treatment in its source accounting.",
+                409
+              );
+            }
+
+            if (
+              taxableTurnover > 0 &&
+              (
+                ![
+                  "Taxable Supply",
+                  "Mixed Supply",
+                ].includes(treatment) ||
+                outputGct <= 0
+              )
+            ) {
+              T.fail(
+                "Taxable turnover and recorded output GCT require source-accounting review.",
+                409
+              );
+            }
+          }
+
+          source.turnoverClassification = {
+            grossInvoiceAmount:
+              gross,
+
+            customerPurchaseRecovery:
+              recovery,
+
+            serviceRevenue:
+              taxableTurnover,
+
+            potentiallyTaxableTurnover:
+              taxableTurnover,
+
+            exemptTurnover:
+              exempt,
+
+            zeroRatedTurnover:
+              zeroRated,
+
+            outsideScopeAmount:
+              outsideScope,
+
+            classificationStatus:
+              "Reviewed",
+
+            classificationNotes:
+              T.text(
+                body.classificationNotes ??
+                  "",
+
+                "Classification notes",
+                false
+              ),
+
+            classifiedAt: now,
+            classifiedBy: userName,
+          };
+        } else {
+          if (
+            typeof body
+              .supportingDocumentVerified !==
+            "boolean"
+          ) {
+            T.fail(
+              "Supporting-document verification must be true or false."
+            );
+          }
+
+          const gross =
+            T.amount(
+              source.amount,
+              "Expense amount"
+            );
+
+          const inputGct =
+            T.amount(
+              body.inputGctPaid ?? 0,
+              "Input GCT paid"
+            );
+
+          if (inputGct > gross) {
+            T.fail(
+              "Input GCT cannot exceed the expense amount."
+            );
+          }
+
+          const amountExcludingGct =
+            body.amountExcludingGct ===
+            undefined
+              ? T.round(
+                  gross - inputGct
+                )
+              : T.amount(
+                  body.amountExcludingGct,
+                  "Amount excluding GCT"
+                );
+
+          if (
+            T.round(
+              amountExcludingGct +
+                inputGct
+            ) > gross
+          ) {
+            T.fail(
+              "Amount excluding GCT plus input GCT cannot exceed the expense."
+            );
+          }
+
+          const supplierRegistration =
+            T.text(
+              body.supplierGctRegistrationNumber ??
+                "",
+
+              "Supplier GCT registration",
+              false
+            );
+
+          const supplierInvoice =
+            T.text(
+              body.supplierInvoiceNumber ??
+                "",
+
+              "Supplier invoice number",
+              false
+            );
+
+          const documentNumber =
+            T.text(
+              body.supportingDocumentNumber ??
+                "",
+
+              "Supporting document number",
+              false
+            ).toUpperCase();
+
+          if (
+            body.supportingDocumentVerified
+          ) {
+            if (
+              !supplierRegistration ||
+              !supplierInvoice ||
+              !documentNumber
+            ) {
+              T.fail(
+                "Supplier registration, supplier invoice number, and preserved document number are required."
+              );
+            }
+
+            const document =
+              await TaxDocument.findOne({
+                documentNumber,
+                entityCode,
+                taxType: "GCT",
+
+                documentType:
+                  "Supplier Tax Invoice",
+
+                verificationStatus:
+                  "Verified",
+
+                storageProvider:
+                  "Cloudinary",
+
+                storageAccess:
+                  "Authenticated",
+              }).session(session);
+
+            if (
+              !document ||
+              !document.cloudinaryPublicId ||
+              !document.cloudinaryAssetId ||
+              !document.verifiedBy ||
+              !document.verifiedAt
+            ) {
+              T.fail(
+                "A verified, authenticated Cloudinary supplier tax invoice with preserved asset metadata is required.",
+                409
+              );
+            }
+
+            if (
+              document.externalReference !==
+              supplierInvoice
+            ) {
+              T.fail(
+                "The preserved document's external reference must match the supplier invoice number.",
+                409
+              );
+            }
+
+            if (
+              document.periodKey &&
+              document.periodKey !==
+                sourceDate.slice(0, 7)
+            ) {
+              T.fail(
+                "The supporting document belongs to a different reporting period.",
+                409
+              );
+            }
+          }
+
+          const eligible =
+            profile.registrationStatus ===
+              "Registered" &&
+            inputGct > 0 &&
+            body.supportingDocumentVerified &&
+            Boolean(
+              supplierRegistration &&
+                supplierInvoice
+            );
+
+          const supportedStatus =
+            [
+              "Registered",
+              "Suspended",
+              "Deregistered",
+            ].includes(
+              profile.registrationStatus
+            )
+              ? profile.registrationStatus
+              : "Not Registered";
+
+          source.gctTreatment = {
+            businessRegistrationStatus:
+              supportedStatus,
+
+            supplierName:
+              T.text(
+                body.supplierName ?? "",
+                "Supplier name",
+                false
+              ),
+
+            supplierTrn:
+              T.text(
+                body.supplierTrn ?? "",
+                "Supplier TRN",
+                false
+              ),
+
+            supplierGctRegistrationNumber:
+              supplierRegistration,
+
+            supplierInvoiceNumber:
+              supplierInvoice,
+
+            supportingDocumentNumber:
+              documentNumber,
+
+            amountExcludingGct,
+            inputGctPaid: inputGct,
+            inputGctClaimable: eligible,
+
+            claimStatus: eligible
+              ? "Potentially Claimable"
+              : "Not Claimable",
+
+            nonClaimReason: eligible
+              ? ""
+              : profile.registrationStatus !==
+                  "Registered"
+                ? "Business was not registered on the expense date."
+                : inputGct === 0
+                  ? "No input GCT was recorded."
+                  : "Supplier evidence is incomplete.",
+
+            supportingDocumentVerified:
+              body.supportingDocumentVerified,
+
+            verifiedBy:
+              body.supportingDocumentVerified
+                ? userName
+                : "",
+
+            verifiedAt:
+              body.supportingDocumentVerified
+                ? now
+                : null,
+
+            filingPeriodKey:
+              sourceDate.slice(0, 7),
+          };
+        }
+
+        await source.save({
+          session,
+        });
+
+        await writeAuditLog({
+          req,
+          session,
+
+          action:
+            "REVIEW_GCT_SOURCE",
+
+          module: "Tax Center",
+
+          description:
+            `Reviewed ${reference}`,
+
+          targetType:
+            sourceType,
+
+          targetId:
+            reference,
+
+          beforeValues,
+
+          afterValues:
+            source.toObject(),
+        });
+
+        return source;
+      }
     );
 
-    res.status(500).json({
-      success: false,
+    return res.json({
+      success: true,
+
       message:
-        "Could not review the expense input-GCT evidence",
-      error: error.message,
+        "GCT source review saved. Recalculate the unlocked filing period to refresh its register.",
+
+      data,
     });
-  }
-};
+  });
 
 module.exports = {
-  reviewInvoiceTurnoverClassification,
-  reviewExpenseInputGct,
+  reviewInvoiceTurnoverClassification:
+    reviewSource("Invoice"),
+
+  reviewExpenseInputGct:
+    reviewSource("Expense"),
 };

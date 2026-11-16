@@ -623,40 +623,145 @@ taxRecordSchema.index({
   sourceReference: 1,
 });
 
-taxRecordSchema.pre("validate", function setCalculatedValues() {
-  const employeePortion = Number(this.employeePortion || 0);
-  const employerPortion = Number(this.employerPortion || 0);
-  const adjustmentAmount = Number(this.adjustmentAmount || 0);
-  const penaltyAmount = Number(this.penaltyAmount || 0);
-  const interestAmount = Number(this.interestAmount || 0);
+taxRecordSchema.pre(
+  "validate",
+  function setCalculatedValues() {
+    const T = require(
+      "../services/taxControl"
+    );
 
-  if (!this.periodKey && this.periodStart) {
-    this.periodKey = String(this.periodStart).slice(0, 7);
-  }
+    const start = T.date(
+      this.periodStart,
+      "Tax period start"
+    );
 
-  if (
-    Number(this.taxDue || 0) === 0 &&
-    (employeePortion > 0 || employerPortion > 0)
-  ) {
-    this.taxDue = Math.max(
-      0,
-      employeePortion +
-        employerPortion +
-        adjustmentAmount +
-        penaltyAmount +
-        interestAmount
+    const end = T.date(
+      this.periodEnd,
+      "Tax period end"
+    );
+
+    if (end < start) {
+      throw new Error(
+        "Tax period end cannot precede its start."
+      );
+    }
+
+    if (!this.periodKey) {
+      this.periodKey =
+        this.filingFrequency === "Annual"
+          ? end.slice(0, 4)
+          : start.slice(0, 7);
+    }
+
+    const periodKey =
+      String(this.periodKey);
+
+    if (/^\d{4}$/.test(periodKey)) {
+      T.date(
+        `${periodKey}-01-01`,
+        "Reporting year"
+      );
+    } else {
+      T.period(periodKey);
+    }
+
+    if (this.dueDate) {
+      T.date(
+        this.dueDate,
+        "Tax due date"
+      );
+    }
+
+    const employeePortion =
+      T.amount(
+        this.employeePortion ?? 0,
+        "Employee portion"
+      );
+
+    const employerPortion =
+      T.amount(
+        this.employerPortion ?? 0,
+        "Employer portion"
+      );
+
+    const penaltyAmount =
+      T.amount(
+        this.penaltyAmount ?? 0,
+        "Penalty amount"
+      );
+
+    const interestAmount =
+      T.amount(
+        this.interestAmount ?? 0,
+        "Interest amount"
+      );
+
+    const adjustmentAmount =
+      Number(
+        this.adjustmentAmount ?? 0
+      );
+
+    if (
+      !Number.isFinite(
+        adjustmentAmount
+      ) ||
+      !Number.isSafeInteger(
+        Math.round(
+          adjustmentAmount * 100
+        )
+      )
+    ) {
+      throw new Error(
+        "Adjustment amount must be a valid monetary amount."
+      );
+    }
+
+    let taxDue = T.amount(
+      this.taxDue ?? 0,
+      "Tax due"
+    );
+
+    if (
+      taxDue === 0 &&
+      (
+        employeePortion > 0 ||
+        employerPortion > 0
+      )
+    ) {
+      taxDue = T.round(
+        employeePortion +
+          employerPortion +
+          adjustmentAmount +
+          penaltyAmount +
+          interestAmount
+      );
+
+      if (taxDue < 0) {
+        throw new Error(
+          "The calculated tax obligation cannot be negative."
+        );
+      }
+    }
+
+    const amountPaid =
+      T.amount(
+        this.amountPaid ?? 0,
+        "Amount paid"
+      );
+
+    if (amountPaid > taxDue) {
+      throw new Error(
+        "Amount paid cannot exceed tax due."
+      );
+    }
+
+    this.taxDue = taxDue;
+    this.amountPaid = amountPaid;
+
+    this.balanceDue = T.round(
+      taxDue - amountPaid
     );
   }
-
-  this.amountPaid = Math.max(
-    0,
-    Number(this.amountPaid || 0)
-  );
-
-  this.balanceDue = Math.max(
-    0,
-    Number(this.taxDue || 0) - this.amountPaid
-  );
-});
+);
 
 module.exports = mongoose.model("TaxRecord", taxRecordSchema);

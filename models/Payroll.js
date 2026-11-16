@@ -2,6 +2,25 @@ const mongoose = require("mongoose");
 
 const PayrollSchema = new mongoose.Schema(
   {
+    entityId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: "BusinessEntity",
+  default: null,
+  index: true,
+},
+
+entityCode: {
+  type: String,
+  default: "",
+  trim: true,
+  index: true,
+},
+
+entitySnapshot: {
+  type: mongoose.Schema.Types.Mixed,
+  default: null,
+},
+
     payrollNumber: {
       type: String,
       required: true,
@@ -667,5 +686,93 @@ const PayrollSchema = new mongoose.Schema(
 
 PayrollSchema.index({ employeeId: 1, payPeriod: 1 });
 PayrollSchema.index({ payPeriod: 1, status: 1 });
+
+PayrollSchema.pre(
+  "validate",
+  async function assignPayrollEmployer() {
+    if (!this.isNew) {
+      return;
+    }
+
+    const T = require(
+      "../services/taxControl"
+    );
+
+    const S = require(
+      "../services/taxScopeService"
+    );
+
+    const {
+      operatingEntity,
+    } = require(
+      "../services/operatingEntityService"
+    );
+
+    const periodKey = T.period(
+      this.payPeriod
+    );
+
+    const periodStart =
+      `${periodKey}-01`;
+
+    const [year, month] =
+      periodKey.split("-").map(Number);
+
+    const periodEnd = new Date(
+      Date.UTC(year, month, 0, 12)
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    const session =
+      this.$session() || null;
+
+    const context =
+      await operatingEntity(
+        periodStart,
+        session
+      );
+
+    await S.resolve(
+      context.entityCode,
+      periodStart,
+      periodEnd,
+      session
+    );
+
+    if (
+      this.entityCode &&
+      this.entityCode
+        .trim()
+        .toUpperCase() !==
+        context.entityCode
+    ) {
+      T.fail(
+        "Payroll employer conflicts with the business covering its payroll period.",
+        409
+      );
+    }
+
+    if (
+      this.entityId &&
+      String(this.entityId) !==
+        String(context.entityId)
+    ) {
+      T.fail(
+        "Payroll employer ID conflicts with the effective business.",
+        409
+      );
+    }
+
+    this.entityId =
+      context.entityId;
+
+    this.entityCode =
+      context.entityCode;
+
+    this.entitySnapshot =
+      context.entitySnapshot;
+  }
+);
 
 module.exports = mongoose.model("Payroll", PayrollSchema);

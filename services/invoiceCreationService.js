@@ -18,6 +18,10 @@ const {
   markPurchasesInvoiced,
 } = require("./customerPurchaseIntegrationService");
 
+const {
+  operatingEntity,
+} = require("./operatingEntityService");
+
 const fail = (message, statusCode = 400) => {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -272,8 +276,12 @@ const createFreightInvoice = async ({ body, user, allReady = false }) =>
 
     const date = today();
 
-    const [invoice] = await Invoice.create(
+const entityContext =
+  await operatingEntity(date, session);
+
+const [invoice] = await Invoice.create(
       [{
+        ...entityContext,
         invoiceNumber: `INV-${crypto.randomUUID()}`,
         customerEkonId: customer.ekonId,
         customerName: customer.name,
@@ -415,8 +423,12 @@ const createRecoveryInvoice = async ({ body, user }) =>
 
     const date = today();
 
-    const [invoice] = await Invoice.create(
+const entityContext =
+  await operatingEntity(date, session);
+
+const [invoice] = await Invoice.create(
       [{
+        ...entityContext,
         invoiceNumber: `INV-${crypto.randomUUID()}`,
         customerEkonId: customer.ekonId,
         customerName: customer.name,
@@ -452,6 +464,9 @@ const createRecoveryInvoice = async ({ body, user }) =>
     );
 
     const journal = await postCustomerPurchaseRecoveryInvoice({
+        entityId: invoice.entityId,
+  entityCode: invoice.entityCode,
+  entitySnapshot: invoice.entitySnapshot,
       customerName: customer.name,
       invoiceNumber: invoice.invoiceNumber,
       recoverableAmount: totals.recoverableAmount,

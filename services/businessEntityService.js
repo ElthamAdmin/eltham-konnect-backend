@@ -1,37 +1,16 @@
 const BusinessEntity = require(
   "../models/BusinessEntity"
 );
+const T = require("./taxControl");
 
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-const normalizeEntityDate = (value) => {
-  const text = String(value || "")
-    .trim()
-    .slice(0, 10);
-
-  if (!DATE_PATTERN.test(text)) {
-    throw new Error(
-      "Entity date must use YYYY-MM-DD format."
-    );
-  }
-
-  const parsedDate = new Date(
-    `${text}T12:00:00.000Z`
-  );
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    throw new Error(
-      "A valid entity date is required."
-    );
-  }
-
-  return text;
-};
+const normalizeEntityDate = (value) =>
+  T.date(value, "Entity date");
 
 const validateNoEntityOverlap = async ({
   effectiveFrom,
   effectiveTo = "",
   excludeEntityId = null,
+  session = null,
 }) => {
   const startDate =
     normalizeEntityDate(effectiveFrom);
@@ -40,22 +19,22 @@ const validateNoEntityOverlap = async ({
     ? normalizeEntityDate(effectiveTo)
     : "9999-12-31";
 
+  if (endDate < startDate) {
+    T.fail(
+      "Entity effective-to date cannot be earlier than its effective-from date."
+    );
+  }
+
   const query = {
-    lifecycleStatus: {
-      $in: [
-        "Registered",
-        "Active",
-      ],
-    },
+    lifecycleStatus: "Active",
 
     effectiveFrom: {
       $lte: endDate,
     },
 
     $or: [
-      {
-        effectiveTo: "",
-      },
+      { effectiveTo: "" },
+      { effectiveTo: null },
       {
         effectiveTo: {
           $gte: startDate,
@@ -71,13 +50,16 @@ const validateNoEntityOverlap = async ({
   }
 
   const overlappingEntity =
-    await BusinessEntity.findOne(query);
+    await BusinessEntity.findOne(
+      query
+    ).session(session);
 
   if (overlappingEntity) {
-    throw new Error(
-      `Entity period overlaps ${overlappingEntity.entityCode} ` +
-      `(${overlappingEntity.effectiveFrom} to ` +
-      `${overlappingEntity.effectiveTo || "open-ended"}).`
+    T.fail(
+      `Operating period overlaps ${overlappingEntity.entityCode} ` +
+        `(${overlappingEntity.effectiveFrom} to ` +
+        `${overlappingEntity.effectiveTo || "open-ended"}).`,
+      409
     );
   }
 
@@ -86,59 +68,52 @@ const validateNoEntityOverlap = async ({
 
 const getBusinessEntityForDate = async (
   dateValue,
-  {
-    includeRegistered = true,
-    includePlanned = false,
-  } = {}
+  options = {}
 ) => {
   const entityDate =
     normalizeEntityDate(dateValue);
 
-  const allowedStatuses = ["Active"];
+  const session =
+    options.session || null;
 
-  if (includeRegistered) {
-    allowedStatuses.push("Registered");
-  }
+  // Legacy callers may still supply
+  // includeRegistered/includePlanned.
+  // Operating resolution always requires Active.
+  const entities =
+    await BusinessEntity.find({
+      lifecycleStatus: "Active",
 
-  if (includePlanned) {
-    allowedStatuses.push(
-      "Planned",
-      "Registration In Progress"
-    );
-  }
-
-  const entities = await BusinessEntity.find({
-    lifecycleStatus: {
-      $in: allowedStatuses,
-    },
-
-    effectiveFrom: {
-      $lte: entityDate,
-    },
-
-    $or: [
-      {
-        effectiveTo: "",
+      effectiveFrom: {
+        $lte: entityDate,
       },
-      {
-        effectiveTo: {
-          $gte: entityDate,
+
+      $or: [
+        { effectiveTo: "" },
+        { effectiveTo: null },
+        {
+          effectiveTo: {
+            $gte: entityDate,
+          },
         },
-      },
-    ],
-  }).sort({
-    effectiveFrom: -1,
-  });
+      ],
+    })
+      .sort({
+        effectiveFrom: -1,
+        entityCode: 1,
+      })
+      .session(session);
 
   if (entities.length === 0) {
-    throw new Error(
-      `No effective business entity is configured for ${entityDate}.`
+    T.fail(
+      `No Active business entity is effective for ${entityDate}.`,
+      409
     );
   }
 
   if (entities.length > 1) {
-    throw new Error(
-      `Multiple business entities are effective for ${entityDate}. Resolve the overlapping entity dates before posting.`
+    T.fail(
+      `Multiple Active business entities are effective for ${entityDate}. Resolve their operating periods before posting.`,
+      409
     );
   }
 

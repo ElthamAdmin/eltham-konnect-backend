@@ -67,17 +67,58 @@ const normalizePostingDate = (dateValue) => {
   return formatDateInJamaica(date);
 };
 
-const postCustomerInvoice = async ({ invoice, user, session = null }) => {
-  const amount = roundMoney(invoice.finalTotal || invoice.balanceDue || 0);
+const postCustomerInvoice = async ({
+  invoice,
+  user,
+  session = null,
+}) => {
+  const amount = roundMoney(
+    invoice.finalTotal ||
+      invoice.balanceDue ||
+      0
+  );
+
+  const entityContext =
+    await resolveEntityPostingContext({
+      source: invoice,
+
+      sourceName:
+        `Invoice ${invoice.invoiceNumber}`,
+
+      session,
+    });
+
+  const entryDate =
+    normalizePostingDate(
+      invoice.createdAt ||
+        invoice.invoiceDate
+    );
 
   return postJournalEntry({
-    entryDate: normalizePostingDate(invoice.createdAt || invoice.invoiceDate),
-    memo: `Invoice created for ${invoice.customerName}`,
-    reference: invoice.invoiceNumber,
+    ...entityContext,
+
+    reportingPeriodKey:
+      entryDate.slice(0, 7),
+
+    entryDate,
+
+    memo:
+      `Invoice created for ${invoice.customerName}`,
+
+    reference:
+      invoice.invoiceNumber,
+
     sourceModule: "Invoices",
-    createdBy: getUserName(user),
-        session,
-    lines: templates.buildCustomerInvoiceLines({ amount }),
+
+    createdBy:
+      getUserName(user),
+
+    session,
+
+    lines:
+      templates.buildCustomerInvoiceLines({
+        amount,
+      }),
   });
 };
 
@@ -267,19 +308,61 @@ const postExpensePayment = async ({
   expenseDate,
   transactionDate,
   user,
+  session = null,
 }) => {
+  const {
+    operatingEntity,
+  } = require(
+    "../operatingEntityService"
+  );
+
+  const entryDate =
+    normalizePostingDate(
+      expenseDate || transactionDate
+    );
+
+  const entityContext =
+    await operatingEntity(
+      entryDate,
+      session
+    );
+
   return postJournalEntry({
-    entryDate: normalizePostingDate(expenseDate || transactionDate),
-    memo: description || "Expense payment",
-    reference: reference || "Expense",
+    entityId:
+      entityContext.entityId,
+
+    entityCode:
+      entityContext.entityCode,
+
+    entitySnapshot:
+      entityContext.entitySnapshot,
+
+    reportingPeriodKey:
+      entryDate.slice(0, 7),
+
+    entryDate,
+
+    memo:
+      description ||
+      "Expense payment",
+
+    reference:
+      reference || "Expense",
+
     sourceModule: "Expenses",
-    createdBy: getUserName(user),
-    lines: templates.buildExpensePaymentLines({
-      expenseAccountCode,
-      paymentAccount,
-      amount,
-      description,
-    }),
+
+    createdBy:
+      getUserName(user),
+
+    session,
+
+    lines:
+      templates.buildExpensePaymentLines({
+        expenseAccountCode,
+        paymentAccount,
+        amount,
+        description,
+      }),
   });
 };
 
@@ -317,8 +400,24 @@ const postPayrollPayment = async ({
   payroll,
   paymentDate,
   user,
+  session = null,
 }) => {
+    const entityContext =
+    await resolveEntityPostingContext({
+      source: payroll,
+
+      sourceName:
+        `Payroll ${payroll.payrollNumber}`,
+
+      session,
+    });
   return postJournalEntry({
+      ...entityContext,
+
+  reportingPeriodKey:
+    payroll.payPeriod,
+
+  session,
     entryDate: normalizePostingDate(
       paymentDate || payroll.paymentDate || payroll.payDate
     ),
@@ -352,45 +451,55 @@ const postTaxLiabilityPayment = async ({
   paymentDate,
   paymentReference,
   user,
+  session = null,
 }) => {
   const paymentAmount = roundMoney(amount);
 
   const entityContext =
     await resolveEntityPostingContext({
+      session,
       source: taxRecord,
       sourceName:
         `TaxRecord ${taxRecord.taxNumber}`,
     });
 
   return postJournalEntry({
+    session,
+
     entryDate: normalizePostingDate(
       paymentDate || new Date()
     ),
 
     memo:
       `${taxRecord.taxType} payment for ` +
-      `${taxRecord.periodKey || taxRecord.periodStart}`,
+      `${
+        taxRecord.periodKey ||
+        taxRecord.periodStart
+      }`,
 
     reference:
-      paymentReference || taxRecord.taxNumber,
+      paymentReference ||
+      taxRecord.taxNumber,
 
     sourceModule: "Tax Center",
 
-...entityContext,
+    ...entityContext,
 
-reportingPeriodKey:
-  taxRecord.periodKey || "",
+    reportingPeriodKey:
+      taxRecord.periodKey || "",
 
-createdBy: getUserName(user),
+    createdBy: getUserName(user),
 
-    lines: templates.buildTaxLiabilityPaymentLines({
-      paymentAccount,
-      taxType: taxRecord.taxType,
-      amount: paymentAmount,
-      description:
-        `${taxRecord.taxType} liability payment ` +
-        `${taxRecord.taxNumber}`,
-    }),
+    lines:
+      templates.buildTaxLiabilityPaymentLines({
+        paymentAccount,
+        taxType: taxRecord.taxType,
+        amount: paymentAmount,
+
+        description:
+          `${taxRecord.taxType} liability payment ` +
+          `${taxRecord.taxNumber}`,
+      }),
   });
 };
 
@@ -399,6 +508,7 @@ const postGctFilingSettlement = async ({
   filingPeriod,
   postingDate,
   user,
+  session = null,
 }) => {
   if (!filingPeriod) {
     throw new Error(
@@ -436,12 +546,15 @@ const postGctFilingSettlement = async ({
 
   const entityContext =
     await resolveEntityPostingContext({
+      session,
       source: filingPeriod,
       sourceName:
         `GCT filing ${filingPeriod.filingNumber}`,
     });
 
   return postJournalEntry({
+    session,
+
     entryDate: normalizePostingDate(
       postingDate ||
         filingPeriod.periodEnd ||
@@ -457,12 +570,12 @@ const postGctFilingSettlement = async ({
 
     sourceModule: "Tax Center",
 
-...entityContext,
+    ...entityContext,
 
-reportingPeriodKey:
-  filingPeriod.periodKey || "",
+    reportingPeriodKey:
+      filingPeriod.periodKey || "",
 
-createdBy: getUserName(user),
+    createdBy: getUserName(user),
 
     lines,
   });
@@ -523,6 +636,9 @@ const refundCustomerPurchase = async ({
 };
 
 const postCustomerPurchaseRecoveryInvoice = async ({
+    entityId = null,
+  entityCode = "",
+  entitySnapshot = null,
   customerName,
   invoiceNumber,
   recoverableAmount,
@@ -535,6 +651,13 @@ const postCustomerPurchaseRecoveryInvoice = async ({
     session = null,
 }) => {
   return postJournalEntry({
+      entityId,
+  entityCode,
+  entitySnapshot,
+
+  reportingPeriodKey:
+    normalizePostingDate(invoiceDate)
+      .slice(0, 7),
         session,
     entryDate: normalizePostingDate(
       invoiceDate || new Date()
@@ -559,6 +682,7 @@ const postCustomerPurchaseRecoveryInvoice = async ({
 const postIncomeTaxAssessment = async ({
   estimate,
   user,
+  session = null,
 }) => {
   if (!estimate) {
     throw new Error(
@@ -576,12 +700,15 @@ const postIncomeTaxAssessment = async ({
 
   const entityContext =
     await resolveEntityPostingContext({
+      session,
       source: estimate,
       sourceName:
         `Income-tax estimate ${estimate.estimateNumber}`,
     });
 
   return postJournalEntry({
+    session,
+
     entryDate: normalizePostingDate(
       estimate.filedDate ||
         estimate.submittedAt ||
@@ -593,24 +720,31 @@ const postIncomeTaxAssessment = async ({
       `${estimate.entityCode}, period ` +
       `${estimate.periodKey}`,
 
-    reference: estimate.estimateNumber,
+    reference:
+      estimate.estimateNumber,
 
     sourceModule: "Tax Center",
 
-...entityContext,
+    ...entityContext,
 
-reportingPeriodKey:
-  estimate.periodKey || "",
+    reportingPeriodKey:
+      estimate.periodKey || "",
 
-createdBy: getUserName(user),
+    createdBy: getUserName(user),
 
     lines:
       templates.buildIncomeTaxAssessmentLines({
         incomeTaxType:
           estimate.incomeTaxType,
+
         amount,
-        entityCode: estimate.entityCode,
-        periodKey: estimate.periodKey,
+
+        entityCode:
+          estimate.entityCode,
+
+        periodKey:
+          estimate.periodKey,
+
         description:
           `Income-tax assessment ${estimate.estimateNumber}`,
       }),
