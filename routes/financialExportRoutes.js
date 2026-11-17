@@ -2,7 +2,10 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
 const {
   exportTrialBalance,
@@ -11,28 +14,14 @@ const {
   exportBalanceSheet,
 } = require("../controllers/financialExportController");
 
-router.get(
-  "/trial-balance",
+router.use(
   protect,
-  exportTrialBalance
+  requireAnyPermission(["finance"])
 );
 
-router.get(
-  "/general-ledger",
-  protect,
-  exportGeneralLedger
-);
-
-router.get(
-  "/profit-loss",
-  protect,
-  exportProfitAndLoss
-);
-
-router.get(
-  "/balance-sheet",
-  protect,
-  exportBalanceSheet
-);
+router.get("/trial-balance", exportTrialBalance);
+router.get("/general-ledger", exportGeneralLedger);
+router.get("/profit-loss", exportProfitAndLoss);
+router.get("/balance-sheet", exportBalanceSheet);
 
 module.exports = router;

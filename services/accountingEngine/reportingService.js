@@ -1013,10 +1013,10 @@ const buildReportBundle = async (options = {}) => {
     treasury,
     diagnostics,
 
-    // Internal context for the reporting service.
-    // These fields must not be returned directly through an API.
+        // Internal context only. Never return these fields directly through an API.
     _journalMap: journalMap,
     _rawLedger: rawLedger,
+    _scopedLedger: scopedLedger,
   };
 };
 
