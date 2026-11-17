@@ -25,59 +25,101 @@ const validateAccountingPeriodOpen = async (
   entryDate,
   session = null
 ) => {
-  const postingDate = new Date(entryDate);
+  const fail = (message) => {
+    const error = new Error(message);
+    error.statusCode = 409;
+    throw error;
+  };
 
-  if (Number.isNaN(postingDate.getTime())) {
-    throw new Error("Invalid journal entry date.");
+  if (
+    typeof entryDate !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(entryDate)
+  ) {
+    fail("Enter a valid YYYY-MM-DD journal posting date.");
   }
 
-  const fiscalYear = postingDate.getUTCFullYear();
-  const periodMonth = postingDate.getUTCMonth() + 1;
+  const parsed = new Date(`${entryDate}T00:00:00Z`);
 
-  const accountingPeriod = await AccountingPeriod.findOne({
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== entryDate
+  ) {
+    fail("Enter a valid journal posting date.");
+  }
+
+  const fiscalYear = parsed.getUTCFullYear();
+  const periodMonth = parsed.getUTCMonth() + 1;
+
+  const period = await AccountingPeriod.findOne({
     fiscalYear,
     periodMonth,
   }).session(session);
 
-  if (accountingPeriod) {
-    if (accountingPeriod.allowPosting === false) {
-      throw new Error(
-        `Accounting period ${accountingPeriod.periodName} is blocked for posting.`
-      );
-    }
+  if (!period) {
+    fail(
+      `Create the accounting period for ${entryDate.slice(0, 7)} before posting.`
+    );
+  }
 
-    if (
-      ["Closing", "Closed", "Locked"].includes(
-        accountingPeriod.status
-      )
-    ) {
-      throw new Error(
-        `Accounting period ${accountingPeriod.periodName} is ${accountingPeriod.status}. Posting is not allowed.`
-      );
-    }
+  if (
+    entryDate < period.startDate ||
+    entryDate > period.endDate
+  ) {
+    fail("The posting date is outside the recorded accounting period.");
+  }
+
+  if (
+    period.status !== "Open" ||
+    period.allowPosting !== true
+  ) {
+    fail(
+      `Accounting period ${period.periodName} is blocked for posting (${period.status}).`
+    );
   }
 
   const fiscalYearRecord = await FiscalYear.findOne({
     fiscalYear,
   }).session(session);
 
-  if (fiscalYearRecord) {
-    if (fiscalYearRecord.allowPosting === false) {
-      throw new Error(
-        `Fiscal year ${fiscalYearRecord.yearName} is blocked for posting.`
-      );
+  if (
+    fiscalYearRecord &&
+    (
+      fiscalYearRecord.allowPosting === false ||
+      fiscalYearRecord.status !== "Open"
+    )
+  ) {
+    fail(
+      `Fiscal year ${fiscalYearRecord.yearName || fiscalYear} is blocked for posting.`
+    );
+  }
+
+  if (session) {
+    if (!session.inTransaction()) {
+      fail("Posting controls require an active transaction.");
     }
 
-    if (
-      ["Closing", "Closed", "Locked"].includes(
-        fiscalYearRecord.status
-      )
-    ) {
-      throw new Error(
-        `Fiscal year ${fiscalYearRecord.yearName} is ${fiscalYearRecord.status}. Posting is not allowed.`
-      );
+    // A concurrent close and posting cannot both commit against this period.
+    const guarded = await AccountingPeriod.findOneAndUpdate(
+      {
+        _id: period._id,
+        status: "Open",
+        allowPosting: true,
+      },
+      {
+        $inc: { postingRevision: 1 },
+      },
+      {
+        new: true,
+        session,
+      }
+    );
+
+    if (!guarded) {
+      fail("The accounting period changed. Refresh and try again.");
     }
   }
+
+  return period;
 };
 
 const postJournalEntry = async ({

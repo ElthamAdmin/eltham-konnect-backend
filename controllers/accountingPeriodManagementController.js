@@ -1,5 +1,25 @@
 const AccountingPeriod = require("../models/AccountingPeriod");
 const { periodService } = require("../services/accountingEngine");
+const respondError = (res, error, fallback) => {
+  const status =
+    error.code === 11000
+      ? 409
+      : error.name === "ValidationError"
+        ? 400
+        : [400, 404, 409].includes(error.statusCode)
+          ? error.statusCode
+          : 500;
+
+  return res.status(status).json({
+    success: false,
+    message:
+      error.code === 11000
+        ? "This accounting period already exists."
+        : status === 500
+          ? fallback
+          : error.message,
+  });
+};
 
 const getAccountingPeriods = async (req, res) => {
   try {
@@ -39,54 +59,86 @@ const getCurrentAccountingPeriod = async (req, res) => {
 
 const createAccountingPeriod = async (req, res) => {
   try {
-    const { fiscalYear, periodMonth, startDate, endDate, notes } = req.body;
+    const { fiscalYear, periodMonth, notes = "" } = req.body;
 
-    if (!fiscalYear || !periodMonth || !startDate || !endDate) {
+    const year = Number(fiscalYear);
+    const month = Number(periodMonth);
+
+    if (
+      !["string", "number"].includes(typeof fiscalYear) ||
+      !["string", "number"].includes(typeof periodMonth) ||
+      !Number.isInteger(year) ||
+      year < 2000 ||
+      year > 2100 ||
+      !Number.isInteger(month) ||
+      month < 1 ||
+      month > 12 ||
+      typeof notes !== "string" ||
+      notes.length > 2000
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Fiscal year, period month, start date, and end date are required.",
+        message:
+          "Enter a year from 2000 to 2100, a month from 1 to 12, and notes of no more than 2,000 characters.",
       });
     }
 
-    const monthName = new Date(Number(fiscalYear), Number(periodMonth) - 1, 1)
-      .toLocaleString("en-US", { month: "long" });
+    const prefix = `${year}-${String(month).padStart(2, "0")}`;
+    const startDate = `${prefix}-01`;
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const endDate = `${prefix}-${lastDay}`;
 
-    const existing = await AccountingPeriod.findOne({
-      fiscalYear: Number(fiscalYear),
-      periodMonth: Number(periodMonth),
+    const overlap = await AccountingPeriod.exists({
+      startDate: { $lte: endDate },
+      endDate: { $gte: startDate },
     });
 
-    if (existing) {
-      return res.status(400).json({
+    if (overlap) {
+      return res.status(409).json({
         success: false,
-        message: "This accounting period already exists.",
+        message: "An existing accounting period overlaps this month.",
       });
     }
 
+    const monthName = new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      timeZone: "UTC",
+    }).format(new Date(`${startDate}T00:00:00Z`));
+
     const period = await AccountingPeriod.create({
-      periodNumber: `PER-${fiscalYear}-${String(periodMonth).padStart(2, "0")}`,
-      fiscalYear: Number(fiscalYear),
-      periodMonth: Number(periodMonth),
-      periodName: `${monthName} ${fiscalYear}`,
+      periodNumber: `PER-${prefix}`,
+      fiscalYear: year,
+      periodMonth: month,
+      periodName: `${monthName} ${year}`,
       startDate,
       endDate,
       status: "Open",
       allowPosting: true,
-      notes,
+      notes: notes.trim(),
+      controlHistory: [
+        {
+          action: "CREATE",
+          at: new Date(),
+          by:
+            req.user?.fullName ||
+            req.user?.name ||
+            req.user?.email ||
+            "System User",
+          reason: notes.trim(),
+          previousStatus: "",
+          newStatus: "Open",
+        },
+      ],
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: "Accounting period created successfully",
+      message: "Accounting period created successfully.",
       data: period,
     });
   } catch (error) {
     console.error("Create accounting period error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not create accounting period",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not create accounting period.");
   }
 };
 
@@ -103,13 +155,9 @@ const validateAccountingPeriod = async (req, res) => {
         : "Accounting period validation failed.",
       data: validation,
     });
-  } catch (error) {
+    } catch (error) {
     console.error("Validate accounting period error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not validate accounting period",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not validate accounting period.");
   }
 };
 
@@ -129,13 +177,9 @@ const getCloseChecklist = async (req, res) => {
         : "Period is not ready to close.",
       data: checklist,
     });
-  } catch (error) {
+    } catch (error) {
     console.error("Close checklist error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not build close checklist",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not build close checklist.");
   }
 };
 
@@ -155,13 +199,9 @@ const closeAccountingManagementPeriod = async (req, res) => {
       message: "Accounting period closed successfully",
       data: period,
     });
-  } catch (error) {
+    } catch (error) {
     console.error("Close accounting period error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not close accounting period",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not close accounting period.");
   }
 };
 
@@ -181,13 +221,9 @@ const lockAccountingPeriod = async (req, res) => {
       message: "Accounting period locked successfully",
       data: period,
     });
-  } catch (error) {
+    } catch (error) {
     console.error("Lock accounting period error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not lock accounting period",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not lock accounting period.");
   }
 };
 
@@ -207,13 +243,9 @@ const reopenAccountingPeriod = async (req, res) => {
       message: "Accounting period reopened successfully",
       data: period,
     });
-  } catch (error) {
+    } catch (error) {
     console.error("Reopen accounting period error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Could not reopen accounting period",
-      error: error.message,
-    });
+    return respondError(res, error, "Could not reopen accounting period.");
   }
 };
 

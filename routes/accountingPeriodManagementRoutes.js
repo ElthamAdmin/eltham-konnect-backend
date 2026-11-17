@@ -2,29 +2,50 @@ const express = require("express");
 
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
 const {
   getAccountingPeriods,
   getCurrentAccountingPeriod,
   createAccountingPeriod,
-    validateAccountingPeriod,
+  validateAccountingPeriod,
   getCloseChecklist,
   closeAccountingManagementPeriod,
   lockAccountingPeriod,
   reopenAccountingPeriod,
 } = require("../controllers/accountingPeriodManagementController");
 
-router.get("/", protect, getAccountingPeriods);
-router.get("/current", protect, getCurrentAccountingPeriod);
+const requirePeriodAdmin = (req, res, next) => {
+  if (req.user?.role !== "Admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Only an Admin can change accounting period controls.",
+    });
+  }
 
-router.post("/", protect, createAccountingPeriod);
+  return next();
+};
 
-router.get("/:periodNumber/validate", protect, validateAccountingPeriod);
-router.get("/:periodNumber/checklist", protect, getCloseChecklist);
+router.use(
+  protect,
+  requireAnyPermission(["finance"]),
+  (req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  }
+);
 
-router.put("/:periodNumber/close", protect, closeAccountingManagementPeriod);
-router.put("/:periodNumber/lock", protect, lockAccountingPeriod);
-router.put("/:periodNumber/reopen", protect, reopenAccountingPeriod);
+router.get("/", getAccountingPeriods);
+router.get("/current", getCurrentAccountingPeriod);
+router.get("/:periodNumber/validate", validateAccountingPeriod);
+router.get("/:periodNumber/checklist", getCloseChecklist);
+
+router.post("/", requirePeriodAdmin, createAccountingPeriod);
+router.put("/:periodNumber/close", requirePeriodAdmin, closeAccountingManagementPeriod);
+router.put("/:periodNumber/lock", requirePeriodAdmin, lockAccountingPeriod);
+router.put("/:periodNumber/reopen", requirePeriodAdmin, reopenAccountingPeriod);
 
 module.exports = router;

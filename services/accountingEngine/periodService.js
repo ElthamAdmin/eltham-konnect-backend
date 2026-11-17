@@ -1,591 +1,404 @@
+const mongoose = require("mongoose");
+
 const AccountingPeriod = require("../../models/AccountingPeriod");
 const JournalEntry = require("../../models/JournalEntry");
-const ChartOfAccount = require("../../models/ChartOfAccount");
 const FiscalYear = require("../../models/FiscalYear");
 
-const { buildTrialBalance } = require("./trialBalanceService");
-const { buildBalanceSheet } = require("./balanceSheetService");
-const { buildProfitAndLoss } = require("./profitLossService");
-const { postJournalEntry } = require("./journalService");
+const {
+  buildReportBundle,
+  jamaicaDate,
+} = require("./reportingService");
 
-const getUserName = (user) =>
+const fail = (message, statusCode = 409) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  throw error;
+};
+
+const actor = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
-const getPeriodByDate = async (entryDate) => {
-  const date = new Date(entryDate);
+const text = (value, label, required = false) => {
+  if (value === undefined || value === null) value = "";
 
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("Invalid accounting date.");
+  if (typeof value !== "string" || value.length > 2000) {
+    fail(`${label} must be text of no more than 2,000 characters.`, 400);
+  }
+
+  const result = value.trim();
+
+  if (required && !result) {
+    fail(`${label} is required.`, 400);
+  }
+
+  return result;
+};
+
+const getPeriod = async (periodNumber, session = null) => {
+  const number = text(periodNumber, "Period number", true);
+
+  const period = await AccountingPeriod.findOne({
+    periodNumber: number,
+  }).session(session);
+
+  if (!period) fail("Accounting period not found.", 404);
+
+  return period;
+};
+
+const getPeriodByDate = async (entryDate) => {
+  const day =
+    entryDate instanceof Date
+      ? jamaicaDate(entryDate)
+      : String(entryDate || "");
+
+  const parsed = new Date(`${day}T00:00:00Z`);
+
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(day) ||
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== day
+  ) {
+    fail("Enter a valid accounting date.", 400);
   }
 
   return AccountingPeriod.findOne({
-    fiscalYear: date.getFullYear(),
-    periodMonth: date.getMonth() + 1,
+    fiscalYear: parsed.getUTCFullYear(),
+    periodMonth: parsed.getUTCMonth() + 1,
   });
 };
 
-const getCurrentPeriod = async () => {
-  return getPeriodByDate(new Date());
-};
+const getCurrentPeriod = async () =>
+  getPeriodByDate(jamaicaDate(new Date()));
 
-const syncFiscalYearCounters = async (fiscalYear) => {
+const syncFiscalYearCounters = async (fiscalYear, session) => {
   const periods = await AccountingPeriod.find({
-    fiscalYear: Number(fiscalYear),
-  });
-
-  const openCount = periods.filter((p) =>
-    ["Open", "Closing"].includes(p.status)
-  ).length;
-
-  const closedCount = periods.filter((p) => p.status === "Closed").length;
-  const lockedCount = periods.filter((p) => p.status === "Locked").length;
+    fiscalYear,
+  }).session(session);
 
   await FiscalYear.findOneAndUpdate(
-    { fiscalYear: Number(fiscalYear) },
+    { fiscalYear },
     {
-      openPeriods: openCount,
-      closedPeriods: closedCount,
-      lockedPeriods: lockedCount,
+      $set: {
+        openPeriods: periods.filter((period) =>
+          ["Open", "Closing"].includes(period.status)
+        ).length,
+        closedPeriods: periods.filter(
+          (period) => period.status === "Closed"
+        ).length,
+        lockedPeriods: periods.filter(
+          (period) => period.status === "Locked"
+        ).length,
+      },
     },
-    { new: true }
+    { session }
   );
 };
 
-const ensureClosingAccounts = async () => {
-  await ChartOfAccount.findOneAndUpdate(
-    { accountCode: "3900" },
-    {
-      $set: {
-        accountName: "Income Summary",
-        accountCategory: "Equity",
-        accountType: "Temporary Closing Account",
-        normalBalance: "Credit",
-        status: "Active",
-        isSystemAccount: true,
-        allowManualEntries: false,
-      },
-      $setOnInsert: {
-        openingBalance: 0,
-        currentBalance: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
-
-  await ChartOfAccount.findOneAndUpdate(
-    { accountCode: "3100" },
-    {
-      $set: {
-        accountName: "Retained Earnings",
-        accountCategory: "Equity",
-        accountType: "Retained Earnings",
-        normalBalance: "Credit",
-        status: "Active",
-        isSystemAccount: true,
-      },
-      $setOnInsert: {
-        openingBalance: 0,
-        currentBalance: 0,
-      },
-    },
-    { upsert: true, new: true }
-  );
-};
-
-const validatePeriod = async ({ periodNumber, user = null } = {}) => {
-  const period = await AccountingPeriod.findOne({ periodNumber });
-
-  if (!period) {
-    throw new Error("Accounting period not found.");
+const checkLegacyClosing = async (period, session = null) => {
+  if (period.closingJournalEntry || period.retainedEarningsJournal) {
+    return true;
   }
 
-  const from = period.startDate;
-  const to = period.endDate;
+  return Boolean(
+    await JournalEntry.exists({
+      entryDate: {
+        $gte: period.startDate,
+        $lte: period.endDate,
+      },
+      sourceModule: "Period Closing",
+    }).session(session)
+  );
+};
 
-  const [trialBalance, balanceSheet, profitAndLoss, draftJournals, unpostedJournals] =
-    await Promise.all([
-      buildTrialBalance({ from, to }),
-      buildBalanceSheet({ from, to }),
-      buildProfitAndLoss({ from, to }),
-      JournalEntry.find({
-        entryDate: { $gte: from, $lte: to },
-        status: "Draft",
-      }),
-      JournalEntry.find({
-        entryDate: { $gte: from, $lte: to },
-        status: { $in: ["Draft", "Pending Approval", "Approved"] },
-      }),
-    ]);
+const evaluatePeriod = async (period, session = null) => {
+  const dateErrors = await period.validate().then(
+    () => [],
+    (error) => [error.message]
+  );
+
+  if (dateErrors.length) {
+    return {
+      period,
+      passed: false,
+      readyToClose: false,
+      checklist: {},
+      errors: dateErrors,
+      warnings: [],
+      summary: {},
+    };
+  }
+
+  const [bundle, unpostedCount, legacyClosing] = await Promise.all([
+    buildReportBundle({
+      from: period.startDate,
+      to: period.endDate,
+    }),
+    JournalEntry.countDocuments({
+      entryDate: {
+        $gte: period.startDate,
+        $lte: period.endDate,
+      },
+      status: {
+        $nin: ["Posted", "Reversed"],
+      },
+    }).session(session),
+    checkLegacyClosing(period, session),
+  ]);
+
+  const errors = [];
+  const warnings = bundle.diagnostics.issues.map(
+    (issue) => `${issue.message} Count: ${issue.count}.`
+  );
+
+  if (!bundle.trialBalance.totals.isBalanced) {
+    errors.push(
+      `Trial Balance difference: ${bundle.trialBalance.totals.difference} JMD.`
+    );
+  }
+
+  if (!bundle.balanceSheet.totals.isBalanced) {
+    errors.push(
+      `Balance Sheet difference: ${bundle.balanceSheet.totals.difference} JMD.`
+    );
+  }
+
+  if (unpostedCount) {
+    errors.push(`${unpostedCount} journal(s) are not Posted or Reversed.`);
+  }
+
+  const blockingCodes = new Set([
+    "INVALID_LEDGER_DATE",
+    "INVALID_LEDGER_AMOUNT",
+    "ORPHAN_LEDGER",
+    "UNPOSTED_JOURNAL_LEDGER",
+    "MISSING_CHART_ACCOUNT",
+    "CATEGORY_MISMATCH",
+    "POSTING_DATE_MISMATCH",
+  ]);
+
+  for (const issue of bundle.diagnostics.issues) {
+    if (blockingCodes.has(issue.code)) {
+      errors.push(`${issue.code}: ${issue.message}`);
+    }
+  }
+
+  if (legacyClosing) {
+    errors.push(
+      "Existing period-closing journals require review in the Close Period upgrade. They will not be repeated or reversed automatically."
+    );
+  }
+
+  if (period.endDate >= jamaicaDate(new Date())) {
+    errors.push("Close a period only after its ending date has passed.");
+  }
+
+  warnings.push(
+    "Bank reconciliation and depreciation completeness have not been automatically verified.",
+    "Passing these checks does not prove that all business activity has been recorded.",
+    "Monthly closing blocks posting; it does not create revenue, expense, or retained-earnings transfer journals."
+  );
 
   const checklist = {
-    trialBalanceBalanced: trialBalance.totals.isBalanced === true,
-    profitAndLossGenerated: Boolean(profitAndLoss),
-    balanceSheetGenerated: Boolean(balanceSheet),
-    allJournalEntriesPosted: unpostedJournals.length === 0,
-    noDraftJournals: draftJournals.length === 0,
-    noUnreconciledBankAccounts: true,
-    depreciationPosted: true,
-    closingJournalCreated: Boolean(period.closingJournalEntry),
+    trialBalanceBalanced: bundle.trialBalance.totals.isBalanced,
+    balanceSheetBalanced: bundle.balanceSheet.totals.isBalanced,
+    profitAndLossGenerated: true,
+    balanceSheetGenerated: true,
+    allJournalEntriesPosted: unpostedCount === 0,
+    noDraftJournals: unpostedCount === 0,
+    noUnreconciledBankAccounts: null,
+    depreciationPosted: null,
   };
 
-  const validationErrors = [];
-  const validationWarnings = [];
-
-  if (!checklist.trialBalanceBalanced) {
-    validationErrors.push(
-      `Trial Balance is out of balance by ${trialBalance.totals.difference}.`
-    );
-  }
-
-  if (!balanceSheet.totals.isBalanced) {
-    validationErrors.push(
-      `Balance Sheet is out of balance by ${balanceSheet.totals.difference}.`
-    );
-  }
-
-  if (!checklist.noDraftJournals) {
-    validationErrors.push(`${draftJournals.length} draft journal(s) found.`);
-  }
-
-  if (!checklist.allJournalEntriesPosted) {
-    validationErrors.push(`${unpostedJournals.length} unposted journal(s) found.`);
-  }
-
-  if (!checklist.closingJournalCreated) {
-    validationWarnings.push("Closing journal has not yet been created.");
-  }
-
-  const passed = validationErrors.length === 0;
-
-  const summary = {
-    period: {
-      periodNumber: period.periodNumber,
-      periodName: period.periodName,
-      startDate: period.startDate,
-      endDate: period.endDate,
-      status: period.status,
-      closingJournalCreated: checklist.closingJournalCreated,
-    },
-    trialBalance: trialBalance.totals,
-    balanceSheet: balanceSheet.totals,
-    profitAndLoss: {
-      totalRevenue: profitAndLoss.revenue.total,
-      totalCostOfSales: profitAndLoss.costOfSales.total,
-      totalOperatingExpenses: profitAndLoss.operatingExpenses.total,
-      grossProfit: profitAndLoss.grossProfit,
-      netProfit: profitAndLoss.netProfit,
-    },
-    journals: {
-      draftCount: draftJournals.length,
-      unpostedCount: unpostedJournals.length,
-    },
-  };
-
-  period.validationStatus = passed ? "Passed" : "Failed";
-  period.validationSummary = summary;
-  period.validationErrors = validationErrors;
-  period.validationWarnings = validationWarnings;
-  period.checklist = {
-    ...period.checklist,
-    ...checklist,
-  };
-  period.validatedAt = new Date();
-  period.validatedBy = getUserName(user);
-
-  await period.save();
+  const passed = errors.length === 0;
 
   return {
     period,
     passed,
+    readyToClose:
+      passed && ["Open", "Closing"].includes(period.status),
     checklist,
-    errors: validationErrors,
-    warnings: validationWarnings,
-    summary,
-  };
-};
-
-const buildCloseChecklist = async ({ periodNumber, user = null } = {}) => {
-  const validation = await validatePeriod({ periodNumber, user });
-  const { period, checklist, errors, warnings, summary } = validation;
-
-  const closeChecklist = {
-    validationPassed: validation.passed,
-    trialBalanceBalanced: checklist.trialBalanceBalanced,
-    profitAndLossGenerated: checklist.profitAndLossGenerated,
-    balanceSheetGenerated: checklist.balanceSheetGenerated,
-    allJournalEntriesPosted: checklist.allJournalEntriesPosted,
-    noDraftJournals: checklist.noDraftJournals,
-    noUnreconciledBankAccounts: checklist.noUnreconciledBankAccounts,
-    depreciationPosted: checklist.depreciationPosted,
-    closingJournalCreated: checklist.closingJournalCreated,
-  };
-
-  const readyToStartClose =
-    closeChecklist.validationPassed &&
-    closeChecklist.trialBalanceBalanced &&
-    closeChecklist.profitAndLossGenerated &&
-    closeChecklist.balanceSheetGenerated &&
-    closeChecklist.allJournalEntriesPosted &&
-    closeChecklist.noDraftJournals;
-
-  if (readyToStartClose && period.status === "Open") {
-    period.status = "Closing";
-  }
-
-  period.checklist = {
-    ...period.checklist,
-    ...closeChecklist,
-  };
-
-  await period.save();
-  await syncFiscalYearCounters(period.fiscalYear);
-
-  return {
-    period,
-    readyToClose: readyToStartClose,
-    checklist: closeChecklist,
     errors,
     warnings,
-    summary,
-  };
-};
-
-const createClosingJournal = async ({ period, profitAndLoss, user }) => {
-  await ensureClosingAccounts();
-
-  if (period.closingJournalEntry) {
-    return {
-      entryNumber: period.closingJournalEntry,
-      alreadyCreated: true,
-      createdEntries: String(period.closingJournalEntry)
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    };
-  }
-
-  const incomeSummaryAccount = "3900";
-  const retainedEarningsAccount = "3100";
-
-  const revenueTotal = Number(profitAndLoss.revenue.total || 0);
-  const costOfSalesTotal = Number(profitAndLoss.costOfSales.total || 0);
-  const expenseTotal = Number(profitAndLoss.operatingExpenses.total || 0);
-  const netProfit = Number(profitAndLoss.netProfit || 0);
-
-  const createdEntries = [];
-
-  if (revenueTotal > 0) {
-    const revenueLines = [];
-
-    profitAndLoss.revenue.accounts.forEach((account) => {
-      if (Number(account.amount || 0) > 0) {
-        revenueLines.push({
-          accountCode: account.accountCode,
-          debit: Number(account.amount || 0),
-          credit: 0,
-          description: `Close revenue account ${account.accountName}`,
-        });
-      }
-    });
-
-    revenueLines.push({
-      accountCode: incomeSummaryAccount,
-      debit: 0,
-      credit: revenueTotal,
-      description: `Transfer revenue to Income Summary for ${period.periodName}`,
-    });
-
-    if (revenueLines.length >= 2) {
-      const revenueCloseEntry = await postJournalEntry({
-        entryDate: period.endDate,
-        memo: `Revenue Closing Journal - ${period.periodName}`,
-        reference: `${period.periodNumber}-REV-CLOSE`,
-        sourceModule: "Period Closing",
-        lines: revenueLines,
-        createdBy: getUserName(user),
-      });
-
-      createdEntries.push(revenueCloseEntry.entryNumber);
-    }
-  }
-
-  const totalExpenses = costOfSalesTotal + expenseTotal;
-
-  if (totalExpenses > 0) {
-    const expenseLines = [
-      {
-        accountCode: incomeSummaryAccount,
-        debit: totalExpenses,
-        credit: 0,
-        description: `Transfer expenses from Income Summary for ${period.periodName}`,
+    summary: {
+      scope: "System-wide: all businesses and branches",
+      trialBalance: bundle.trialBalance.totals,
+      balanceSheet: bundle.balanceSheet.totals,
+      profitAndLoss: {
+        totalRevenue: bundle.profitAndLoss.revenue.total,
+        totalCostOfSales: bundle.profitAndLoss.costOfSales.total,
+        totalOperatingExpenses:
+          bundle.profitAndLoss.operatingExpenses.total,
+        grossProfit: bundle.profitAndLoss.grossProfit,
+        netProfit: bundle.profitAndLoss.netProfit,
       },
-    ];
+      unpostedCount,
+      ledgerLineCount: bundle.diagnostics.ledgerLineCount,
+      issues: bundle.diagnostics.issues,
+    },
+  };
+};
 
-    profitAndLoss.costOfSales.accounts.forEach((account) => {
-      if (Number(account.amount || 0) > 0) {
-        expenseLines.push({
-          accountCode: account.accountCode,
-          debit: 0,
-          credit: Number(account.amount || 0),
-          description: `Close cost of sales account ${account.accountName}`,
-        });
+// Read-only: viewing checks never changes period status or stored validation.
+const validatePeriod = async ({ periodNumber } = {}) =>
+  evaluatePeriod(await getPeriod(periodNumber));
+
+const buildCloseChecklist = validatePeriod;
+
+const changePeriod = async ({
+  periodNumber,
+  action,
+  reason,
+  user,
+}) =>
+  mongoose.connection.transaction(async (session) => {
+    const period = await getPeriod(periodNumber, session);
+    const previousStatus = period.status;
+
+    const year = await FiscalYear.findOne({
+      fiscalYear: period.fiscalYear,
+    }).session(session);
+
+    if (action === "CLOSE") {
+      if (!["Open", "Closing"].includes(period.status)) {
+        fail("Only Open or Closing periods can be closed.");
       }
-    });
 
-    profitAndLoss.operatingExpenses.accounts.forEach((account) => {
-      if (Number(account.amount || 0) > 0) {
-        expenseLines.push({
-          accountCode: account.accountCode,
-          debit: 0,
-          credit: Number(account.amount || 0),
-          description: `Close expense account ${account.accountName}`,
-        });
+      if (
+        year &&
+        (
+          year.allowPosting === false ||
+          year.status !== "Open"
+        )
+      ) {
+        fail("The fiscal year is blocked. Review it before closing this period.");
       }
-    });
 
-    if (expenseLines.length >= 2) {
-      const expenseCloseEntry = await postJournalEntry({
-        entryDate: period.endDate,
-        memo: `Expense Closing Journal - ${period.periodName}`,
-        reference: `${period.periodNumber}-EXP-CLOSE`,
-        sourceModule: "Period Closing",
-        lines: expenseLines,
-        createdBy: getUserName(user),
-      });
+      // Acquire the same document write used by journal posting.
+      period.status = "Closing";
+      period.allowPosting = false;
+      period.postingRevision = Number(period.postingRevision || 0) + 1;
+      await period.save({ session });
 
-      createdEntries.push(expenseCloseEntry.entryNumber);
+      const result = await evaluatePeriod(period, session);
+
+      if (!result.passed) {
+        fail(`Period cannot close: ${result.errors.join(" ")}`);
+      }
+
+      period.status = "Closed";
+      period.closedAt = new Date();
+      period.closedBy = actor(user);
+      period.validationStatus = "Passed";
+      period.validationErrors = [];
+      period.validationWarnings = result.warnings;
+      period.validationSummary = result.summary;
+      period.validatedAt = new Date();
+      period.validatedBy = actor(user);
+
+      // Save only the checks defined by the existing schema.
+      period.checklist.trialBalanceBalanced =
+        result.checklist.trialBalanceBalanced;
+      period.checklist.profitAndLossGenerated = true;
+      period.checklist.balanceSheetGenerated = true;
+      period.checklist.allJournalEntriesPosted = true;
+      period.checklist.noDraftJournals = true;
+      period.checklist.noUnreconciledBankAccounts = null;
+      period.checklist.depreciationPosted = null;
+      period.checklist.closingJournalCreated = false;
+    } else if (action === "LOCK") {
+      if (period.status !== "Closed") {
+        fail("Only a Closed period can be locked.");
+      }
+
+      period.status = "Locked";
+      period.allowPosting = false;
+      period.lockedAt = new Date();
+      period.lockedBy = actor(user);
+    } else if (action === "REOPEN") {
+      if (!["Closing", "Closed", "Locked"].includes(period.status)) {
+        fail("This accounting period is already Open.");
+      }
+
+      if (
+        year &&
+        (
+          year.allowPosting === false ||
+          year.status !== "Open"
+        )
+      ) {
+        fail("Reopen the fiscal year before reopening this period.");
+      }
+
+      if (await checkLegacyClosing(period, session)) {
+        fail(
+          "This period contains closing journals. Review their correction in the Close Period upgrade before reopening."
+        );
+      }
+
+      period.status = "Open";
+      period.allowPosting = true;
+      period.reopenedAt = new Date();
+      period.reopenedBy = actor(user);
+      period.reopenedReason = reason;
+      period.validationStatus = "Not Validated";
+      period.validationSummary = {};
+      period.validationErrors = [];
+      period.validationWarnings = [
+        "Reopened: previous validation is historical. Recheck after corrections.",
+      ];
+      period.validatedAt = null;
+      period.validatedBy = "";
+      period.checklist = {
+        noUnreconciledBankAccounts: null,
+        depreciationPosted: null,
+      };
+    } else {
+      fail("Unknown accounting period action.", 400);
     }
-  }
 
-  if (netProfit !== 0) {
-    const retainedEarningsLines =
-      netProfit > 0
-        ? [
-            {
-              accountCode: incomeSummaryAccount,
-              debit: netProfit,
-              credit: 0,
-              description: `Close net profit from Income Summary for ${period.periodName}`,
-            },
-            {
-              accountCode: retainedEarningsAccount,
-              debit: 0,
-              credit: netProfit,
-              description: `Transfer net profit to Retained Earnings for ${period.periodName}`,
-            },
-          ]
-        : [
-            {
-              accountCode: retainedEarningsAccount,
-              debit: Math.abs(netProfit),
-              credit: 0,
-              description: `Transfer net loss to Retained Earnings for ${period.periodName}`,
-            },
-            {
-              accountCode: incomeSummaryAccount,
-              debit: 0,
-              credit: Math.abs(netProfit),
-              description: `Close net loss from Income Summary for ${period.periodName}`,
-            },
-          ];
+    period.postingRevision = Number(period.postingRevision || 0) + 1;
 
-    const retainedEarningsEntry = await postJournalEntry({
-      entryDate: period.endDate,
-      memo: `Retained Earnings Transfer - ${period.periodName}`,
-      reference: `${period.periodNumber}-RE-CLOSE`,
-      sourceModule: "Period Closing",
-      lines: retainedEarningsLines,
-      createdBy: getUserName(user),
+    period.controlHistory.push({
+      action,
+      at: new Date(),
+      by: actor(user),
+      reason,
+      previousStatus,
+      newStatus: period.status,
     });
 
-    createdEntries.push(retainedEarningsEntry.entryNumber);
-  }
+    if (reason) period.notes = reason;
 
-  if (createdEntries.length === 0) {
-    throw new Error("No closing journals were created. The period may have no revenue, expense, or net income activity.");
-  }
+    await period.save({ session });
+    await syncFiscalYearCounters(period.fiscalYear, session);
 
-  period.closingJournalEntry = createdEntries.join(", ");
-  period.retainedEarningsJournal = createdEntries[createdEntries.length - 1] || "";
-  period.checklist = {
-    ...period.checklist,
-    closingJournalCreated: true,
-  };
-
-  await period.save();
-
-  return {
-    entryNumber: period.closingJournalEntry,
-    createdEntries,
-  };
-};
-
-const verifyPostCloseIntegrity = async ({ period }) => {
-  const [trialBalance, balanceSheet, draftJournals, unpostedJournals] =
-    await Promise.all([
-      buildTrialBalance({ from: period.startDate, to: period.endDate }),
-      buildBalanceSheet({ from: period.startDate, to: period.endDate }),
-      JournalEntry.find({
-        entryDate: { $gte: period.startDate, $lte: period.endDate },
-        status: "Draft",
-      }),
-      JournalEntry.find({
-        entryDate: { $gte: period.startDate, $lte: period.endDate },
-        status: { $in: ["Draft", "Pending Approval", "Approved"] },
-      }),
-    ]);
-
-  const errors = [];
-
-  if (!trialBalance.totals.isBalanced) {
-    errors.push(`Post-close Trial Balance is out of balance by ${trialBalance.totals.difference}.`);
-  }
-
-  if (!balanceSheet.totals.isBalanced) {
-    errors.push(`Post-close Balance Sheet is out of balance by ${balanceSheet.totals.difference}.`);
-  }
-
-  if (draftJournals.length > 0) {
-    errors.push(`${draftJournals.length} draft journal(s) found after closing.`);
-  }
-
-  if (unpostedJournals.length > 0) {
-    errors.push(`${unpostedJournals.length} unposted journal(s) found after closing.`);
-  }
-
-  return {
-    passed: errors.length === 0,
-    errors,
-    trialBalance: trialBalance.totals,
-    balanceSheet: balanceSheet.totals,
-  };
-};
-
-const closePeriod = async ({ periodNumber, notes = "", user }) => {
-  const checklistResult = await buildCloseChecklist({ periodNumber, user });
-  const { period, readyToClose } = checklistResult;
-
-  if (period.status === "Locked") {
-    throw new Error("Locked accounting periods cannot be closed.");
-  }
-
-  if (period.status === "Closed") {
-    throw new Error("Accounting period is already closed.");
-  }
-
-  if (!readyToClose) {
-    throw new Error("Period cannot be closed because the pre-close checklist is incomplete.");
-  }
-
-  const profitAndLoss = await buildProfitAndLoss({
-    from: period.startDate,
-    to: period.endDate,
+    return period;
   });
 
-  const closingJournalResult = await createClosingJournal({
-    period,
-    profitAndLoss,
+const closePeriod = ({ periodNumber, notes = "", user }) =>
+  changePeriod({
+    periodNumber,
+    action: "CLOSE",
+    reason: text(notes, "Closing notes"),
     user,
   });
 
-  if (!closingJournalResult?.entryNumber) {
-    throw new Error("Closing journal was not created. Period cannot be closed.");
-  }
-
-  const refreshedPeriod = await AccountingPeriod.findOne({ periodNumber });
-
-  const postCloseVerification = await verifyPostCloseIntegrity({
-    period: refreshedPeriod,
+const lockPeriod = ({ periodNumber, notes = "", user }) =>
+  changePeriod({
+    periodNumber,
+    action: "LOCK",
+    reason: text(notes, "Locking notes"),
+    user,
   });
 
-  if (!postCloseVerification.passed) {
-    refreshedPeriod.validationStatus = "Failed";
-    refreshedPeriod.validationErrors = postCloseVerification.errors;
-    refreshedPeriod.validationSummary = {
-      ...refreshedPeriod.validationSummary,
-      postCloseVerification,
-    };
-    await refreshedPeriod.save();
-
-    throw new Error(
-      `Post-close verification failed: ${postCloseVerification.errors.join(" ")}`
-    );
-  }
-
-  refreshedPeriod.status = "Closed";
-  refreshedPeriod.allowPosting = false;
-  refreshedPeriod.validationStatus = "Passed";
-  refreshedPeriod.validationErrors = [];
-  refreshedPeriod.validationWarnings = [];
-  refreshedPeriod.closedAt = new Date();
-  refreshedPeriod.closedBy = getUserName(user);
-  refreshedPeriod.notes = notes || refreshedPeriod.notes;
-  refreshedPeriod.checklist = {
-    ...refreshedPeriod.checklist,
-    closingJournalCreated: true,
-    postCloseVerified: true,
-  };
-  refreshedPeriod.validationSummary = {
-    ...refreshedPeriod.validationSummary,
-    postCloseVerification,
-  };
-
-  await refreshedPeriod.save();
-  await syncFiscalYearCounters(refreshedPeriod.fiscalYear);
-
-  return refreshedPeriod;
-};
-
-const lockPeriod = async ({ periodNumber, notes = "", user }) => {
-  const period = await AccountingPeriod.findOne({ periodNumber });
-
-  if (!period) {
-    throw new Error("Accounting period not found.");
-  }
-
-  if (period.status === "Open" || period.status === "Closing") {
-    throw new Error("Accounting period must be closed before locking.");
-  }
-
-  if (period.status === "Locked") {
-    throw new Error("Accounting period is already locked.");
-  }
-
-  period.status = "Locked";
-  period.allowPosting = false;
-  period.lockedAt = new Date();
-  period.lockedBy = getUserName(user);
-  period.notes = notes || period.notes;
-
-  await period.save();
-  await syncFiscalYearCounters(period.fiscalYear);
-
-  return period;
-};
-
-const reopenPeriod = async ({ periodNumber, reason = "", user }) => {
-  const period = await AccountingPeriod.findOne({ periodNumber });
-
-  if (!period) {
-    throw new Error("Accounting period not found.");
-  }
-
-  if (period.status === "Open") {
-    throw new Error("Accounting period is already open.");
-  }
-
-  period.status = "Open";
-  period.allowPosting = true;
-  period.reopenedAt = new Date();
-  period.reopenedBy = getUserName(user);
-  period.reopenedReason = reason || "Period reopened";
-  period.notes = reason || period.notes;
-
-  await period.save();
-  await syncFiscalYearCounters(period.fiscalYear);
-
-  return period;
-};
+const reopenPeriod = ({ periodNumber, reason = "", user }) =>
+  changePeriod({
+    periodNumber,
+    action: "REOPEN",
+    reason: text(reason, "Reopening reason", true),
+    user,
+  });
 
 module.exports = {
   getPeriodByDate,

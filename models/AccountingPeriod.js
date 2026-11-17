@@ -183,6 +183,77 @@ const accountingPeriodSchema = new mongoose.Schema(
   }
 );
 
+// Posting and period changes touch the same document inside transactions.
+accountingPeriodSchema.add({
+  postingRevision: {
+    type: Number,
+    default: 0,
+  },
+
+  controlHistory: [
+    {
+      _id: false,
+      action: { type: String, required: true },
+      at: { type: Date, required: true },
+      by: { type: String, required: true },
+      reason: { type: String, default: "" },
+      previousStatus: { type: String, default: "" },
+      newStatus: { type: String, default: "" },
+    },
+  ],
+});
+
+// Unknown is different from a verified pass.
+accountingPeriodSchema
+  .path("checklist.noUnreconciledBankAccounts")
+  .default(null);
+
+accountingPeriodSchema
+  .path("checklist.depreciationPosted")
+  .default(null);
+
+accountingPeriodSchema.pre("validate", function () {
+  const year = Number(this.fiscalYear);
+  const month = Number(this.periodMonth);
+
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    this.invalidate("fiscalYear", "Enter a year from 2000 to 2100.");
+    return;
+  }
+
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    this.invalidate("periodMonth", "Enter a month from 1 to 12.");
+    return;
+  }
+
+  const prefix = `${year}-${String(month).padStart(2, "0")}`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+  if (this.startDate !== `${prefix}-01`) {
+    this.invalidate(
+      "startDate",
+      "The period must start on the first day of its selected month."
+    );
+  }
+
+  if (this.endDate !== `${prefix}-${lastDay}`) {
+    this.invalidate(
+      "endDate",
+      "The period must end on the last day of its selected month."
+    );
+  }
+
+  if (
+    this.status !== "Open" &&
+    this.allowPosting !== false
+  ) {
+    this.invalidate(
+      "allowPosting",
+      "Only an Open period may allow posting."
+    );
+  }
+});
+
 accountingPeriodSchema.index(
   {
     fiscalYear: 1,
