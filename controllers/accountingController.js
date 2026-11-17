@@ -3,15 +3,6 @@ const {
   profitLossService,
 } = require("../services/accountingEngine");
 
-const {
-  postJournalEntry,
-  ensureSystemAccounts,
-  SYSTEM_ACCOUNTS,
-} = require("../utils/generalLedgerPoster");
-
-const roundMoney = (value) =>
-  Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
-
 const getProfitAndLoss = async (req, res) => {
   try {
     const { from = "", to = "" } = req.query;
@@ -129,79 +120,13 @@ const getBalanceSheet = async (req, res) => {
 };
 
 const closeYearToRetainedEarnings = async (req, res) => {
-  try {
-    await ensureSystemAccounts();
+  res.setHeader("Cache-Control", "no-store");
 
-    const profitAndLoss = await profitLossService.buildProfitAndLoss();
-
-    const netProfit = roundMoney(profitAndLoss.netProfit);
-
-    if (netProfit === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No net profit/loss available to close.",
-      });
-    }
-
-    const lines =
-      netProfit > 0
-        ? [
-            {
-              accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
-              debit: 0,
-              credit: netProfit,
-              description: "Year-end retained earnings closing",
-            },
-            {
-              accountCode: SYSTEM_ACCOUNTS.CURRENT_YEAR_EARNINGS,
-              debit: netProfit,
-              credit: 0,
-              description: "Close current earnings into equity",
-            },
-          ]
-        : [
-            {
-              accountCode: SYSTEM_ACCOUNTS.RETAINED_EARNINGS,
-              debit: Math.abs(netProfit),
-              credit: 0,
-              description: "Year-end retained earnings loss closing",
-            },
-            {
-              accountCode: SYSTEM_ACCOUNTS.CURRENT_YEAR_EARNINGS,
-              debit: 0,
-              credit: Math.abs(netProfit),
-              description: "Close current loss into equity",
-            },
-          ];
-
-    const entry = await postJournalEntry({
-      entryDate: new Date().toISOString().slice(0, 10),
-      memo: "Year-end closing to retained earnings",
-      reference: `YEAR-END-${Date.now()}`,
-      sourceModule: "Year End Closing",
-      createdBy:
-        req.user?.name ||
-        req.user?.fullName ||
-        req.user?.email ||
-        "System User",
-      lines,
-    });
-
-    res.json({
-      success: true,
-      message: "Year-end closing completed successfully",
-      netProfit,
-      journalEntry: entry,
-    });
-  } catch (error) {
-    console.error("Year-end closing error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not complete year-end closing",
-      error: error.message,
-    });
-  }
+  return res.status(410).json({
+    success: false,
+    message:
+      "This retained-earnings transfer endpoint has been retired. Use Fiscal Years for annual posting controls. Existing balances continue through the ledger without reposting.",
+  });
 };
 
 module.exports = {

@@ -35,10 +35,8 @@ const text = (value, label, required = false) => {
 };
 
 const getPeriod = async (periodNumber, session = null) => {
-  const number = text(periodNumber, "Period number", true);
-
   const period = await AccountingPeriod.findOne({
-    periodNumber: number,
+    periodNumber: text(periodNumber, "Period number", true),
   }).session(session);
 
   if (!period) fail("Accounting period not found.", 404);
@@ -95,56 +93,100 @@ const syncFiscalYearCounters = async (fiscalYear, session) => {
   );
 };
 
-const checkLegacyClosing = async (period, session = null) => {
-  if (period.closingJournalEntry || period.retainedEarningsJournal) {
-    return true;
-  }
+const findLegacyClosingJournals = async (period, session = null) => {
+  const references = [
+    period.closingJournalEntry,
+    period.retainedEarningsJournal,
+  ]
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
 
-  return Boolean(
-    await JournalEntry.exists({
+  const conditions = [
+    {
       entryDate: {
         $gte: period.startDate,
         $lte: period.endDate,
       },
-      sourceModule: "Period Closing",
-    }).session(session)
-  );
+      $or: [
+        {
+          sourceModule: {
+            $in: [
+              "Period Closing",
+              "Year End Closing",
+              "Year-End Closing",
+              "Year-End Opening Balance",
+            ],
+          },
+        },
+        {
+          reference: /^(PERIOD-CLOSE-|YEAR-END-|OPENING-)/,
+        },
+      ],
+    },
+  ];
+
+  if (references.length) {
+    conditions.push({
+      entryNumber: { $in: references },
+    });
+  }
+
+  return JournalEntry.find({ $or: conditions })
+    .select(
+      "entryNumber entryDate reference sourceModule status totalDebit totalCredit"
+    )
+    .sort({ entryDate: 1, entryNumber: 1 })
+    .session(session)
+    .lean();
 };
 
-const evaluatePeriod = async (period, session = null) => {
-  const dateErrors = await period.validate().then(
-    () => [],
-    (error) => [error.message]
+const checkLegacyClosing = async (period, session = null) =>
+  Boolean(
+    period.closingJournalEntry ||
+      period.retainedEarningsJournal ||
+      (await findLegacyClosingJournals(period, session)).length
   );
 
-  if (dateErrors.length) {
+const evaluatePeriod = async (period, session = null) => {
+  try {
+    await period.validate();
+  } catch (error) {
     return {
       period,
       passed: false,
       readyToClose: false,
       checklist: {},
-      errors: dateErrors,
+      errors: [error.message],
       warnings: [],
       summary: {},
     };
   }
 
-  const [bundle, unpostedCount, legacyClosing] = await Promise.all([
-    buildReportBundle({
-      from: period.startDate,
-      to: period.endDate,
-    }),
-    JournalEntry.countDocuments({
-      entryDate: {
-        $gte: period.startDate,
-        $lte: period.endDate,
-      },
-      status: {
-        $nin: ["Posted", "Reversed"],
-      },
-    }).session(session),
-    checkLegacyClosing(period, session),
-  ]);
+  const bundle = await buildReportBundle({
+    from: period.startDate,
+    to: period.endDate,
+  });
+
+  const unpostedCount = await JournalEntry.countDocuments({
+    entryDate: {
+      $gte: period.startDate,
+      $lte: period.endDate,
+    },
+    status: {
+      $nin: ["Posted", "Reversed"],
+    },
+  }).session(session);
+
+  const legacyClosingJournals =
+    await findLegacyClosingJournals(period, session);
+
+  const legacyClosing = Boolean(
+    period.closingJournalEntry ||
+      period.retainedEarningsJournal ||
+      legacyClosingJournals.length
+  );
 
   const errors = [];
   const warnings = bundle.diagnostics.issues.map(
@@ -164,7 +206,9 @@ const evaluatePeriod = async (period, session = null) => {
   }
 
   if (unpostedCount) {
-    errors.push(`${unpostedCount} journal(s) are not Posted or Reversed.`);
+    errors.push(
+      `${unpostedCount} journal(s) are not Posted or Reversed.`
+    );
   }
 
   const blockingCodes = new Set([
@@ -185,12 +229,14 @@ const evaluatePeriod = async (period, session = null) => {
 
   if (legacyClosing) {
     errors.push(
-      "Existing period-closing journals require review in the Close Period upgrade. They will not be repeated or reversed automatically."
+      "Existing closing/opening journal references require review. They will not be repeated or reversed automatically."
     );
   }
 
   if (period.endDate >= jamaicaDate(new Date())) {
-    errors.push("Close a period only after its ending date has passed.");
+    errors.push(
+      "Close a period only after its ending date has passed."
+    );
   }
 
   warnings.push(
@@ -222,6 +268,11 @@ const evaluatePeriod = async (period, session = null) => {
     warnings,
     summary: {
       scope: "System-wide: all businesses and branches",
+      legacyClosingJournals,
+      legacyClosingReferences: [
+        period.closingJournalEntry,
+        period.retainedEarningsJournal,
+      ].filter(Boolean),
       trialBalance: bundle.trialBalance.totals,
       balanceSheet: bundle.balanceSheet.totals,
       profitAndLoss: {
@@ -239,7 +290,7 @@ const evaluatePeriod = async (period, session = null) => {
   };
 };
 
-// Read-only: viewing checks never changes period status or stored validation.
+// Viewing checks never changes period status or stored validation.
 const validatePeriod = async ({ periodNumber } = {}) =>
   evaluatePeriod(await getPeriod(periodNumber));
 
@@ -271,13 +322,17 @@ const changePeriod = async ({
           year.status !== "Open"
         )
       ) {
-        fail("The fiscal year is blocked. Review it before closing this period.");
+        fail(
+          "The fiscal year is blocked. Review it before closing this period."
+        );
       }
 
-      // Acquire the same document write used by journal posting.
+      // Journal posting also writes to this period document.
       period.status = "Closing";
       period.allowPosting = false;
-      period.postingRevision = Number(period.postingRevision || 0) + 1;
+      period.postingRevision =
+        Number(period.postingRevision || 0) + 1;
+
       await period.save({ session });
 
       const result = await evaluatePeriod(period, session);
@@ -296,7 +351,6 @@ const changePeriod = async ({
       period.validatedAt = new Date();
       period.validatedBy = actor(user);
 
-      // Save only the checks defined by the existing schema.
       period.checklist.trialBalanceBalanced =
         result.checklist.trialBalanceBalanced;
       period.checklist.profitAndLossGenerated = true;
@@ -327,12 +381,14 @@ const changePeriod = async ({
           year.status !== "Open"
         )
       ) {
-        fail("Reopen the fiscal year before reopening this period.");
+        fail(
+          "Reopen the fiscal year before reopening this period."
+        );
       }
 
       if (await checkLegacyClosing(period, session)) {
         fail(
-          "This period contains closing journals. Review their correction in the Close Period upgrade before reopening."
+          "This period contains closing/opening journal references. Review their correction before reopening."
         );
       }
 
@@ -357,7 +413,8 @@ const changePeriod = async ({
       fail("Unknown accounting period action.", 400);
     }
 
-    period.postingRevision = Number(period.postingRevision || 0) + 1;
+    period.postingRevision =
+      Number(period.postingRevision || 0) + 1;
 
     period.controlHistory.push({
       action,

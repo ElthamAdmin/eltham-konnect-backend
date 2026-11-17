@@ -1,7 +1,10 @@
 const express = require("express");
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
+const {
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
 const {
   getProfitAndLoss,
@@ -13,17 +16,38 @@ const {
   closeAccountingPeriod,
 } = require("../controllers/accountingPeriodController");
 
-router.get("/profit-loss", protect, getProfitAndLoss);
-router.get("/balance-sheet", protect, getBalanceSheet);
+const requireClosingAdmin = (req, res, next) => {
+  if (req.user?.role !== "Admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Only an Admin can change closing controls.",
+    });
+  }
+
+  return next();
+};
+
+router.use(
+  protect,
+  requireAnyPermission(["finance"]),
+  (req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  }
+);
+
+router.get("/profit-loss", getProfitAndLoss);
+router.get("/balance-sheet", getBalanceSheet);
+
 router.post(
   "/close-period",
-  protect,
+  requireClosingAdmin,
   closeAccountingPeriod
 );
 
 router.post(
   "/close-year",
-  protect,
+  requireClosingAdmin,
   closeYearToRetainedEarnings
 );
 
