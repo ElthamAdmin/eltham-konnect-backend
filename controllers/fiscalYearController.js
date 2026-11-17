@@ -1,221 +1,131 @@
-const FiscalYear = require("../models/FiscalYear");
-
 const fiscalYearService = require("../services/accountingEngine/fiscalYearService");
 const yearEndService = require("../services/accountingEngine/yearEndService");
 const yearEndAutomationService = require("../services/accountingEngine/yearEndAutomationService");
 
-const getFiscalYears = async (req, res) => {
-  try {
-    const years = await FiscalYear.find().sort({
-      fiscalYear: -1,
-    });
+const handle = (fallback, operation, status = 200) =>
+  async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
 
-    res.json({
-      success: true,
-      data: years,
-    });
-  } catch (error) {
-    console.error("Get fiscal years error:", error);
+    try {
+      const result = await operation(req);
 
-    res.status(500).json({
-      success: false,
-      message: "Could not load fiscal years",
-      error: error.message,
-    });
-  }
-};
+      return res.status(status).json({
+        success: true,
+        message: result.message || fallback,
+        data: result.data,
+      });
+    } catch (error) {
+      console.error(fallback, error);
 
-const createFiscalYear = async (req, res) => {
-  try {
-    const year = await fiscalYearService.createFiscalYear({
+      const errorStatus =
+        error.code === 11000
+          ? 409
+          : error.name === "ValidationError"
+            ? 400
+            : [400, 404, 409].includes(error.statusCode)
+              ? error.statusCode
+              : 500;
+
+      return res.status(errorStatus).json({
+        success: false,
+        message:
+          error.code === 11000
+            ? "The fiscal year or monthly period already exists."
+            : errorStatus === 500
+              ? "Could not complete the fiscal year action."
+              : error.message,
+      });
+    }
+  };
+
+const getFiscalYears = handle("Fiscal years loaded.", async () => ({
+  data: await fiscalYearService.getFiscalYears(),
+}));
+
+const createFiscalYear = handle(
+  "Fiscal year and monthly periods prepared.",
+  async (req) => ({
+    data: await fiscalYearService.createFiscalYear({
       fiscalYear: req.body.fiscalYear,
       startDate: req.body.startDate,
       endDate: req.body.endDate,
       totalPeriods: req.body.totalPeriods,
       notes: req.body.notes,
-      isCurrentYear: req.body.isCurrentYear,
       user: req.user,
-    });
+    }),
+  }),
+  201
+);
 
-    res.status(201).json({
-      success: true,
-      message: "Fiscal year created successfully",
-      data: year,
-    });
-  } catch (error) {
-    console.error("Create fiscal year error:", error);
+const validateFiscalYear = handle("Checks completed.", async (req) => {
+  const data = await fiscalYearService.validateFiscalYear({
+    fiscalYear: req.params.fiscalYear,
+    mode: req.query.mode || "progress",
+  });
 
-    res.status(500).json({
-      success: false,
-      message: "Could not create fiscal year",
-      error: error.message,
-    });
-  }
-};
+  return {
+    data,
+    message: data.passed
+      ? "Selected recorded-data checks passed. Review the warnings."
+      : "Checks found items requiring review.",
+  };
+});
 
-const validateFiscalYear = async (req, res) => {
-  try {
-    const validation = await fiscalYearService.validateFiscalYear({
+const closeFiscalYear = handle(
+  "Annual posting closed. Other year-end work is not marked completed.",
+  async (req) => ({
+    data: await fiscalYearService.closeFiscalYear({
       fiscalYear: req.params.fiscalYear,
       user: req.user,
-        mode: req.query.mode || "progress",
-    });
+    }),
+  })
+);
 
-    res.json({
-      success: true,
-      message: validation.passed
-        ? "Fiscal year validation passed."
-        : "Fiscal year validation failed.",
-      data: validation,
-    });
-  } catch (error) {
-    console.error("Validate fiscal year error:", error);
+const lockFiscalYear = handle("Fiscal year locked.", async (req) => ({
+  data: await fiscalYearService.lockFiscalYear({
+    fiscalYear: req.params.fiscalYear,
+    user: req.user,
+  }),
+}));
 
-    res.status(500).json({
-      success: false,
-      message: "Could not validate fiscal year",
-      error: error.message,
-    });
-  }
-};
-
-const closeFiscalYear = async (req, res) => {
-  try {
-    const year = await fiscalYearService.closeFiscalYear({
+const createNextFiscalYear = handle(
+  "Next year prepared. Existing periods and ledger balances preserved.",
+  async (req) => ({
+    data: await fiscalYearService.createNextFiscalYear({
       fiscalYear: req.params.fiscalYear,
       user: req.user,
-    });
+    }),
+  })
+);
 
-    res.json({
-      success: true,
-      message: "Fiscal year closed successfully",
-      data: year,
-    });
-  } catch (error) {
-    console.error("Close fiscal year error:", error);
+const executeYearEndClose = handle("Annual posting closed.", async (req) => {
+  const data = await yearEndService.executeYearEndClose({
+    fiscalYear: req.params.fiscalYear,
+    user: req.user,
+  });
 
-    res.status(500).json({
-      success: false,
-      message: "Could not close fiscal year",
-      error: error.message,
-    });
-  }
-};
+  return { data, message: data.message };
+});
 
-const lockFiscalYear = async (req, res) => {
-  try {
-    const year = await fiscalYearService.lockFiscalYear({
+const generateOpeningBalances = handle(
+  "Ledger continuity checked.",
+  async (req) => {
+    const data = await yearEndService.generateOpeningBalances({
       fiscalYear: req.params.fiscalYear,
-      user: req.user,
     });
 
-    res.json({
-      success: true,
-      message: "Fiscal year locked successfully",
-      data: year,
-    });
-  } catch (error) {
-    console.error("Lock fiscal year error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not lock fiscal year",
-      error: error.message,
-    });
+    return { data, message: data.message };
   }
-};
+);
 
-const createNextFiscalYear = async (req, res) => {
-  try {
-    const year = await fiscalYearService.createNextFiscalYear({
-      fiscalYear: req.params.fiscalYear,
-      user: req.user,
-    });
+const runEnterpriseYearEnd = handle("Annual posting closed.", async (req) => {
+  const data = await yearEndAutomationService.runEnterpriseYearEnd({
+    fiscalYear: req.params.fiscalYear,
+    user: req.user,
+  });
 
-    res.json({
-      success: true,
-      message: "Next fiscal year created successfully",
-      data: year,
-    });
-  } catch (error) {
-    console.error("Create next fiscal year error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Could not create next fiscal year",
-      error: error.message,
-    });
-  }
-};
-
-const executeYearEndClose = async (req, res) => {
-  try {
-    const result = await yearEndService.executeYearEndClose({
-      fiscalYear: req.params.fiscalYear,
-      user: req.user,
-    });
-
-    res.json({
-      success: true,
-      message: "Year-end close completed successfully",
-      data: result,
-    });
-  } catch (error) {
-    console.error("Year-end close error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message || "Could not execute year-end close",
-      error: error.message,
-    });
-  }
-};
-
-const generateOpeningBalances = async (req, res) => {
-  try {
-    const result = await yearEndService.generateOpeningBalances({
-      fiscalYear: req.params.fiscalYear,
-      user: req.user,
-    });
-
-    res.json({
-      success: true,
-      message: "Opening balances generated successfully",
-      data: result,
-    });
-  } catch (error) {
-    console.error("Generate opening balances error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message || "Could not generate opening balances",
-      error: error.message,
-    });
-  }
-};
-
-const runEnterpriseYearEnd = async (req, res) => {
-  try {
-    const result = await yearEndAutomationService.runEnterpriseYearEnd({
-      fiscalYear: req.params.fiscalYear,
-      user: req.user,
-    });
-
-    res.json({
-      success: result.success,
-      message: result.message || "Enterprise year-end automation completed.",
-      data: result,
-    });
-  } catch (error) {
-    console.error("Enterprise year-end automation error:", error);
-
-    res.status(500).json({
-      success: false,
-      message: error.message || "Could not run enterprise year-end automation",
-      error: error.message,
-    });
-  }
-};
+  return { data, message: data.message };
+});
 
 module.exports = {
   getFiscalYears,
@@ -226,6 +136,5 @@ module.exports = {
   createNextFiscalYear,
   executeYearEndClose,
   generateOpeningBalances,
-    runEnterpriseYearEnd,
-
+  runEnterpriseYearEnd,
 };

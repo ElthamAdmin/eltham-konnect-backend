@@ -167,13 +167,59 @@ const fiscalYearSchema = new mongoose.Schema(
   }
 );
 
-fiscalYearSchema.index(
-  {
-    fiscalYear: 1,
+// fiscalYear already has a unique index declared on its field.
+
+fiscalYearSchema.add({
+  controlRevision: {
+    type: Number,
+    default: 0,
   },
-  {
-    unique: true,
+
+  controlHistory: [
+    {
+      _id: false,
+      action: { type: String, required: true },
+      at: { type: Date, required: true },
+      by: { type: String, required: true },
+      reason: { type: String, default: "" },
+      previousStatus: { type: String, default: "" },
+      newStatus: { type: String, default: "" },
+    },
+  ],
+});
+
+fiscalYearSchema.pre("validate", function () {
+  const year = Number(this.fiscalYear);
+
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    this.invalidate("fiscalYear", "Enter a year from 2000 to 2100.");
+    return;
   }
-);
+
+  if (this.startDate !== `${year}-01-01`) {
+    this.invalidate(
+      "startDate",
+      "This accounting engine requires January 1 as the year start."
+    );
+  }
+
+  if (this.endDate !== `${year}-12-31`) {
+    this.invalidate(
+      "endDate",
+      "This accounting engine requires December 31 as the year end."
+    );
+  }
+
+  if (this.totalPeriods !== 12) {
+    this.invalidate("totalPeriods", "A fiscal year must contain 12 months.");
+  }
+
+  if (this.status !== "Open" && this.allowPosting !== false) {
+    this.invalidate(
+      "allowPosting",
+      "Only an Open fiscal year may allow posting."
+    );
+  }
+});
 
 module.exports = mongoose.model("FiscalYear", fiscalYearSchema);

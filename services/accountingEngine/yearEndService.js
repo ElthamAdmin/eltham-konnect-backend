@@ -1,122 +1,46 @@
 const FiscalYear = require("../../models/FiscalYear");
-const ChartOfAccount = require("../../models/ChartOfAccount");
-
-const { postJournalEntry } = require("./journalService");
 const fiscalYearService = require("./fiscalYearService");
-const { roundMoney } = require("./money");
 
-const getUserName = (user) =>
-  user?.fullName || user?.name || user?.email || "System User";
+const generateOpeningBalances = async ({ fiscalYear }) => {
+  const value = Number(fiscalYear);
 
-const generateOpeningBalances = async ({ fiscalYear, user = null }) => {
-  const year = await FiscalYear.findOne({ fiscalYear: Number(fiscalYear) });
+  if (
+    !/^\d{4}$/.test(String(fiscalYear)) ||
+    !Number.isInteger(value) ||
+    value < 2000 ||
+    value > 2100
+  ) {
+    const error = new Error("Enter a fiscal year from 2000 to 2100.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const year = await FiscalYear.findOne({ fiscalYear: value });
 
   if (!year) {
-    throw new Error("Fiscal year not found.");
+    const error = new Error("Fiscal year not found.");
+    error.statusCode = 404;
+    throw error;
   }
-
-  const nextYear = await fiscalYearService.createNextFiscalYear({
-    fiscalYear,
-    user,
-  });
-
-  if (year.openingJournalEntry) {
-    return {
-      alreadyCreated: true,
-      openingJournalEntry: year.openingJournalEntry,
-      nextFiscalYear: nextYear,
-    };
-  }
-
-  const balanceSheetAccounts = await ChartOfAccount.find({
-    status: "Active",
-    accountCategory: { $in: ["Asset", "Liability", "Equity"] },
-  }).sort({ accountCode: 1 });
-
-  const lines = [];
-
-  balanceSheetAccounts.forEach((account) => {
-    const balance = roundMoney(account.currentBalance || 0);
-
-    if (balance === 0) return;
-
-    if (account.normalBalance === "Debit") {
-      lines.push({
-        accountCode: account.accountCode,
-        debit: balance > 0 ? balance : 0,
-        credit: balance < 0 ? Math.abs(balance) : 0,
-        description: `Opening balance for ${account.accountName}`,
-      });
-    } else {
-      lines.push({
-        accountCode: account.accountCode,
-        debit: balance < 0 ? Math.abs(balance) : 0,
-        credit: balance > 0 ? balance : 0,
-        description: `Opening balance for ${account.accountName}`,
-      });
-    }
-  });
-
-  if (lines.length < 2) {
-    throw new Error("Opening balance journal requires at least two balance sheet accounts.");
-  }
-
-  const openingEntry = await postJournalEntry({
-    entryDate: `${nextYear.fiscalYear}-01-01`,
-    memo: `Opening Balance Journal - FY ${nextYear.fiscalYear}`,
-    reference: `OPENING-${nextYear.fiscalYear}`,
-    sourceModule: "Year-End Opening Balance",
-    createdBy: getUserName(user),
-    lines,
-  });
-
-  year.openingJournalEntry = openingEntry.entryNumber;
-  year.nextFiscalYear = nextYear.fiscalYear;
-  await year.save();
-
-  nextYear.openingJournalEntry = openingEntry.entryNumber;
-  nextYear.previousFiscalYear = year.fiscalYear;
-  await nextYear.save();
 
   return {
-    openingJournalEntry: openingEntry.entryNumber,
-    nextFiscalYear: nextYear,
+    created: false,
+    openingJournalEntry: null,
+    existingOpeningJournalEntry: year.openingJournalEntry || "",
+    message:
+      "No opening journal was created. Existing balances continue automatically through the cumulative ledger. Existing historical journals require separate review.",
   };
 };
 
-const executeYearEndClose = async ({ fiscalYear, user = null }) => {
-  const validation = await fiscalYearService.validateFiscalYear({
-    fiscalYear,
-    user,
-    mode: "yearEndClose",
-  });
-
-  if (!validation.passed) {
-    throw new Error("Fiscal year cannot be closed because year-end validation failed.");
-  }
-
-  const openingBalanceResult = await generateOpeningBalances({
-    fiscalYear,
-    user,
-  });
-
-  const year = await FiscalYear.findOne({ fiscalYear: Number(fiscalYear) });
-
-  year.status = "Closed";
-  year.allowPosting = false;
-  year.yearEndCompleted = true;
-  year.yearEndCompletedAt = new Date();
-  year.yearEndCompletedBy = getUserName(user);
-  year.closedAt = new Date();
-  year.closedBy = getUserName(user);
-  year.validationStatus = "Passed";
-
-  await year.save();
+// Compatibility endpoint: annual posting closure only.
+const executeYearEndClose = async (options) => {
+  const year = await fiscalYearService.closeFiscalYear(options);
 
   return {
     year,
-    validation,
-    openingBalanceResult,
+    journalsCreated: 0,
+    message:
+      "Annual posting closed. No balances were reposted and no current-year selection was changed. Other year-end work is not marked completed.",
   };
 };
 

@@ -1,36 +1,60 @@
 const express = require("express");
 const router = express.Router();
 
-const { protect } = require("../middleware/authMiddleware");
-
 const {
-  getFiscalYears,
-  createFiscalYear,
-  validateFiscalYear,
-  closeFiscalYear,
-  lockFiscalYear,
-  createNextFiscalYear,
-  executeYearEndClose,
-  generateOpeningBalances,
-    runEnterpriseYearEnd,
-} = require("../controllers/fiscalYearController");
+  protect,
+  requireAnyPermission,
+} = require("../middleware/authMiddleware");
 
-router.get("/", protect, getFiscalYears);
+const controller = require("../controllers/fiscalYearController");
 
-router.post("/", protect, createFiscalYear);
+const requireFiscalAdmin = (req, res, next) => {
+  if (req.user?.role !== "Admin") {
+    return res.status(403).json({
+      success: false,
+      message: "Only an Admin can change fiscal year controls.",
+    });
+  }
 
-router.get("/:fiscalYear/validate", protect, validateFiscalYear);
+  return next();
+};
 
-router.put("/:fiscalYear/close", protect, closeFiscalYear);
+router.use(
+  protect,
+  requireAnyPermission(["finance"]),
+  (req, res, next) => {
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  }
+);
 
-router.put("/:fiscalYear/lock", protect, lockFiscalYear);
+router.get("/", controller.getFiscalYears);
+router.get("/:fiscalYear/validate", controller.validateFiscalYear);
 
-router.post("/:fiscalYear/create-next", protect, createNextFiscalYear);
+router.post("/", requireFiscalAdmin, controller.createFiscalYear);
+router.put("/:fiscalYear/close", requireFiscalAdmin, controller.closeFiscalYear);
+router.put("/:fiscalYear/lock", requireFiscalAdmin, controller.lockFiscalYear);
+router.post(
+  "/:fiscalYear/create-next",
+  requireFiscalAdmin,
+  controller.createNextFiscalYear
+);
 
-router.post("/:fiscalYear/year-end-close", protect, executeYearEndClose);
-
-router.post("/:fiscalYear/opening-balances", protect, generateOpeningBalances);
-
-router.post("/:fiscalYear/run-enterprise-year-end", protect, runEnterpriseYearEnd);
+// Compatibility endpoints: no duplicate opening journals or automatic switching.
+router.post(
+  "/:fiscalYear/year-end-close",
+  requireFiscalAdmin,
+  controller.executeYearEndClose
+);
+router.post(
+  "/:fiscalYear/opening-balances",
+  requireFiscalAdmin,
+  controller.generateOpeningBalances
+);
+router.post(
+  "/:fiscalYear/run-enterprise-year-end",
+  requireFiscalAdmin,
+  controller.runEnterpriseYearEnd
+);
 
 module.exports = router;
