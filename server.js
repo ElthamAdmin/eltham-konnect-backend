@@ -195,43 +195,50 @@ app.use(
     });
   }
 );
-app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"), {
-    index: false,
-    fallthrough: false,
-    extensions: ["jpg", "jpeg", "png", "webp", "pdf"],
+// Mount individual folders so Express never serves the uploads root.
+const legacyUploadMounts = [
+  "logos",
+  "notice-board",
+  "rewards-hub",
+  "amazon-associate",
 
-    setHeaders: (res, filePath) => {
-      if (filePath.endsWith(".pdf")) {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", "inline");
-      }
+  // Preserve existing module URLs. These mounts do not check ownership.
+  "expense-receipts",
+  "support-attachments",
+  "team-hub",
+  "prealerts",
+];
 
-      if (filePath.match(/\.(jpg|jpeg|png|webp)$/i)) {
-        res.setHeader("Content-Disposition", "inline");
-        res.setHeader("Cache-Control", "public, max-age=31536000");
-      }
-    },
-  })
-);
+for (const folder of legacyUploadMounts) {
+  app.use(
+    `/uploads/${folder}`,
+    express.static(path.join(uploadsDir, folder), {
+      index: false,
+      redirect: false,
+      fallthrough: true,
+      dotfiles: "ignore",
+      extensions: ["jpg", "jpeg", "png", "webp", "pdf"],
 
+      setHeaders(res, filePath) {
+        if (/\.pdf$/i.test(filePath)) {
+          res.setHeader("Content-Type", "application/pdf");
+          res.setHeader("Content-Disposition", "inline");
+        }
+
+        if (/\.(jpg|jpeg|png|webp)$/i.test(filePath)) {
+          res.setHeader("Content-Disposition", "inline");
+        }
+      },
+    })
+  );
+}
+
+// No general static handler or filename-based download fallback below this.
 app.use("/uploads", (req, res) => {
   return res.status(404).json({
     success: false,
     message: "Uploaded file not found",
   });
-});
-
-app.get("/uploads/:folder/:filename", (req, res) => {
-  const { folder, filename } = req.params;
-  const filePath = path.join(__dirname, "uploads", folder, filename);
-
-  if (fs.existsSync(filePath)) {
-    return res.sendFile(filePath);
-  }
-
-  return res.status(404).send("File not found");
 });
 
 app.get("/", (req, res) => {
