@@ -590,6 +590,31 @@ entitySnapshot: {
       default: null,
     },
 
+        createdByUserId: {
+      type: String,
+      default: "",
+      trim: true,
+      immutable: true,
+    },
+
+    approvedByUserId: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+
+    approvalMethod: {
+      type: String,
+      enum: [
+        "",
+        "Independent Approval",
+        "Admin Self-Approval",
+        "Legacy Preparer Unverified",
+      ],
+      default: "",
+    },
+
+
         approvalNotes: {
       type: String,
       default: "",

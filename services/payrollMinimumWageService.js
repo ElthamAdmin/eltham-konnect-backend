@@ -1,6 +1,6 @@
-const AttendancePeriod = require(
-  "../models/AttendancePeriod"
-);
+const {
+  selectPayrollAttendance,
+} = require("./payrollAttendanceSelectionService");
 
 const {
   buildMinimumWageAssessment,
@@ -24,7 +24,8 @@ const resolvePayrollMinimumWageAssessment =
     applicable = true,
     workerCategory = "General",
     manualWorkedHours = 0,
-    attendancePeriodNumber = "",
+        attendancePeriodNumber = "",
+    session = null,
   }) => {
     const normalizedEmployeeId =
       String(
@@ -69,74 +70,35 @@ const resolvePayrollMinimumWageAssessment =
      * Minimum-wage applicability cannot be switched off merely
      * by a client request for an employee-linked Payroll record.
      */
-    const attendanceQuery = {
-      employeeId:
-        normalizedEmployeeId,
-      periodKey:
-        normalizedPayPeriod,
-      status: {
-        $in: [
-          "Payroll Ready",
-          "Locked",
-        ],
-      },
-    };
-
-    if (
-      String(
-        attendancePeriodNumber ||
-          ""
-      ).trim()
-    ) {
-      attendanceQuery.periodNumber =
-        String(
-          attendancePeriodNumber
-        ).trim();
-    }
-
-    const attendancePeriod =
-      await AttendancePeriod.findOne(
-        attendanceQuery
-      ).sort({
-        payrollReadyAt: -1,
-        updatedAt: -1,
-      });
+        const { attendancePeriod, warning } = await selectPayrollAttendance({
+      employeeId: normalizedEmployeeId,
+      payPeriod: normalizedPayPeriod,
+      attendancePeriodNumber,
+      session,
+    });
 
     if (!attendancePeriod) {
-      const unassessedResult =
-        await buildMinimumWageAssessment({
-          assessmentDate,
-          workedHours: 0,
-          grossPay,
-          applicable: true,
-          workerCategory,
-          attendancePeriodNumber:
-            String(
-              attendancePeriodNumber ||
-                ""
-            ).trim(),
-        });
+      const unassessed = await buildMinimumWageAssessment({
+        assessmentDate,
+        workedHours: 0,
+        grossPay,
+        applicable: true,
+        workerCategory,
+        attendancePeriodNumber: String(attendancePeriodNumber || "").trim(),
+      });
 
       return {
-        ...unassessedResult,
+        ...unassessed,
         compliant: false,
-        assessmentStatus:
-          "Not Assessed",
-        warning:
-          `A Payroll Ready attendance period is required for ` +
-          `${normalizedEmployeeId}, period ${normalizedPayPeriod}, ` +
-          `before minimum-wage compliance can be confirmed.`,
+        assessmentStatus: "Not Assessed",
+        warning,
         attendancePeriodId: null,
-        attendancePeriodNumber:
-          String(
-            attendancePeriodNumber ||
-              ""
-          ).trim(),
+        attendancePeriodNumber: String(attendancePeriodNumber || "").trim(),
         attendancePeriodStatus: "",
-        payableHoursSource:
-          "Payroll Ready Attendance",
+        payableHoursSource: "",
       };
     }
+
 
     const payableWorkedMinutes =
       Math.max(

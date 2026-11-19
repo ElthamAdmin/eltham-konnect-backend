@@ -412,13 +412,41 @@ const upload = multer({
   },
 });
 
+const requireLegacyEmployeeDocumentAccess = (req, res, next) => {
+  const user = req.user;
+
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required.",
+    });
+  }
+
+  if (user.role === "Admin" || user.permissions?.includes("hr")) {
+    return next();
+  }
+
+  const linkedEmployeeId = String(user.linkedEmployeeId || "").trim();
+  const requestedEmployeeId = String(req.params.employeeId || "").trim();
+
+  if (
+    !user.permissions?.includes("documentSelfService") ||
+    !linkedEmployeeId ||
+    linkedEmployeeId !== requestedEmployeeId
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: "You can access only your own linked employee documents.",
+    });
+  }
+
+  return next();
+};
+
 router.post(
   "/upload/:employeeId",
   protect,
-  requireAnyPermission([
-    "hr",
-    "documentSelfService",
-  ]),
+  requireLegacyEmployeeDocumentAccess,
   upload.single("file"),
   uploadDocument
 );
@@ -426,10 +454,7 @@ router.post(
 router.get(
   "/:employeeId",
   protect,
-  requireAnyPermission([
-    "hr",
-    "documentSelfService",
-  ]),
+  requireLegacyEmployeeDocumentAccess,
   getEmployeeDocuments
 );
 

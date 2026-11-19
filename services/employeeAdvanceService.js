@@ -1,4 +1,8 @@
 const EmployeeAdvance = require("../models/EmployeeAdvance");
+const PayrollEmployerLink = require("../models/PayrollEmployerLink");
+const taxControl = require("./taxControl");
+const { operatingEntity } = require("./operatingEntityService");
+const { assertOwner } = require("./payrollEmployerLinkService");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -9,46 +13,126 @@ const buildEmployeeAdvanceRecoveryPlan = async ({
   availableNetPay,
   requestedRecoveryAmount,
 }) => {
-  const available = Math.max(0, roundMoney(availableNetPay));
+  const empty = () => ({
+    totalAdvanceRecovery: 0,
+    allocations: [],
+  });
 
-  if (!employeeId || !payPeriod || available <= 0) {
-    return { totalAdvanceRecovery: 0, allocations: [] };
+  const conflict = (message) => {
+    const error = new Error(message);
+    error.statusCode = 409;
+    throw error;
+  };
+
+  const id = String(employeeId || "").trim();
+  const period = String(payPeriod || "").trim();
+  if (!id || !period) return empty();
+
+  const available = Number(availableNetPay);
+  if (!Number.isFinite(available) || available < 0) {
+    conflict("Available net pay must be a valid non-negative amount.");
   }
 
+  const hasRequestedAmount =
+    requestedRecoveryAmount !== undefined &&
+    requestedRecoveryAmount !== null &&
+    requestedRecoveryAmount !== "";
+
+  const requested = hasRequestedAmount
+    ? Number(requestedRecoveryAmount)
+    : null;
+
+  if (
+    requested !== null &&
+    (!Number.isFinite(requested) || requested < 0)
+  ) {
+    conflict("Requested advance recovery must be a valid non-negative amount.");
+  }
+
+  let remainingNet = roundMoney(available);
+  let remainingRequested =
+    requested === null ? null : roundMoney(requested);
+
+  if (remainingNet === 0 || remainingRequested === 0) return empty();
+
   const advances = await EmployeeAdvance.find({
-    employeeId,
+    employeeId: id,
     status: { $in: ["Open", "Partially Recovered"] },
     outstandingBalance: { $gt: 0 },
     $or: [
       { recoveryStartPeriod: "" },
-      { recoveryStartPeriod: { $lte: payPeriod } },
+      { recoveryStartPeriod: { $lte: period } },
     ],
-  }).sort({ advanceDate: 1, createdAt: 1, _id: 1 });
+  })
+    .sort({ advanceDate: 1, createdAt: 1, _id: 1 })
+    .lean();
 
-  let remainingNet = available;
-  let remainingRequested =
-    requestedRecoveryAmount === undefined ||
-    requestedRecoveryAmount === null ||
-    requestedRecoveryAmount === ""
-      ? null
-      : Math.max(0, roundMoney(requestedRecoveryAmount));
+  if (!advances.length) return empty();
+
+  // Match the employer-selection rule currently used when Payroll is saved.
+  // Do not infer ownership from employee name, family relationship or branch.
+  const periodKey = taxControl.period(period);
+  const context = await operatingEntity(`${periodKey}-01`, null);
+  const employerCode = String(context?.entityCode || "").trim();
+
+  if (!employerCode) {
+    conflict("The payroll employer could not be established for this period.");
+  }
+
+  const links = await PayrollEmployerLink.find({
+    recordType: "EmployeeAdvance",
+    recordId: { $in: advances.map((advance) => advance._id) },
+  })
+    .select("recordId entityCode")
+    .lean();
+
+  const ownerByAdvance = new Map(
+    links.map((link) => [
+      String(link.recordId),
+      String(link.entityCode || "").trim(),
+    ])
+  );
+
+  // An unverified advance is unknown. Silently skipping it would make a
+  // preview look complete even though an applicable deduction may be missing.
+  const unverified = advances.filter(
+    (advance) => !ownerByAdvance.get(String(advance._id))
+  );
+
+  if (unverified.length) {
+    conflict(
+      "Verify employer ownership before including employee advances: " +
+      unverified.map((advance) => advance.advanceNumber).join(", ") +
+      ". Use Payroll → Verify payroll account or advance ownership."
+    );
+  }
+
   const allocations = [];
 
   for (const advance of advances) {
-    if (remainingNet <= 0) break;
-    if (remainingRequested !== null && remainingRequested <= 0) break;
+    if (ownerByAdvance.get(String(advance._id)) !== employerCode) continue;
+    if (remainingNet <= 0 || remainingRequested === 0) break;
 
-    const outstanding = Math.max(0, roundMoney(advance.outstandingBalance));
-    const plannedInstallment = Math.max(
-      0,
-      roundMoney(advance.plannedInstallmentAmount)
-    );
-    const scheduled = plannedInstallment > 0 ? plannedInstallment : outstanding;
-    const requestedLimit =
-      remainingRequested === null ? scheduled : remainingRequested;
-    const amount = roundMoney(
-      Math.min(outstanding, scheduled, remainingNet, requestedLimit)
-    );
+    const balance = Number(advance.outstandingBalance);
+    const installment = Number(advance.plannedInstallmentAmount ?? 0);
+
+    if (
+      !Number.isFinite(balance) || balance <= 0 ||
+      !Number.isFinite(installment) || installment < 0
+    ) {
+      conflict(`Review the balance or instalment on ${advance.advanceNumber}.`);
+    }
+
+    const outstanding = roundMoney(balance);
+    // Preserve the existing policy: a zero instalment uses the outstanding
+    // balance, subject to available net pay and the requested recovery limit.
+    const scheduled = installment > 0 ? roundMoney(installment) : outstanding;
+    const amount = roundMoney(Math.min(
+      outstanding,
+      scheduled,
+      remainingNet,
+      remainingRequested === null ? scheduled : remainingRequested
+    ));
 
     if (amount <= 0) continue;
 
@@ -68,66 +152,98 @@ const buildEmployeeAdvanceRecoveryPlan = async ({
 
   return {
     totalAdvanceRecovery: roundMoney(
-      allocations.reduce((sum, allocation) => sum + allocation.amount, 0)
+      allocations.reduce((total, item) => total + item.amount, 0)
     ),
     allocations,
   };
 };
 
+
 const applyEmployeeAdvanceRecoveries = async ({
-  allocations,
+  allocations = [],
+  employeeId,
+  entityCode,
   payrollNumber,
   payPeriod,
   journalEntryNumber,
   recoveredBy,
+  session,
 }) => {
+  const conflict = (message) => {
+    const error = new Error(message);
+    error.statusCode = 409;
+    throw error;
+  };
+
+  if (!session?.inTransaction()) {
+    conflict("Advance recovery requires the payroll payment transaction.");
+  }
+
+  if (!payrollNumber || !journalEntryNumber || !employeeId || !entityCode) {
+    conflict("Payroll, journal, employee and employer are required.");
+  }
+
   const applied = [];
+  const seen = new Set();
 
-  for (const allocation of allocations || []) {
-    const amount = roundMoney(allocation.amount);
-    if (amount <= 0) continue;
+  for (const item of allocations) {
+    const id = String(item.employeeAdvanceId || "");
+    const amount = Number(item.amount);
+    const before = Number(item.outstandingBeforeRecovery);
 
-    const recoveryNumber = `REC-${Date.now()}-${applied.length + 1}`;
-    const advance = await EmployeeAdvance.findOneAndUpdate(
-      {
-        _id: allocation.employeeAdvanceId,
-        outstandingBalance: { $gte: amount },
-        status: { $in: ["Open", "Partially Recovered"] },
-      },
-      {
-        $inc: {
-          recoveredAmount: amount,
-          outstandingBalance: -amount,
-        },
-        $push: {
-          recoveries: {
-            recoveryNumber,
-            payrollNumber,
-            payPeriod,
-            amount,
-            journalEntryNumber,
-            recoveredAt: new Date(),
-            recoveredBy,
-          },
-        },
-      },
-      { new: true }
-    );
+    if (
+      !id || seen.has(id) ||
+      !Number.isFinite(amount) || amount <= 0 ||
+      !Number.isFinite(before) || before < amount ||
+      roundMoney(amount) !== amount || roundMoney(before) !== before
+    ) {
+      conflict("The approved advance allocation is invalid or duplicated.");
+    }
+    seen.add(id);
 
-    if (!advance) {
-      throw new Error(
-        `Employee advance ${allocation.advanceNumber} could not be recovered because its balance changed.`
+    const advance = await EmployeeAdvance.findById(id).session(session);
+
+    if (
+      !advance ||
+      advance.employeeId !== employeeId ||
+      advance.advanceNumber !== item.advanceNumber ||
+      !["Open", "Partially Recovered"].includes(advance.status) ||
+      roundMoney(advance.outstandingBalance) !== before ||
+      (advance.recoveryStartPeriod && advance.recoveryStartPeriod > payPeriod) ||
+      (advance.recoveries || []).some((r) => r.payrollNumber === payrollNumber)
+    ) {
+      conflict(
+        `Advance ${item.advanceNumber} no longer matches the approved ` +
+        "employee, employer, balance or recovery period. Review before paying."
       );
     }
 
-    advance.outstandingBalance = Math.max(
-      0,
-      roundMoney(advance.outstandingBalance)
+    await assertOwner({
+  recordType: "EmployeeAdvance",
+  record: advance,
+  entityCode,
+  session,
+});
+
+    const recoveryNumber = `REC-${payrollNumber}-${advance.advanceNumber}`;
+    advance.outstandingBalance = roundMoney(before - amount);
+    advance.recoveredAmount = roundMoney(
+      Number(advance.recoveredAmount || 0) + amount
     );
-    advance.recoveredAmount = roundMoney(advance.recoveredAmount);
     advance.status =
-      advance.outstandingBalance <= 0 ? "Recovered" : "Partially Recovered";
-    await advance.save();
+      advance.outstandingBalance === 0 ? "Recovered" : "Partially Recovered";
+
+    advance.recoveries.push({
+      recoveryNumber,
+      payrollNumber,
+      payPeriod,
+      amount,
+      journalEntryNumber,
+      recoveredAt: new Date(),
+      recoveredBy,
+    });
+
+    await advance.save({ session });
 
     applied.push({
       recoveryNumber,

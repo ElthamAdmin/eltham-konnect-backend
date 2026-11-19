@@ -41,6 +41,8 @@ const {
   getScheduledMonthlyPayDate,
 } = require("../utils/payrollSchedule");
 
+const { assertOwner } = require("../services/payrollEmployerLinkService");
+
 const getUserName = (user) =>
   user?.fullName || user?.name || user?.email || "System User";
 
@@ -1440,152 +1442,78 @@ const serializeEmployeePayslip = (payroll = {}) => ({
 });
 
 const getMyPayroll = async (req, res) => {
+  // A shared workstation should not cache a personal payslip response.
+  res.set("Cache-Control", "private, no-store");
+
   try {
+    const userId = String(req.user?.userId || "").trim();
     const linkedEmployeeId = String(
       req.user?.linkedEmployeeId || ""
     ).trim();
 
-    const userId = String(
-      req.user?.userId ||
-        req.user?._id ||
-        req.user?.id ||
-        ""
-    ).trim();
-
-    let employee = null;
-
-    if (linkedEmployeeId) {
-      employee = await HREmployee.findOne({
-        employeeId: linkedEmployeeId,
-      });
-    }
-
-    if (!employee && userId) {
-      employee = await HREmployee.findOne({
-        linkedUserId: userId,
-      });
-    }
-
-    if (!employee) {
-      return res.status(404).json({
+    if (!userId || !linkedEmployeeId) {
+      return res.status(403).json({
         success: false,
         message:
-          "No HR employee profile is linked to this user.",
+          "Your login is not fully linked to an HR employee profile. " +
+          "Ask an administrator to verify the link before viewing payslips.",
       });
     }
 
-    const employeeId = String(
-      employee.employeeId || ""
-    ).trim();
+    // Check both directions. Never choose the first profile if two
+    // employee records point to the same login.
+    const profiles = await HREmployee.find({ linkedUserId: userId })
+      .select("employeeId fullName")
+      .limit(2)
+      .lean();
 
-    const employeeName = String(
-      employee.fullName || ""
-    ).trim();
-
-    if (!employeeId) {
-      return res.status(409).json({
+    if (
+      profiles.length !== 1 ||
+      String(profiles[0].employeeId || "").trim() !== linkedEmployeeId
+    ) {
+      return res.status(403).json({
         success: false,
         message:
-          "The linked HR employee profile does not have a valid employee ID.",
+          "Your login and HR employee record do not have a unique matching " +
+          "link. Ask an administrator to review the link.",
       });
-    }
-
-    const ownershipConditions = [
-      {
-        employeeId,
-      },
-    ];
-
-    /*
-     * H10 controlled legacy-payslip recovery.
-     *
-     * Earlier payroll records may have been created
-     * before employeeId became mandatory. A legacy
-     * record may be matched by employeeName only when
-     * that name belongs to exactly one HR employee.
-     */
-    if (employeeName) {
-      const exactEmployeeNameExpression = new RegExp(
-        `^${escapeRegularExpression(employeeName)}$`,
-        "i"
-      );
-
-      const matchingEmployeeCount =
-        await HREmployee.countDocuments({
-          fullName: exactEmployeeNameExpression,
-        });
-
-      if (matchingEmployeeCount === 1) {
-        ownershipConditions.push({
-          employeeId: {
-            $in: ["", null],
-          },
-          employeeName: exactEmployeeNameExpression,
-        });
-      }
     }
 
     const payroll = await Payroll.find({
-      $and: [
-        {
-          $or: ownershipConditions,
-        },
-        {
-          status: {
-            $in: ["Approved", "Paid"],
-          },
-        },
-      ],
+      employeeId: linkedEmployeeId,
+      status: { $in: ["Approved", "Paid"] },
     })
-      .sort({
-        payDate: -1,
-        createdAt: -1,
-        _id: -1,
-      })
+      .sort({ payDate: -1, createdAt: -1, _id: -1 })
       .lean();
+
+    const data = payroll.map(serializeEmployeePayslip);
 
     await writeAuditLog({
       req,
       action: "Payslips Viewed",
       module: "Payroll",
-      description:
-        `${employeeName || employeeId} accessed their own employee-restricted payslips.`,
+      description: "Employee accessed their own payslips.",
       targetType: "HREmployee",
-      targetId: employeeId,
+      targetId: linkedEmployeeId,
       metadata: {
-        employeeId,
-        recordCount: payroll.length,
+        employeeId: linkedEmployeeId,
+        recordCount: data.length,
         accessScope: "Employee Self Service",
-        legacyRecordsIncluded: payroll.filter(
-          (record) =>
-            !String(record.employeeId || "").trim()
-        ).length,
+        legacyRecordsIncluded: 0,
       },
     });
 
-    const employeeVisiblePayslips =
-  payroll.map(
-    serializeEmployeePayslip
-  );
-
     return res.json({
       success: true,
-      message:
-        "Your employee-restricted payslips were retrieved successfully.",
-      totalRecords:
-  employeeVisiblePayslips.length,
-
-data:
-  employeeVisiblePayslips,
+      message: "Your payslips were retrieved successfully.",
+      totalRecords: data.length,
+      data,
     });
   } catch (error) {
-    console.error("Error getting my payroll:", error);
-
+    console.error("Error getting employee payslips:", error);
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to retrieve your employee-restricted payslips.",
-      error: error.message,
+      message: "Could not retrieve your payslips.",
     });
   }
 };
@@ -1736,6 +1664,15 @@ const leavePayrollAssessment =
       resolvedGrossPay,
     attendancePeriodNumber,
   });
+
+  if (leavePayrollAssessment.assessmentStatus === "Review Required") {
+  return res.status(409).json({
+    success: false,
+    message: leavePayrollAssessment.warning,
+    data: { leavePayrollAssessment },
+  });
+}
+
 
 const leaveAdjustedGrossPay =
   leavePayrollAssessment
@@ -2582,7 +2519,8 @@ grossPay:
 
       status: "Pending",
 
-      createdBy: getUserName(req.user),
+            createdBy: getUserName(req.user),
+      createdByUserId: req.user.userId,
     });
 
     try {
@@ -3402,6 +3340,55 @@ const approvePayroll = async (
           throw error;
         }
 
+                const approvalActorId = String(req.user?.userId || "").trim();
+        const preparerId = String(payroll.createdByUserId || "").trim();
+        const isAdmin = req.user?.role === "Admin";
+
+        const denyApproval = (message, statusCode = 409) => {
+          const error = new Error(message);
+          error.statusCode = statusCode;
+          throw error;
+        };
+
+        if (!approvalActorId) {
+          denyApproval(
+            "An identified system user is required to approve payroll.",
+            403
+          );
+        }
+
+        let approvalMethod = "Independent Approval";
+
+        if (!preparerId) {
+          if (!isAdmin) {
+            denyApproval(
+              "This pending payroll predates preparer tracking. " +
+              "An Admin must review it and record the basis for approval.",
+              403
+            );
+          }
+          approvalMethod = "Legacy Preparer Unverified";
+        } else if (preparerId === approvalActorId) {
+          if (!isAdmin) {
+            denyApproval(
+              "You prepared this payroll. A different authorized user must approve it.",
+              403
+            );
+          }
+          approvalMethod = "Admin Self-Approval";
+        }
+
+        if (
+          approvalMethod !== "Independent Approval" &&
+          approvalNotes.length < 20
+        ) {
+          denyApproval(
+            "Enter an approval note of at least 20 characters explaining " +
+            "what you reviewed and why you are approving this payroll."
+          );
+        }
+
+
         const storedLeaveAssessment =
           payroll
             .leavePayrollAssessment ||
@@ -3571,6 +3558,7 @@ const approvePayroll = async (
         payroll.minimumWageAssessment =
           await resolvePayrollMinimumWageAssessment(
             {
+             session,
               employeeId:
                 payroll.employeeId,
 
@@ -3832,6 +3820,8 @@ const approvePayroll = async (
         );
 
         payroll.status = "Approved";
+                payroll.approvedByUserId = approvalActorId;
+        payroll.approvalMethod = approvalMethod;
 
         payroll.approvedBy =
           getUserName(req.user);
@@ -3916,6 +3906,9 @@ const approvePayroll = async (
 
           approvedBy:
             approvedPayroll.approvedBy,
+                      createdByUserId: approvedPayroll.createdByUserId || "",
+          approvedByUserId: approvedPayroll.approvedByUserId,
+          approvalMethod: approvedPayroll.approvalMethod,
 
                     approvedAt:
             approvedPayroll.approvedAt,
@@ -3970,227 +3963,234 @@ const approvePayroll = async (
 };
 
 const payPayroll = async (req, res) => {
+  const JournalEntry = require("../models/JournalEntry");
+  const { payrollNumber } = req.params;
+  const actor = getUserName(req.user);
+  let session;
+
+  const fail = (message, statusCode = 409) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
+  const cents = (value) => {
+    if (
+      value == null || value === "" ||
+      !Number.isFinite(Number(value)) || Number(value) < 0
+    ) {
+      fail("Payroll contains a missing, negative or invalid amount.");
+    }
+
+    const n = Math.round(Number(value) * 100);
+    if (
+      !Number.isSafeInteger(n) ||
+      Math.abs(Number(value) * 100 - n) > 1e-6
+    ) {
+      fail("Payroll amounts must be valid to the nearest cent.");
+    }
+    return n;
+  };
+
   try {
-    const { payrollNumber } = req.params;
+    session = await mongoose.startSession();
+    let result;
 
-    const payroll = await Payroll.findOne({ payrollNumber });
+    await session.withTransaction(async () => {
+      const payroll = await Payroll.findOne({ payrollNumber }).session(session);
+      if (!payroll) fail("Payroll record not found.", 404);
 
-    if (!payroll) {
-      return res.status(404).json({
-        success: false,
-        message: "Payroll record not found",
-      });
-    }
+      // Look across employers deliberately: payrollNumber is globally unique,
+      // and an older journal may have no employer attribution.
+      const journals = await JournalEntry.find({
+        sourceModule: "Payroll",
+        reference: payrollNumber,
+      }).limit(2).session(session);
 
-    if (payroll.status !== "Approved") {
-      return res.status(400).json({
-        success: false,
-        message:
-          `Only Approved Payroll can be paid. ` +
-          `Current status: ${payroll.status}`,
-      });
-    }
+      const transactions = await AccountTransaction.find({
+        transactionType: "Payroll Payment",
+        reference: payrollNumber,
+      }).limit(2).session(session);
 
-    if (payroll.journalEntryNumber) {
-      return res.status(409).json({
-        success: false,
-        message:
-          `Payroll ${payroll.payrollNumber} has already been posted`,
-      });
-    }
+      if (payroll.status === "Paid") {
+        const journal = journals[0];
+        const transaction = transactions[0];
 
-        const scheduledPayDate = formatDateForComparison(
-      payroll.payDate
-    );
+        if (
+          journals.length !== 1 || transactions.length !== 1 ||
+          !payroll.journalEntryNumber || !payroll.entityCode ||
+          journal.status !== "Posted" ||
+          journal.entityCode !== payroll.entityCode ||
+          journal.entryNumber !== payroll.journalEntryNumber ||
+          transaction.journalEntryNumber !== journal.entryNumber ||
+          transaction.accountNumber !== payroll.paidFromAccountNumber ||
+          cents(transaction.amount) !== cents(payroll.netPay)
+        ) {
+          fail("Paid payroll does not match its journal and payment. Reconcile it.");
+        }
 
-        const jamaicaToday = getJamaicaToday();
-
-    if (
-      scheduledPayDate &&
-      jamaicaToday < scheduledPayDate
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          `Payroll ${payroll.payrollNumber} is scheduled for ` +
-          `${scheduledPayDate}. Pay & Post is unavailable before ` +
-          `the scheduled payment date in Jamaica.`,
-        scheduledPayDate,
-        currentDate: jamaicaToday,
-      });
-    }
-
-    const paymentAccount = await FinancialAccount.findOne({
-      accountNumber: payroll.paidFromAccountNumber,
-      status: "Active",
-      accountType: {
-        $in: ["Bank", "Cash"],
-      },
-    });
-
-    if (!paymentAccount) {
-      return res.status(404).json({
-        success: false,
-        message:
-          "The selected Payroll payment account is unavailable",
-      });
-    }
-
-    if (!paymentAccount.linkedChartAccountCode) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "The Payroll payment account is not linked to the Chart of Accounts",
-      });
-    }
-
-    if (
-      Number(paymentAccount.currentBalance || 0) <
-      Number(payroll.netPay || 0)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Insufficient balance in the Payroll payment account",
-      });
-    }
-
-    const recoveryPlan =
-      await buildEmployeeAdvanceRecoveryPlan({
-        employeeId: payroll.employeeId,
-        payPeriod: payroll.payPeriod,
-        availableNetPay: payroll.netPayBeforeAdvance,
-        requestedRecoveryAmount: payroll.advanceRecovery,
-      });
-
-    if (
-      roundMoney(recoveryPlan.totalAdvanceRecovery) !==
-      roundMoney(payroll.advanceRecovery)
-    ) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "The employee advance balance changed after this Payroll " +
-          "was created. Cancel and recreate the Payroll.",
-      });
-    }
-
-    const expectedAdvanceNumbers = (
-      payroll.advanceRecoveries || []
-    )
-      .map((item) => item.advanceNumber)
-      .sort()
-      .join(",");
-
-    const currentAdvanceNumbers = (
-      recoveryPlan.allocations || []
-    )
-      .map((item) => item.advanceNumber)
-      .sort()
-      .join(",");
-
-    if (expectedAdvanceNumbers !== currentAdvanceNumbers) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "The employee advance allocation changed after approval. " +
-          "Cancel and recreate the Payroll.",
-      });
-    }
-
-    const journalEntry = await postPayrollPayment({
-      paymentAccount,
-      payroll,
-      paymentDate: payroll.payDate,
-      user: req.user,
-    });
-
-    const appliedAdvanceRecoveries =
-      await applyEmployeeAdvanceRecoveries({
-        allocations: recoveryPlan.allocations,
-        payrollNumber: payroll.payrollNumber,
-        payPeriod: payroll.payPeriod,
-        journalEntryNumber: journalEntry.entryNumber,
-        recoveredBy: getUserName(req.user),
-      });
-
-    const transaction = await AccountTransaction.create({
-      transactionNumber: `TRN-${Date.now()}-PAY`,
-      accountNumber: paymentAccount.accountNumber,
-      accountName: paymentAccount.accountName,
-      linkedChartAccountCode:
-        paymentAccount.linkedChartAccountCode,
-      journalEntryNumber: journalEntry.entryNumber,
-      ledgerReference: journalEntry.entryNumber,
-      transactionType: "Payroll Payment",
-      amount: Number(payroll.netPay || 0),
-      reference: payroll.payrollNumber,
-      notes:
-        `Payroll payment for ${payroll.employeeName} - ` +
-        `${payroll.payPeriod}`,
-      transactionDate: payroll.payDate || new Date(),
-    });
-
-    payroll.status = "Paid";
-    payroll.journalEntryNumber = journalEntry.entryNumber;
-    payroll.paidBy = getUserName(req.user);
-    payroll.paidAt = new Date();
-
-    await payroll.save();
-
-    try {
-      await writeAuditLog({
-        req,
-        action: "PAY_PAYROLL",
-        module: "Payroll",
-        description:
-          `Payroll ${payroll.payrollNumber} paid ` +
-          `for ${payroll.employeeName}`,
-        targetType: "Payroll",
-        targetId: payroll.payrollNumber,
-        journalEntryNumber: journalEntry.entryNumber,
-        accountNumber: paymentAccount.accountNumber,
-        accountName: paymentAccount.accountName,
-        metadata: {
-          employeeId: payroll.employeeId,
-          employeeName: payroll.employeeName,
-          payPeriod: payroll.payPeriod,
-          grossPay: payroll.grossPay,
-          totalEmployeeDeductions:
-            payroll.totalDeductions,
-          netPayBeforeAdvance:
-            payroll.netPayBeforeAdvance,
-          advanceRecovery: payroll.advanceRecovery,
-          advanceRecoveries: appliedAdvanceRecoveries,
-          netPay: payroll.netPay,
-          totalEmployerContributions:
-            payroll.totalEmployerContributions,
-          totalPayrollCost: payroll.totalPayrollCost,
-          paidBy: payroll.paidBy,
-          paidAt: payroll.paidAt,
+        result = {
+          success: true,
+          alreadyPosted: true,
+          message: "Payroll was already posted. No new payment was recorded.",
+          data: payroll,
+          journalEntryNumber: journal.entryNumber,
           transactionNumber: transaction.transactionNumber,
-        },
+        };
+        return;
+      }
+
+      if (payroll.status !== "Approved") {
+        fail(`Only approved payroll can be paid. Current status: ${payroll.status}.`);
+      }
+
+      if (journals.length || transactions.length || payroll.journalEntryNumber) {
+        fail("A posting already exists for this payroll. Reconcile before retrying.");
+      }
+
+      if (payroll.historicalPayment?.isHistorical) {
+        fail("This is a previously made payment. Match it to the bank and ledger before posting.");
+      }
+
+      if (!payroll.employeeId || !payroll.entityCode) {
+        fail("Verify the employee and legal employer before paying.");
+      }
+
+      const day = formatDateForComparison(payroll.payDate);
+      if (!day || day > getJamaicaToday()) {
+        fail("A valid payment date that is not in the future is required.");
+      }
+
+      const account = await FinancialAccount.findOne({
+        accountNumber: payroll.paidFromAccountNumber,
+        status: "Active",
+        accountType: { $in: ["Bank", "Cash"] },
+      }).session(session);
+
+      if (!account?.linkedChartAccountCode) {
+  fail("The payment account is unavailable or has no linked ledger account.");
+}
+
+await assertOwner({
+  recordType: "FinancialAccount",
+  record: account,
+  entityCode: payroll.entityCode,
+  session,
+});
+
+      const net = cents(payroll.netPay);
+      if (!net) {
+        fail("Zero-cash payroll requires review; do not create a bank payment.");
+      }
+      if (
+        !Number.isFinite(Number(account.currentBalance)) ||
+        Number(account.currentBalance) < net / 100
+      ) {
+        fail("The payroll account has insufficient or unverified funds.");
+      }
+
+      const allocations = payroll.advanceRecoveries || [];
+      const recovery = allocations.reduce((sum, a) => sum + cents(a.amount), 0);
+
+      if (
+        recovery !== cents(payroll.advanceRecovery) ||
+        cents(payroll.netPayBeforeAdvance) !== net + recovery
+      ) {
+        fail("Approved net pay and individual advance recoveries do not reconcile.");
+      }
+
+      const journal = await postPayrollPayment({
+        paymentAccount: account,
+        payroll,
+        paymentDate: payroll.payDate,
+        user: req.user,
+        session,
       });
-    } catch (auditError) {
-      console.error("Payroll payment audit error:", auditError);
+
+      const applied = await applyEmployeeAdvanceRecoveries({
+        allocations,
+        employeeId: payroll.employeeId,
+        entityCode: payroll.entityCode,
+        payrollNumber,
+        payPeriod: payroll.payPeriod,
+        journalEntryNumber: journal.entryNumber,
+        recoveredBy: actor,
+        session,
+      });
+
+      const [transaction] = await AccountTransaction.create([{
+        transactionNumber: `TRN-PAY-${payrollNumber}`,
+        accountNumber: account.accountNumber,
+        accountName: account.accountName,
+        linkedChartAccountCode: account.linkedChartAccountCode,
+        journalEntryNumber: journal.entryNumber,
+        ledgerReference: journal.entryNumber,
+        transactionType: "Payroll Payment",
+        amount: net / 100,
+        reference: payrollNumber,
+        notes: `Payroll payment for ${payroll.employeeName} - ${payroll.payPeriod}`,
+        transactionDate: payroll.payDate,
+      }], { session });
+
+      payroll.status = "Paid";
+      payroll.journalEntryNumber = journal.entryNumber;
+      payroll.paidBy = actor;
+      payroll.paidAt = new Date();
+      await payroll.save({ session });
+
+      result = {
+        success: true,
+        alreadyPosted: false,
+        message: "Payroll paid and posted successfully.",
+        data: payroll,
+        journalEntryNumber: journal.entryNumber,
+        transactionNumber: transaction.transactionNumber,
+        advanceRecoveries: applied,
+      };
+    });
+
+    // The journal service also writes its finance audit inside the transaction.
+    if (!result.alreadyPosted) {
+      try {
+        await writeAuditLog({
+          req,
+          action: "PAY_PAYROLL",
+          module: "Payroll",
+          description: `Payroll ${payrollNumber} paid and posted by ${actor}.`,
+          targetType: "Payroll",
+          targetId: payrollNumber,
+          journalEntryNumber: result.journalEntryNumber,
+          accountNumber: result.data.paidFromAccountNumber,
+          metadata: {
+            entityCode: result.data.entityCode,
+            employeeId: result.data.employeeId,
+            payPeriod: result.data.payPeriod,
+            grossPay: result.data.grossPay,
+            netPay: result.data.netPay,
+            totalEmployeeDeductions: result.data.totalDeductions,
+            totalEmployerContributions: result.data.totalEmployerContributions,
+            totalPayrollCost: result.data.totalPayrollCost,
+            advanceRecoveries: result.advanceRecoveries,
+            transactionNumber: result.transactionNumber,
+          },
+        });
+      } catch (auditError) {
+        console.error("Supplementary payroll audit failed:", auditError);
+      }
     }
 
-    return res.json({
-      success: true,
-      message: "Payroll paid and posted successfully",
-      data: payroll,
-      journalEntryNumber: journalEntry.entryNumber,
-      transactionNumber: transaction.transactionNumber,
-      advanceRecoveries: appliedAdvanceRecoveries,
-    });
+    return res.json(result);
   } catch (error) {
-    console.error("Error paying Payroll:", error);
-
-    return res.status(500).json({
+    console.error("Payroll payment failed:", error);
+    const status = error.statusCode || (error.code === 11000 ? 409 : 500);
+    return res.status(status).json({
       success: false,
-      message: "Could not pay Payroll",
-      error: error.message,
+      message: status === 500
+        ? "Payment could not be confirmed. Check the payroll record before retrying."
+        : error.message,
     });
+  } finally {
+    if (session) await session.endSession();
   }
 };
 

@@ -1,6 +1,6 @@
-const AttendancePeriod = require(
-  "../models/AttendancePeriod"
-);
+const {
+  selectPayrollAttendance,
+} = require("./payrollAttendanceSelectionService");
 
 const LeaveRequest = require(
   "../models/LeaveRequest"
@@ -84,62 +84,19 @@ const resolvePayrollLeaveAssessment =
       return assessment;
     }
 
-    const attendanceQuery = {
-      employeeId:
-        assessment.employeeId,
-
-      periodKey:
-        assessment.payPeriod,
-
-      status: {
-        $in: [
-          "Payroll Ready",
-          "Locked",
-        ],
-      },
-    };
-
-    const requestedPeriodNumber =
-      normalizeString(
-        attendancePeriodNumber
-      );
-
-    if (requestedPeriodNumber) {
-      attendanceQuery.periodNumber =
-        requestedPeriodNumber;
-    }
-
-    let attendanceLookup =
-      AttendancePeriod.findOne(
-        attendanceQuery
-      ).sort({
-        payrollReadyAt: -1,
-        updatedAt: -1,
-      });
-
-    if (session) {
-      attendanceLookup =
-        attendanceLookup.session(
-          session
-        );
-    }
-
-    const attendancePeriod =
-      await attendanceLookup;
+        const { attendancePeriod, warning } = await selectPayrollAttendance({
+      employeeId: assessment.employeeId,
+      payPeriod: assessment.payPeriod,
+      attendancePeriodNumber,
+      session,
+    });
 
     if (!attendancePeriod) {
-      assessment.assessmentStatus =
-        "Review Required";
-
-      assessment.warning =
-        `A Payroll Ready attendance period is required for ` +
-        `${assessment.employeeId}, period ${assessment.payPeriod}, ` +
-        `before leave payroll effects can be confirmed.`;
-
+      assessment.assessmentStatus = "Review Required";
+      assessment.warning = warning;
       return assessment;
     }
 
-    assessment.attendancePeriodId =
       attendancePeriod._id;
 
     assessment.attendancePeriodNumber =
@@ -196,6 +153,50 @@ const resolvePayrollLeaveAssessment =
           entry.leaveRequestNumber
         )
     );
+
+        const minutePairs = [
+      ["payableLeaveMinutes", "leavePayableMinutes"],
+      ["unpaidLeaveMinutes", "leaveUnpaidMinutes"],
+      ["nisCoordinatedLeaveMinutes", "leaveNisCoordinatedMinutes"],
+    ];
+
+    for (const [totalField, entryField] of minutePairs) {
+      const total = Number(attendancePeriod.totals?.[totalField] ?? 0);
+      const entries = attendancePeriod.dailyEntries || [];
+      let supportedMinutes = 0;
+      let invalid = !Number.isFinite(total) || total < 0;
+
+      for (const entry of entries) {
+        const minutes = Number(entry[entryField] ?? 0);
+
+        if (!Number.isFinite(minutes) || minutes < 0) {
+          invalid = true;
+          break;
+        }
+
+        if (minutes === 0) continue;
+
+        if (
+          entry.approvedLeave !== true ||
+          !normalizeString(entry.leaveRequestNumber)
+        ) {
+          invalid = true;
+          break;
+        }
+
+        supportedMinutes += minutes;
+      }
+
+      if (invalid || Math.abs(total - supportedMinutes) > 0.000001) {
+        assessment.assessmentStatus = "Review Required";
+        assessment.warning =
+          `Attendance ${attendancePeriod.periodNumber}: ${totalField} ` +
+          "does not reconcile to daily entries with approved leave references. " +
+          "Review attendance before preparing payroll.";
+        return assessment;
+      }
+    }
+
 
     assessment.leaveRequestIds =
       Array.from(
