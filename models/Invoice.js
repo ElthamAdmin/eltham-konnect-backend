@@ -526,6 +526,13 @@ paymentHistory: [
   {
     paymentDate: Date,
     amount: Number,
+        packageAllocations: [
+      {
+        _id: false,
+        trackingNumber: { type: String, required: true },
+        amount: { type: Number, required: true, min: 0 },
+      },
+    ],
     paymentMethod: String,
     receivingAccountNumber: String,
     receivingAccountName: String,

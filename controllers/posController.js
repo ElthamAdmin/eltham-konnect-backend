@@ -611,9 +611,93 @@ const cashOutInvoice = async (req, res) => {
           invoice.cashierName = getUserName(req);
         }
 
-                if (handoverTrackingNumbers.length && invoice.status !== "Paid") {
-          fail("This payment does not clear the balance. Remove the handover selection to record a partial payment.");
-        }
+                const packageAllocations = [];
+
+if (handoverTrackingNumbers.length) {
+  const lines = invoice.packages || [];
+  const selected = new Set(handoverTrackingNumbers);
+  const selectedLines = lines.filter((line) => selected.has(line.trackingNumber));
+  const ordinaryFreight =
+    (invoice.invoiceSource || "Packages") === "Packages" &&
+    !invoice.customerPurchases?.length;
+
+  if (invoice.status !== "Paid") {
+    if (!ordinaryFreight) {
+      fail("This invoice type requires full payment before package handover.");
+    }
+
+    const trackingNumbers = lines.map((line) => line.trackingNumber);
+    if (
+      !invoice.customerEkonId ||
+      trackingNumbers.some((number) => !number) ||
+      new Set(trackingNumbers).size !== lines.length ||
+      selectedLines.length !== selected.size ||
+      lines.some((line) => !Number.isFinite(line.rate) || line.rate < 0)
+    ) {
+      fail("Check the invoice package tracking numbers and freight rates before partial pickup.");
+    }
+
+    const alreadyDelivered = new Set(
+      await Package.distinct("trackingNumber", {
+        customerEkonId: invoice.customerEkonId,
+        trackingNumber: { $in: trackingNumbers },
+        status: "Delivered",
+      }).session(session)
+    );
+
+    const releasedAfterPayment = new Set([
+      ...alreadyDelivered,
+      ...selected,
+    ]);
+
+    if (releasedAfterPayment.size === trackingNumbers.length) {
+      fail(
+        `This is the final pickup. Collect the remaining invoice balance of ${moneyLabel(outstandingBeforePayment)}.`
+      );
+    }
+
+    const freightThroughThisPickup = roundMoney(
+      lines.reduce(
+        (sum, line) =>
+          sum + (releasedAfterPayment.has(line.trackingNumber) ? line.rate : 0),
+        0
+      )
+    );
+
+    const requiredNow = roundMoney(
+      Math.min(
+        outstandingBeforePayment,
+        Math.max(0, freightThroughThisPickup - existingPaid)
+      )
+    );
+
+    if (paymentApplied < requiredNow) {
+      fail(
+        `Collect at least ${moneyLabel(requiredNow)} to release the selected package(s).`
+      );
+    }
+  }
+
+  if (ordinaryFreight) {
+    // Record only the part of this payment applied to selected freight.
+    // Earlier deposits and shared invoice fees remain invoice-level amounts.
+    const selectedFreight = selectedLines.reduce(
+      (sum, line) => sum + (Number.isFinite(line.rate) ? Math.max(0, line.rate) : 0),
+      0
+    );
+    let freightFromThisPayment = Math.min(paymentApplied, selectedFreight);
+
+    for (const line of selectedLines) {
+      const amount = roundMoney(
+        Math.min(freightFromThisPayment, Math.max(0, Number(line.rate) || 0))
+      );
+      if (amount > 0) {
+        packageAllocations.push({ trackingNumber: line.trackingNumber, amount });
+        freightFromThisPayment = roundMoney(freightFromThisPayment - amount);
+      }
+    }
+  }
+}
 
         await invoice.save({ session });
 
@@ -730,6 +814,7 @@ const cashOutInvoice = async (req, res) => {
           invoice.paymentHistory.push({
             paymentDate: new Date(),
             amount: paymentApplied,
+              packageAllocations,
             paymentMethod,
             receivingAccountNumber: receivingAccount.accountNumber,
             receivingAccountName: receivingAccount.accountName,
