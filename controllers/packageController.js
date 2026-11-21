@@ -4,6 +4,7 @@ const ShippingRate = require("../models/ShippingRate");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
 const CustomerNotification = require("../models/CustomerNotification");
+const { sendPackageStatusPush } = require("../services/packagePushService");
 const CustomerPurchase = require("../models/CustomerPurchase");
 const { completeReferral } = require("./referralController");
 const { writeAuditLog } = require("../utils/auditLogger");
@@ -556,6 +557,15 @@ const createPackage = async (req, res) => {
 
         await newPackage.save();
 
+        try {
+  await sendPackageStatusPush(newPackage);
+} catch (error) {
+  console.error(
+    `Package ${newPackage.trackingNumber} was saved, but its phone alert failed:`,
+    error.message
+  );
+}
+
     await syncCustomerPurchaseFromPackage({
       pkg: newPackage,
       user: req.user,
@@ -915,6 +925,10 @@ const savePackageStatusAction = async ({
         await createStorageNoticeIfEnabled(pkg._id);
       });
     }
+
+    await followUp("package phone alert", async () => {
+  await sendPackageStatusPush(pkg);
+});
 
     await followUp("general audit log", async () => {
       await writeAuditLog({
