@@ -64,6 +64,13 @@ const PackageSchema = new mongoose.Schema(
       unique: true,
     },
 
+        itemDescription: {
+      type: String,
+      trim: true,
+      maxlength: 2000,
+      default: "",
+    },
+
     trackingNumberAliases: {
       type: [String],
       default: [],

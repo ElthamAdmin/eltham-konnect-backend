@@ -25,7 +25,8 @@ const getJamaicaDate = (value) =>
   }).format(new Date(value));
 
 const snapshot = (pkg) => ({
-  trackingNumber: pkg.trackingNumber,
+    trackingNumber: pkg.trackingNumber,
+  itemDescription: pkg.itemDescription || "",
   weight: Number(pkg.weight || 0),
   courier: pkg.courier || "",
   warehouseLocation: pkg.warehouseLocation || "",
@@ -66,6 +67,7 @@ const updatePackageDetails = async (req, res) => {
 
     const allowedFields = new Set([
       "trackingNumber",
+      "itemDescription",
       "weight",
       "courier",
       "warehouseLocation",
@@ -106,6 +108,14 @@ const updatePackageDetails = async (req, res) => {
       if (/[\u0000-\u001f\u007f]/.test(changes.trackingNumber)) {
         fail("Tracking number contains unsupported control characters.");
       }
+    }
+
+        if (body.itemDescription !== undefined) {
+      changes.itemDescription = readText(
+        body.itemDescription,
+        "Package description",
+        2000
+      );
     }
 
     if (body.weight !== undefined) {

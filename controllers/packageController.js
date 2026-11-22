@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const Package = require("../models/Package");
+const PreAlert = require("../models/PreAlert");
 const ShippingRate = require("../models/ShippingRate");
 const Customer = require("../models/Customer");
 const PointsHistory = require("../models/PointsHistory");
@@ -392,6 +393,7 @@ const getMyPackages = async (req, res) => {
       .select(
         [
           "trackingNumber",
+          "itemDescription",
           "customerEkonId",
           "customerName",
           "courier",
@@ -456,6 +458,33 @@ const getMyPackages = async (req, res) => {
       }
     }
 
+        const trackingNumbersWithoutDescriptions = packages
+      .filter((pkg) => !pkg.itemDescription?.trim())
+      .map((pkg) => pkg.trackingNumber);
+
+    const descriptionsByTrackingNumber = new Map();
+
+    if (trackingNumbersWithoutDescriptions.length > 0) {
+      const preAlerts = await PreAlert.find({
+        customerEkonId,
+        trackingNumber: { $in: trackingNumbersWithoutDescriptions },
+      })
+        .select("trackingNumber itemDescription")
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+
+      for (const preAlert of preAlerts) {
+        const description = preAlert.itemDescription?.trim();
+
+        if (
+          description &&
+          !descriptionsByTrackingNumber.has(preAlert.trackingNumber)
+        ) {
+          descriptionsByTrackingNumber.set(preAlert.trackingNumber, description);
+        }
+      }
+    }
+
     const packagesWithEstimates = packages.map((pkg) => {
       const actualWeight = Number(pkg.weight);
 
@@ -470,8 +499,12 @@ const getMyPackages = async (req, res) => {
           ? rateMap.get(chargeableWeight)
           : null;
 
-      return {
+            return {
         ...pkg,
+        itemDescription:
+          pkg.itemDescription?.trim() ||
+          descriptionsByTrackingNumber.get(pkg.trackingNumber) ||
+          "",
         chargeableWeight,
         estimatedCharge,
       };
@@ -499,6 +532,7 @@ const createPackage = async (req, res) => {
   try {
     const {
       trackingNumber,
+      itemDescription = "",
       customerEkonId,
       customerName,
       courier,
@@ -514,6 +548,16 @@ const createPackage = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Tracking number, customer EKON ID, and customer name are required",
+      });
+    }
+
+        if (
+      typeof itemDescription !== "string" ||
+      itemDescription.trim().length > 2000
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Package description must be text of up to 2000 characters.",
       });
     }
 
@@ -541,6 +585,7 @@ const createPackage = async (req, res) => {
 
     const newPackage = new Package({
       trackingNumber,
+      itemDescription,
       customerEkonId,
       customerName,
       courier,
