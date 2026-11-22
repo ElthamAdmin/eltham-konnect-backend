@@ -1,4 +1,9 @@
 const express = require("express");
+const {
+  uploadSeasonalIcon,
+  scheduleSeasonalCampaign,
+  getPublicSeasonalBranding,
+} = require("../controllers/seasonalBrandingController");
 
 const {
   uploadLoginWallpaper,
@@ -37,6 +42,11 @@ router.get(
   getPublicLoginAppearance
 );
 
+router.get(
+  "/seasonal-branding/public",
+  getPublicSeasonalBranding
+);
+
 router.use(protect, requirePermission("settings"));
 
 const receiveFile = (uploader, field) => (req, res, next) => {
@@ -66,6 +76,16 @@ router.put(
   saveLoginAppearance
 );
 
+router.post(
+  "/seasonal-branding/icon",
+  receiveFile(logoUpload, "icon"),
+  uploadSeasonalIcon
+);
+
+router.post(
+  "/seasonal-branding/campaigns",
+  scheduleSeasonalCampaign
+);
 
 router.get("/", getSettings);
 router.put("/", updateSettings);

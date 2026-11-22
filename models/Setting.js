@@ -74,6 +74,45 @@ const LoginAppearanceSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const SeasonalCampaignSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+    maxlength: 120,
+  },
+
+  // Midnight in Jamaica on the first active day.
+  startsAt: {
+    type: Date,
+    required: true,
+  },
+
+  // Midnight in Jamaica immediately AFTER the last active day.
+  endsAt: {
+    type: Date,
+    required: true,
+    validate: {
+      validator(value) {
+        return !this.startsAt || value > this.startsAt;
+      },
+      message: "The campaign must end after it starts.",
+    },
+  },
+
+  publicId: {
+    type: String,
+    required: true,
+    match: /^ekos\/seasonal-icons\/[a-f0-9-]{36}$/,
+  },
+
+  icons: {
+    "180": { type: String, required: true },
+    "192": { type: String, required: true },
+    "512": { type: String, required: true },
+  },
+});
+
 const SettingSchema = new mongoose.Schema(
   {
     settingKey: {
@@ -231,6 +270,10 @@ const SettingSchema = new mongoose.Schema(
       },
     },
 
+        seasonalCampaigns: {
+      type: [SeasonalCampaignSchema],
+      default: [],
+    },
 
     branding: {
       primaryLogoName: {
