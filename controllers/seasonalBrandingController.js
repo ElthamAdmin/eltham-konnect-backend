@@ -1,3 +1,4 @@
+const { Types } = require("mongoose");
 const { randomUUID } = require("crypto");
 const Setting = require("../models/Setting");
 const { configureCloudinary } = require("../config/cloudinary");
@@ -127,7 +128,18 @@ function jamaicaMidnight(value) {
 const scheduleSeasonalCampaign = async (req, res) => {
   res.set("Cache-Control", "private, no-store");
 
+    const { campaignId } = req.params;
+  const isEditing = campaignId !== undefined;
+
+  if (isEditing && !/^[a-f0-9]{24}$/i.test(campaignId)) {
+    return res.status(400).json({
+      success: false,
+      message: "Choose a valid saved event.",
+    });
+  }
+
   const { name, startsOn, endsOn, publicId } = req.body || {};
+  const hasNewIcon = publicId !== undefined;
   const eventName = typeof name === "string" ? name.trim() : "";
   const startsAt = jamaicaMidnight(startsOn);
   const lastDay = jamaicaMidnight(endsOn);
@@ -146,89 +158,133 @@ const scheduleSeasonalCampaign = async (req, res) => {
     });
   }
 
-  if (
-    typeof publicId !== "string" ||
-    !/^ekos\/seasonal-icons\/[a-f0-9-]{36}$/.test(publicId)
+    if (
+    (!isEditing || hasNewIcon) &&
+    (
+      typeof publicId !== "string" ||
+      !/^ekos\/seasonal-icons\/[a-f0-9-]{36}$/.test(publicId)
+    )
   ) {
     return res.status(400).json({
       success: false,
-      message: "Upload the seasonal icon before scheduling.",
+      message: "Upload a valid seasonal icon before saving.",
     });
   }
 
   // The end is exclusive. A Friday-only event ends at midnight on Saturday.
   const endsAt = new Date(lastDay.getTime() + 24 * 60 * 60 * 1000);
 
-  try {
-    const cloudinary = configureCloudinary();
+    try {
+    const campaign = { name: eventName, startsAt, endsAt };
 
-    // Look up the uploaded asset in our own Cloudinary account.
-    const asset = await cloudinary.api.resource(publicId, {
-      resource_type: "image",
-      type: "upload",
-    });
-
-    if (
-      asset.public_id !== publicId ||
-      !["png", "jpg", "jpeg", "webp"].includes(asset.format) ||
-      !Number.isInteger(asset.width) ||
-      asset.width !== asset.height ||
-      asset.width < 512
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "Choose a square seasonal icon at least 512 × 512 pixels.",
+    if (hasNewIcon) {
+      const cloudinary = configureCloudinary();
+      const asset = await cloudinary.api.resource(publicId, {
+        resource_type: "image",
+        type: "upload",
       });
+
+      if (
+        asset.public_id !== publicId ||
+        !["png", "jpg", "jpeg", "webp"].includes(asset.format) ||
+        !Number.isInteger(asset.width) ||
+        asset.width !== asset.height ||
+        asset.width < 512
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Choose a square seasonal icon at least 512 × 512 pixels.",
+        });
+      }
+
+      campaign.publicId = publicId;
+      campaign.icons = {};
+
+      for (const size of ICON_SIZES) {
+        campaign.icons[size] = cloudinary.url(publicId, {
+          secure: true,
+          version: asset.version,
+          format: "png",
+          transformation: [{ width: size, height: size, crop: "fit" }],
+        });
+      }
     }
 
-    const icons = {};
-    for (const size of ICON_SIZES) {
-      icons[size] = cloudinary.url(publicId, {
-        secure: true,
-        version: asset.version,
-        format: "png",
-        transformation: [{ width: size, height: size, crop: "fit" }],
-      });
-    }
+    const overlap = {
+      startsAt: { $lt: endsAt },
+      endsAt: { $gt: startsAt },
+    };
+    const options = { new: true, runValidators: true };
+    let saved;
 
-    await Setting.updateOne(
-      { settingKey: "main" },
-      { $setOnInsert: { settingKey: "main" } },
-      { upsert: true, setDefaultsOnInsert: true }
-    );
+    if (isEditing) {
+      const id = new Types.ObjectId(campaignId);
+      const updates = {
+        "seasonalCampaigns.$[event].name": campaign.name,
+        "seasonalCampaigns.$[event].startsAt": campaign.startsAt,
+        "seasonalCampaigns.$[event].endsAt": campaign.endsAt,
+      };
 
-    const saved = await Setting.findOneAndUpdate(
-      {
-        settingKey: "main",
-        seasonalCampaigns: {
-          $not: {
-            $elemMatch: {
-              startsAt: { $lt: endsAt },
-              endsAt: { $gt: startsAt },
-            },
+      if (hasNewIcon) {
+        updates["seasonalCampaigns.$[event].publicId"] = campaign.publicId;
+        updates["seasonalCampaigns.$[event].icons"] = campaign.icons;
+      }
+
+      saved = await Setting.findOneAndUpdate(
+        {
+          settingKey: "main",
+          "seasonalCampaigns._id": id,
+          seasonalCampaigns: {
+            $not: { $elemMatch: { ...overlap, _id: { $ne: id } } },
           },
         },
-      },
-      {
-        $push: {
-          seasonalCampaigns: { name: eventName, startsAt, endsAt, publicId, icons },
+        { $set: updates },
+        { ...options, arrayFilters: [{ "event._id": id }] }
+      ).select("seasonalCampaigns");
+
+      if (!saved) {
+        const exists = await Setting.exists({
+          settingKey: "main",
+          "seasonalCampaigns._id": id,
+        });
+
+        if (!exists) {
+          return res.status(404).json({
+            success: false,
+            message: "This event is no longer available. Reload Settings.",
+          });
+        }
+      }
+    } else {
+      await Setting.updateOne(
+        { settingKey: "main" },
+        { $setOnInsert: { settingKey: "main" } },
+        { upsert: true, setDefaultsOnInsert: true }
+      );
+
+      saved = await Setting.findOneAndUpdate(
+        {
+          settingKey: "main",
+          seasonalCampaigns: { $not: { $elemMatch: overlap } },
         },
-      },
-      { new: true, runValidators: true }
-    ).select("seasonalCampaigns");
+        { $push: { seasonalCampaigns: campaign } },
+        options
+      ).select("seasonalCampaigns");
+    }
 
     if (!saved) {
       return res.status(409).json({
         success: false,
-        message: "A seasonal campaign already covers part of this date range. Check the saved schedule.",
+        message: "Another seasonal event covers part of this date range. Check the saved schedule.",
       });
     }
 
-    return res.status(201).json({
+    return res.status(isEditing ? 200 : 201).json({
       success: true,
-      message: "Seasonal campaign scheduled.",
+      message: isEditing ? "Seasonal campaign updated." : "Seasonal campaign scheduled.",
       data: saved.seasonalCampaigns,
     });
+    
   } catch (error) {
     if (error.http_code === 404 || error.error?.http_code === 404) {
       return res.status(400).json({

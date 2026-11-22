@@ -87,6 +87,11 @@ router.post(
   scheduleSeasonalCampaign
 );
 
+router.put(
+  "/seasonal-branding/campaigns/:campaignId",
+  scheduleSeasonalCampaign
+);
+
 router.get("/", getSettings);
 router.put("/", updateSettings);
 router.put("/storage/status", setStorageChargingStatus);
