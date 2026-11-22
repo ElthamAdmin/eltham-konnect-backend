@@ -30,7 +30,7 @@ const accountTransactionSchema = new mongoose.Schema(
 
     paymentRequestChannel: {
       type: String,
-      enum: ["", "POS", "Invoices"],
+            enum: ["", "POS", "Invoices", "Shopping Assistance"],
       default: "",
       immutable: true,
     },
@@ -115,6 +115,7 @@ const accountTransactionSchema = new mongoose.Schema(
         "Interest Expense",
         "Adjustment",
         "Customer Purchase",
+        "Customer Purchase Repayment",
         "Customer Purchase Refund",
         "Customer Purchase Reversal",
       ],

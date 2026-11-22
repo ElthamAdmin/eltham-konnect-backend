@@ -106,4 +106,10 @@ router.post(
   payCustomerPurchaseCredit
 );
 
+const { recordDirectCustomerPurchaseRepayment } = require("../controllers/customerPurchaseController");
+const { markInvoicePaid } = require("../controllers/invoiceController");
+
+router.post("/:purchaseNumber/repayments", recordDirectCustomerPurchaseRepayment);
+router.post("/:purchaseNumber/repayments/invoice/:invoiceNumber", markInvoicePaid);
+
 module.exports = router;

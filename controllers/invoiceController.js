@@ -74,27 +74,9 @@ const calculateBaseCurrencyAmount = ({
   );
 };
 
-const syncFinancialAccountFromLedger = async (
-  account,
-  session = null
-) => {
-
-    const linkedChartAccount = await ChartOfAccount.findOne({
-    accountCode: account.linkedChartAccountCode,
-  }).session(session);
-
-  if (!linkedChartAccount) return account;
-
-  account.currentBalance = roundMoney(linkedChartAccount.currentBalance || 0);
-  account.baseCurrencyBalance = calculateBaseCurrencyAmount({
-    amount: account.currentBalance,
-    currency: account.currency,
-    exchangeRate: account.exchangeRate,
-  });
-
-  await account.save(session ? { session } : {});
-    return account;
-};
+const {
+  syncFinancialAccountFromLedger,
+} = require("../services/syncFinancialAccountFromLedger");
 
 const getInvoiceChargesFromBody = (body = {}) => ({
   customsDuty: roundMoney(body.customsDuty),
@@ -432,7 +414,7 @@ const markInvoicePaid = async (req, res) => {
   try {
         const result = await runPaymentOnce({
       req,
-      channel: "Invoices",
+      channel: req.params.purchaseNumber ? "Shopping Assistance" : "Invoices",
       execute: async (session, paymentRequestFields) => {
         const { invoiceNumber } = req.params;
 
@@ -479,6 +461,27 @@ const markInvoicePaid = async (req, res) => {
             "Receiving account not found or inactive.",
             404
           );
+        }
+
+        if (req.params.purchaseNumber) {
+          const selected = invoice.customerPurchases?.some(
+            line => line.purchaseNumber === req.params.purchaseNumber
+          );
+          if (invoice.invoiceSource !== "Customer Purchases" || !selected) {
+            fail("The selected purchase is not linked to a shopping assistance invoice.", 409);
+          }
+          if (!["Cash", "Bank"].includes(account.accountType) ||
+              !account.linkedChartAccountCode ||
+              account.currency !== "JMD" || account.baseCurrency !== "JMD") {
+            fail("Select a linked JMD cash or bank account.");
+          }
+          if (typeof paymentAmount !== "number" || !Number.isFinite(paymentAmount) ||
+              paymentAmount <= 0 || paymentAmount !== roundMoney(paymentAmount) ||
+              paymentAmount !== req.body.amountReceived ||
+              typeof paymentMethod !== "string" || !paymentMethod.trim() ||
+              paymentMethod.length > 80) {
+            fail("Enter a valid repayment amount and payment method.");
+          }
         }
 
         const finalTotal = roundMoney(invoice.finalTotal);
@@ -618,6 +621,10 @@ const markInvoicePaid = async (req, res) => {
               ledgerReference:
                 paymentJournalEntry.entryNumber,
                             transactionType: "Invoice Payment",
+              ...(req.params.purchaseNumber ? {
+                customerPurchaseNumber: req.params.purchaseNumber,
+                transactionDirection: "Deposit"
+              } : {}),
               branch: String(req.user?.branch || "").trim(),
               cashierUserId: String(
                 req.user?.userId || req.user?._id || ""
@@ -650,8 +657,8 @@ const markInvoicePaid = async (req, res) => {
               session,
               invoice,
               paymentAmount: actualPaymentAmount,
-              paymentJournalEntryNumber:
-                paymentJournalEntry.entryNumber,
+              targetPurchaseNumber: req.params.purchaseNumber ?? null,
+              paymentJournalEntryNumber: paymentJournalEntry.entryNumber,
               paymentDate: now,
               receivedBy: invoice.cashierName,
             });

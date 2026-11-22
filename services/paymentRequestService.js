@@ -53,14 +53,28 @@ const runPaymentOnce = async ({
   channel,
   execute,
 }) => {
-  const rawId = req.body?.paymentRequestId;
 
-  // Compatibility until both frontend forms send request IDs.
-  if (
-    rawId === undefined ||
-    rawId === null ||
-    rawId === ""
-  ) {
+    const rawId = req.body?.paymentRequestId;
+  const isShoppingRepayment = channel === "Shopping Assistance";
+
+  if (!["POS", "Invoices", "Shopping Assistance"].includes(channel)) {
+    fail("Invalid payment request channel.", 400);
+  }
+
+  const purchaseNumber = isShoppingRepayment
+    ? String(req.params?.purchaseNumber || "").trim()
+    : "";
+
+  if (isShoppingRepayment && !purchaseNumber) {
+    fail("Select a purchase before recording a repayment.", 400);
+  }
+
+  if (rawId === undefined || rawId === null || rawId === "") {
+    if (isShoppingRepayment) {
+      fail("A payment request ID is required for this repayment.", 400);
+    }
+
+    // Older POS and invoice forms can submit without a request ID.
     return mongoose.connection.transaction(
       (session) => execute(session, {})
     );
@@ -68,18 +82,12 @@ const runPaymentOnce = async ({
 
   if (
     typeof rawId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      rawId
-    )
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rawId)
   ) {
     fail(
       "Invalid payment request ID. Reload the payment form before trying again.",
       400
     );
-  }
-
-  if (!["POS", "Invoices"].includes(channel)) {
-    fail("Invalid payment request channel.", 400);
   }
 
   const actorId = String(
@@ -109,6 +117,7 @@ const runPaymentOnce = async ({
               paymentBody.invoiceNumber ||
               ""
           ),
+                    ...(isShoppingRepayment ? { purchaseNumber } : {}),
           body: paymentBody,
         })
       )

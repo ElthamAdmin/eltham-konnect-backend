@@ -14,7 +14,12 @@ const AccountTransaction = require("../models/AccountTransaction");
 const {
   postCustomerPurchase,
   refundCustomerPurchase,
+   postDirectCustomerPurchaseRepayment,
 } = require("../services/accountingService");
+
+const { allocateDirectRepayment } = require("../services/customerPurchaseRepaymentAllocation");
+const { runPaymentOnce } = require("../services/paymentRequestService");
+const { syncFinancialAccountFromLedger } = require("../services/syncFinancialAccountFromLedger");
 
 const { writeAuditLog } = require("../utils/auditLogger");
 const { writeFinanceAuditLog } = require("../utils/financeAuditHelper");
@@ -195,10 +200,42 @@ const getCustomerPurchaseByNumber = async (req, res) => {
       });
     }
 
-    res.json({
+        const linkedPackages = await Package.find({
+      customerEkonId: purchase.customerEkonId,
+      $or: [
+        { customerPurchaseId: purchase._id },
+        { customerPurchaseNumber: purchase.purchaseNumber },
+      ],
+    })
+      .select("trackingNumber")
+      .sort({ trackingNumber: 1 })
+      .lean();
+
+    const trackingNumbers = new Set();
+
+    const addTrackingNumber = (value) => {
+      const number = String(value ?? "").trim();
+      if (number) trackingNumbers.add(number);
+    };
+
+    addTrackingNumber(purchase.trackingNumber);
+
+    if (purchase.packageId?.customerEkonId === purchase.customerEkonId) {
+      addTrackingNumber(purchase.packageId.trackingNumber);
+    }
+
+    for (const pkg of linkedPackages) {
+      addTrackingNumber(pkg.trackingNumber);
+    }
+
+    return res.json({
       success: true,
-      data: purchase,
+      data: {
+        ...purchase.toObject(),
+        trackingNumbers: [...trackingNumbers],
+      },
     });
+
   } catch (error) {
     console.error("Customer purchase detail error:", error);
 
@@ -1369,6 +1406,27 @@ const receiveCustomerPurchase = async (req, res) => {
           reject("Customer purchase not found.", 404);
         }
 
+                const receipts = purchase.paymentAllocations || [];
+        const recoveredAmount = purchase.recoveredAmount ?? 0;
+
+        const hasOnlyDirectRepayments = receipts.every(
+          (receipt) =>
+            receipt.source === "Direct Repayment" &&
+            !receipt.invoiceNumber &&
+            Boolean(receipt.appliedCharges) &&
+            Number.isFinite(receipt.paymentAmount) &&
+            receipt.paymentAmount > 0
+        );
+
+        const receiptTotal = roundMoney(
+          receipts.reduce((sum, receipt) => sum + receipt.paymentAmount, 0)
+        );
+
+        const repaymentHistoryMatches =
+          hasOnlyDirectRepayments &&
+          Number.isFinite(recoveredAmount) &&
+          receiptTotal === recoveredAmount;
+
         const allowedStatuses = [
           "Purchased",
           "Tracking Received",
@@ -1384,12 +1442,12 @@ const receiveCustomerPurchase = async (req, res) => {
           purchase.invoiceNumber ||
           purchase.invoiceJournalEntryNumber ||
           purchase.invoicedAt ||
-          purchase.invoiceHistory?.length ||
-          purchase.paymentAllocations?.length ||
-          Number(purchase.recoveredAmount || 0) > 0
+                    purchase.invoiceHistory?.length ||
+          ["Refunded", "Written Off"].includes(purchase.recoveryStatus) ||
+          !repaymentHistoryMatches
         ) {
           reject(
-            "Only a posted, uninvoiced purchase can have warehouse arrival recorded here. Invoiced, recovered or closed purchases require separate review.",
+                "Warehouse arrival requires a posted, uninvoiced purchase with a matching repayment history.",
             409
           );
         }
@@ -1658,9 +1716,8 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
           purchase.invoiceNumber ||
           purchase.invoiceJournalEntryNumber ||
           purchase.invoicedAt ||
-          purchase.invoiceHistory?.length ||
-          purchase.paymentAllocations?.length ||
-          Number(purchase.recoveredAmount || 0) !== 0
+                    purchase.invoiceHistory?.length ||
+          ["Refunded", "Written Off"].includes(purchase.recoveryStatus)
         ) {
           fail(
             "Recovery can only be prepared for a funded, uninvoiced purchase at the warehouse."
@@ -1698,7 +1755,7 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
           "otherCharges",
         ]) {
           charges[field] = amount(
-            body[field] ?? 0,
+                        body[field] ?? purchase[field] ?? 0,
             field
           );
         }
@@ -1741,13 +1798,64 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
           );
         }
 
-        Object.assign(purchase, charges);
+                const fields = Object.keys(charges);
+        const paidCents = Object.fromEntries(fields.map((field) => [field, 0]));
+        let recoveredCents = 0;
 
+        for (const receipt of purchase.paymentAllocations ?? []) {
+          if (
+            receipt.source !== "Direct Repayment" ||
+            receipt.invoiceNumber ||
+            !receipt.appliedCharges
+          ) {
+            fail("Review the existing payment history before preparing recovery.");
+          }
+
+          let receiptCents = 0;
+
+          for (const field of fields) {
+            const paid = amount(receipt.appliedCharges[field] ?? 0, field);
+            const cents = Math.round(paid * 100);
+            paidCents[field] += cents;
+            receiptCents += cents;
+          }
+
+          const receiptAmount = amount(receipt.paymentAmount, "Receipt amount");
+
+          if (receiptCents <= 0 || receiptCents !== Math.round(receiptAmount * 100)) {
+            fail("A repayment receipt does not match its saved charge breakdown.");
+          }
+
+          recoveredCents += receiptCents;
+        }
+
+        const savedRecovered = amount(purchase.recoveredAmount ?? 0, "Amount recovered");
+
+        if (recoveredCents !== Math.round(savedRecovered * 100)) {
+          fail("The recorded repayments do not match the purchase recovery balance.");
+        }
+
+        for (const field of fields) {
+          if (paidCents[field] > Math.round(charges[field] * 100)) {
+            fail(`The revised ${field} charge is below the amount already paid toward it.`);
+          }
+        }
+
+        const balanceCents = Math.round(total * 100) - recoveredCents;
+
+        Object.assign(purchase, charges);
         purchase.totalCustomerCharge = total;
-        purchase.outstandingAmount = total;
-        purchase.recoveryStatus = "Not Invoiced";
-        purchase.status = "Ready to Invoice";
-        purchase.invoiceReady = true;
+        purchase.outstandingAmount = balanceCents / 100;
+        purchase.invoiceReady = balanceCents > 0;
+        purchase.status = purchase.invoiceReady ? "Ready to Invoice" : "Recovery Calculated";
+
+        if (balanceCents === 0) {
+          purchase.recoveryStatus = "Paid";
+        } else if (recoveredCents > 0) {
+          purchase.recoveryStatus = "Partially Paid";
+        } else {
+          purchase.recoveryStatus = "Not Invoiced";
+        }
         purchase.updatedBy = getUserName(req.user);
 
         const notes = String(body.notes || "").trim();
@@ -1800,6 +1908,9 @@ const prepareCustomerPurchaseRecovery = async (req, res) => {
         deliveryFee: result.purchase.deliveryFee,
         otherCharges: result.purchase.otherCharges,
         totalCustomerCharge: result.purchase.totalCustomerCharge,
+                recoveredAmount: result.purchase.recoveredAmount,
+        outstandingAmount: result.purchase.outstandingAmount,
+        invoiceReady: result.purchase.invoiceReady,
       },
     });
   } catch (error) {
@@ -1897,9 +2008,194 @@ const payCustomerPurchaseCredit = async (req, res) => {
   }
 };
 
+const recordDirectCustomerPurchaseRepayment = async (req, res) => {
+  const reject = (message, statusCode = 400) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+
+  try {
+    const result = await runPaymentOnce({
+      req,
+      channel: "Shopping Assistance",
+      execute: async (session, paymentRequestFields) => {
+        const purchaseNumber = req.params.purchaseNumber.trim();
+        const {
+          amountReceived,
+          receivingAccountNumber,
+          paymentMethod,
+        } = req.body;
+
+        if (
+          typeof receivingAccountNumber !== "string" ||
+          !receivingAccountNumber.trim()
+        ) {
+          reject("Select a receiving account.");
+        }
+
+        if (
+          typeof paymentMethod !== "string" ||
+          !paymentMethod.trim() ||
+          paymentMethod.trim().length > 80
+        ) {
+          reject("Select a valid payment method.");
+        }
+
+        if (!["number", "string"].includes(typeof amountReceived)) {
+          reject("Enter the amount received.");
+        }
+
+        const purchase = await CustomerPurchase.findOne({
+          purchaseNumber,
+        }).session(session);
+
+        if (!purchase) reject("Customer purchase not found.", 404);
+
+        if (
+          !purchase.journalEntryNumber ||
+          ["Pending Purchase", "Cancelled", "Refunded", "Reversed"].includes(purchase.status) ||
+          ["Paid", "Refunded", "Written Off"].includes(purchase.recoveryStatus)
+        ) {
+          reject("This purchase cannot receive a repayment in its current status.", 409);
+        }
+
+        // Validates the balance, checks for a linked invoice, and
+        // calculates the split using the saved purchase and receipts.
+        const split = allocateDirectRepayment(purchase, amountReceived);
+        const amount = Number(amountReceived);
+        const currency = purchase.baseCurrency || "JMD";
+
+        const account = await FinancialAccount.findOne({
+          accountNumber: receivingAccountNumber.trim(),
+          status: "Active",
+          accountType: { $in: ["Bank", "Cash"] },
+        }).session(session);
+
+        if (!account?.linkedChartAccountCode) {
+          reject("Select an active cash or bank account linked to the Chart of Accounts.");
+        }
+
+        if (account.currency !== currency || account.baseCurrency !== currency) {
+          reject(`Select a receiving account held and reported in ${currency}.`);
+        }
+
+        const now = new Date();
+        const receivedBy =
+          req.user.fullName || req.user.name || req.user.email || "Staff";
+        const method = paymentMethod.trim();
+        const charges = split.appliedCharges;
+
+        const journal = await postDirectCustomerPurchaseRepayment({
+          purchase,
+          receivingAccount: account,
+          amountReceived: amount,
+          allocation: {
+            recoverableAmount: charges.itemRecoveryAmount,
+            shoppingServiceFee: charges.shoppingAssistanceFee,
+            shippingRevenue: roundMoney(charges.weightCharge + charges.shippingCharge),
+            deliveryRevenue: charges.deliveryFee,
+            otherServiceRevenue: roundMoney(charges.customsDuty + charges.otherCharges),
+          },
+          paymentDate: now,
+          user: req.user,
+          session,
+        });
+
+        if (!journal?.entryNumber) {
+          reject("The repayment journal could not be confirmed.", 409);
+        }
+
+        const transactionNumber = generateTransactionNumber();
+
+        await AccountTransaction.create([{
+          ...paymentRequestFields,
+          transactionNumber,
+          transactionType: "Customer Purchase Repayment",
+          transactionDirection: "Deposit",
+          accountNumber: account.accountNumber,
+          accountName: account.accountName,
+          linkedChartAccountCode: account.linkedChartAccountCode,
+          journalEntryNumber: journal.entryNumber,
+          ledgerReference: journal.entryNumber,
+          reference: purchaseNumber,
+          customerPurchaseNumber: purchaseNumber,
+          customerEkonId: purchase.customerEkonId,
+          customerName: purchase.customerName,
+          branch: purchase.branch,
+          cashierUserId: paymentRequestFields.paymentRequestActorId,
+          cashierName: receivedBy,
+          merchant: purchase.merchant,
+          amount,
+          amountTendered: amount,
+          transactionCurrency: currency,
+          paymentMethod: method,
+          transactionDate: now,
+        }], { session });
+
+        purchase.paymentAllocations.push({
+          source: "Direct Repayment",
+          paymentDate: now,
+          paymentAmount: amount,
+          paymentMethod: method,
+          receivingAccountNumber: account.accountNumber,
+          receivingAccountName: account.accountName,
+          journalEntryNumber: journal.entryNumber,
+          receivedBy,
+          remainingBalance: split.outstandingAmount,
+          appliedCharges: charges,
+        });
+
+        purchase.recoveredAmount = split.recoveredAmount;
+        purchase.outstandingAmount = split.outstandingAmount;
+        purchase.recoveryStatus =
+          split.outstandingAmount === 0 ? "Paid" : "Partially Paid";
+        purchase.updatedBy = receivedBy;
+
+        await purchase.save({ session });
+        await syncFinancialAccountFromLedger(account, session);
+
+        return {
+          purchaseNumber,
+          customerName: purchase.customerName,
+          transactionNumber,
+          journalEntryNumber: journal.entryNumber,
+          amountReceived: amount,
+          currency,
+          receivingAccountName: account.accountName,
+          outstandingAmount: purchase.outstandingAmount,
+          recoveryStatus: purchase.recoveryStatus,
+        };
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: result.paymentRequestReplayed
+        ? "This repayment was already recorded."
+        : "Customer repayment recorded.",
+      data: result,
+    });
+  } catch (error) {
+    const status = error.statusCode || 500;
+
+    if (status >= 500) {
+      console.error("Customer purchase repayment failed:", error);
+    }
+
+    return res.status(status).json({
+      success: false,
+      message: status >= 500
+        ? "Could not confirm the repayment. Retry with the same payment request ID."
+        : error.message,
+    });
+  }
+};
+
 module.exports = {
   getCustomerPurchases,
   getCustomerPurchaseByNumber,
+    recordDirectCustomerPurchaseRepayment,
   getCustomerPurchaseDashboard,
   createCustomerPurchase,
   updateUnpostedCustomerPurchase,

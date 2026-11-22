@@ -1,5 +1,8 @@
 const CustomerPurchase = require("../models/CustomerPurchase");
 const Package = require("../models/Package");
+const {
+  allocateDirectRepayment,
+} = require("./customerPurchaseRepaymentAllocation");
 
 const roundMoney = (value) =>
   Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
@@ -113,6 +116,56 @@ const validateRecoveryCharges = (purchase) => {
       "The purchase must have posted funding, warehouse weight and reviewed recovery charges before invoicing."
     );
   }
+};
+
+const getBillablePurchase = (purchase) => {
+  const receipts = purchase.paymentAllocations ?? [];
+
+  if (receipts.length === 0) {
+    validateRecoveryCharges(purchase);
+    return purchase;
+  }
+
+  const hasOnlyDirectRepayments = receipts.every(
+    (receipt) =>
+      receipt.source === "Direct Repayment" &&
+      !receipt.invoiceNumber &&
+      receipt.appliedCharges &&
+      Number.isFinite(receipt.paymentAmount) &&
+      receipt.paymentAmount > 0
+  );
+
+  if (
+    !hasOnlyDirectRepayments ||
+    purchase.recoveryStatus !== "Partially Paid" ||
+    !(purchase.outstandingAmount > 0)
+  ) {
+    const error = new Error(
+      `Review the payment history for ${purchase.purchaseNumber} before invoicing.`
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  // Allocating the entire remaining balance in memory gives us the
+  // unpaid portion of each charge. This function records no payment.
+  const { appliedCharges } = allocateDirectRepayment(
+    purchase,
+    purchase.outstandingAmount
+  );
+
+  const billable = {
+    ...purchase.toObject(),
+    ...appliedCharges,
+    totalCustomerCharge: purchase.outstandingAmount,
+    outstandingAmount: purchase.outstandingAmount,
+    recoveredAmount: 0,
+    recoveryStatus: "Not Invoiced",
+    paymentAllocations: [],
+  };
+
+  validateRecoveryCharges(billable);
+  return billable;
 };
 
 const syncCustomerPurchaseFromPackage = async ({
@@ -306,11 +359,9 @@ const getRecoveryInvoiceData = async ({
     );
   }
 
-    for (const purchase of purchases) {
-    validateRecoveryCharges(purchase);
-  }
+      const billablePurchases = purchases.map(getBillablePurchase);
 
-  const totals = purchases.reduce(
+  const totals = billablePurchases.reduce(
     (summary, purchase) => {
       summary.recoverableAmount += Number(
         purchase.itemRecoveryAmount || 0
@@ -383,7 +434,7 @@ const getRecoveryInvoiceData = async ({
       }).session(session)
     : [];
 
-  const invoicePurchaseLines = purchases.map((purchase) => ({
+  const invoicePurchaseLines = billablePurchases.map((purchase) => ({
     purchaseNumber: purchase.purchaseNumber,
     merchant: purchase.merchant,
     orderNumber: purchase.orderNumber,
@@ -410,7 +461,7 @@ const getRecoveryInvoiceData = async ({
     ),
   }));
 
-  const invoicePackageLines = purchases
+  const invoicePackageLines = billablePurchases
     .filter((purchase) => purchase.trackingNumber)
     .map((purchase) => ({
       trackingNumber: purchase.trackingNumber,
@@ -472,7 +523,7 @@ const markPurchasesInvoiced = async ({
     purchase.invoiceReady = false;
     purchase.invoicedAt = now;
     purchase.invoiceJournalEntryNumber = journalEntryNumber;
-    purchase.recoveryStatus = "Invoiced";
+    purchase.recoveryStatus = purchase.recoveredAmount > 0 ? "Partially Paid" : "Invoiced";
     purchase.status = "Invoiced";
     purchase.outstandingAmount = amount;
     purchase.updatedBy = getUserName(user);
@@ -495,6 +546,7 @@ const markPurchasesInvoiced = async ({
 const allocateInvoicePaymentToPurchases = async ({
   invoice,
   paymentAmount,
+  targetPurchaseNumber = null,
   paymentJournalEntryNumber = "",
   paymentDate = new Date(),
   receivedBy = "",
@@ -523,6 +575,9 @@ const allocateInvoicePaymentToPurchases = async ({
   const invoiceLines = invoice.customerPurchases || [];
 
   if (invoiceLines.length === 0) {
+        if (targetPurchaseNumber !== null) {
+      failAllocation("The selected purchase is not linked to this invoice.");
+    }
     if (
       ["Customer Purchases", "Combined"].includes(invoice.invoiceSource)
     ) {
@@ -640,16 +695,20 @@ const allocateInvoicePaymentToPurchases = async ({
       `${purchaseNumber} outstanding amount`
     );
 
+    const directPaid = roundMoney((purchase.paymentAllocations || [])
+      .filter(receipt => receipt.source === "Direct Repayment" && !receipt.invoiceNumber)
+      .reduce((sum, receipt) => sum + money(receipt.paymentAmount, "Direct repayment"), 0));
+
     if (
       allocated !== roundMoney(recovered + outstanding) ||
       money(
         purchase.totalCustomerCharge,
         `${purchaseNumber} total charge`
-      ) !== allocated ||
+      ) !== roundMoney(allocated + directPaid) ||
       money(
         purchase.recoveredAmount,
         `${purchaseNumber} purchase recovery`
-      ) !== recovered ||
+      ) !== roundMoney(recovered + directPaid) ||
       money(
         purchase.outstandingAmount,
         `${purchaseNumber} purchase balance`
@@ -739,10 +798,30 @@ const allocateInvoicePaymentToPurchases = async ({
     );
   }
 
+    let paymentEntries = prepared;
+
+  if (targetPurchaseNumber !== null) {
+    const selected = prepared.find(
+      (entry) => entry.purchase.purchaseNumber === targetPurchaseNumber
+    );
+
+    if (!selected) {
+      failAllocation("The selected purchase is not linked to this invoice.");
+    }
+
+    if (amount > selected.outstanding) {
+      failAllocation(
+        `The payment exceeds the outstanding balance for purchase ${targetPurchaseNumber}.`
+      );
+    }
+
+    paymentEntries = [selected];
+  }
+
   let remainingPayment = amount;
   const allocations = [];
 
-  for (const entry of prepared) {
+  for (const entry of paymentEntries) {
     if (remainingPayment === 0) break;
     if (entry.outstanding === 0) continue;
 
@@ -766,7 +845,7 @@ const allocateInvoicePaymentToPurchases = async ({
       outstanding - allocatedAmount
     );
 
-    purchase.recoveredAmount = nextRecovered;
+    purchase.recoveredAmount = roundMoney(purchase.recoveredAmount + allocatedAmount);
     purchase.outstandingAmount = nextOutstanding;
 
     purchase.recoveryStatus =

@@ -47,6 +47,8 @@ module.exports = {
    */
   postCustomerPurchase:
     workflowService.postCustomerPurchase,
+      postDirectCustomerPurchaseRepayment:
+    workflowService.postDirectCustomerPurchaseRepayment,
   refundCustomerPurchase: workflowService.refundCustomerPurchase,
   postCustomerPurchaseRecoveryInvoice: workflowService.postCustomerPurchaseRecoveryInvoice,
 };

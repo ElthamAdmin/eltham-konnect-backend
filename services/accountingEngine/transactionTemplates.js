@@ -670,6 +670,52 @@ const buildCustomerPurchaseRecoveryInvoiceLines = ({
   return lines;
 };
 
+const buildDirectCustomerPurchaseRepaymentLines = ({
+  receivingAccount,
+  amountReceived,
+  recoverableAmount,
+  shoppingServiceFee,
+  shippingRevenue,
+  deliveryRevenue,
+  otherServiceRevenue,
+}) => {
+  requireLinkedAccount(receivingAccount, "Repayment receiving account");
+
+  if (!Number.isFinite(amountReceived) || amountReceived <= 0) {
+    throw new Error("Enter a valid repayment amount greater than zero.");
+  }
+
+  // Reuse the purchase recovery rules for the portion paid today.
+  const [receivableLine, ...creditLines] =
+    buildCustomerPurchaseRecoveryInvoiceLines({
+      recoverableAmount,
+      shoppingServiceFee,
+      shippingRevenue,
+      deliveryRevenue,
+      otherServiceRevenue,
+    });
+
+  if (receivableLine.debit !== amountReceived) {
+    throw new Error(
+      "The repayment allocation must equal the amount received."
+    );
+  }
+
+  return [
+    {
+      accountCode: receivingAccount.linkedChartAccountCode,
+      debit: amountReceived,
+      credit: 0,
+      description: "Customer repayment received for shopping assistance",
+    },
+    ...creditLines.map((line) =>
+      line.accountCode === SYSTEM_ACCOUNTS.CUSTOMER_PURCHASE_RECOVERABLE
+        ? { ...line, description: "Shopping advance repaid by customer" }
+        : line
+    ),
+  ];
+};
+
 const buildIncomeTaxAssessmentLines = ({
   incomeTaxType,
   amount,
@@ -769,5 +815,6 @@ module.exports = {
   buildCustomerPurchaseFundingLines,
   buildCustomerPurchaseRefundLines,
   buildCustomerPurchaseRecoveryInvoiceLines,
+    buildDirectCustomerPurchaseRepaymentLines,
   buildBadDebtWriteOffLines,
 };

@@ -610,6 +610,48 @@ const postCustomerPurchase = async ({
   });
 };
 
+const postDirectCustomerPurchaseRepayment = async ({
+  purchase,
+  receivingAccount,
+  amountReceived,
+  allocation,
+  paymentDate,
+  user,
+  session,
+}) => {
+  if (!purchase?.purchaseNumber) {
+    throw new Error("Select a purchase before recording a repayment.");
+  }
+
+  if (purchase.invoiceNumber || purchase.invoiceHistory?.length) {
+    throw new Error("Record this repayment through the linked invoice.");
+  }
+
+  if (!session?.inTransaction()) {
+    throw new Error("A purchase repayment requires an active transaction.");
+  }
+
+  const lines = templates.buildDirectCustomerPurchaseRepaymentLines({
+    recoverableAmount: allocation?.recoverableAmount,
+    shoppingServiceFee: allocation?.shoppingServiceFee,
+    shippingRevenue: allocation?.shippingRevenue,
+    deliveryRevenue: allocation?.deliveryRevenue,
+    otherServiceRevenue: allocation?.otherServiceRevenue,
+    receivingAccount,
+    amountReceived,
+  });
+
+  return postJournalEntry({
+    session,
+    entryDate: normalizePostingDate(paymentDate),
+    memo: `Shopping assistance repayment from ${purchase.customerName}`,
+    reference: purchase.purchaseNumber,
+    sourceModule: "Customer Purchases",
+    createdBy: getUserName(user),
+    lines,
+  });
+};
+
 const refundCustomerPurchase = async ({
   purchase,
   paymentAccount,
@@ -795,6 +837,7 @@ module.exports = {
   postIncomeTaxAssessment,
   postGctFilingSettlement,
   postCustomerPurchase,
+  postDirectCustomerPurchaseRepayment,
   refundCustomerPurchase,
   postCustomerPurchaseRecoveryInvoice,
    postBadDebtWriteOff,

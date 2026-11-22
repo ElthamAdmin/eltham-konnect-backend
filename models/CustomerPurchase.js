@@ -328,6 +328,27 @@ const customerPurchaseSchema = new mongoose.Schema(
 
     paymentAllocations: [
       {
+                source: {
+          type: String,
+          enum: ["Invoice Payment", "Direct Repayment"],
+          default: "Invoice Payment",
+        },
+
+        paymentMethod: {
+          type: String,
+          default: "",
+        },
+
+        receivingAccountNumber: {
+          type: String,
+          default: "",
+        },
+
+        receivingAccountName: {
+          type: String,
+          default: "",
+        },
+
         invoiceNumber: {
           type: String,
           default: "",
@@ -356,6 +377,22 @@ const customerPurchaseSchema = new mongoose.Schema(
         remainingBalance: {
           type: Number,
           default: 0,
+        },
+
+                appliedCharges: {
+          type: new mongoose.Schema(
+            {
+              itemRecoveryAmount: { type: Number, min: 0, default: 0 },
+              shoppingAssistanceFee: { type: Number, min: 0, default: 0 },
+              weightCharge: { type: Number, min: 0, default: 0 },
+              shippingCharge: { type: Number, min: 0, default: 0 },
+              customsDuty: { type: Number, min: 0, default: 0 },
+              deliveryFee: { type: Number, min: 0, default: 0 },
+              otherCharges: { type: Number, min: 0, default: 0 },
+            },
+            { _id: false }
+          ),
+          default: undefined,
         },
       },
     ],
